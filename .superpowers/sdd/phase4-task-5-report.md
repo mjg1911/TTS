@@ -64,3 +64,12 @@ Task 5, “Recover serialized controller state after Windows resume,” is imple
 Python is available through the bundled workspace runtime at
 `C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`.
 The system `python` and `pytest` commands are unavailable on PATH, and pytest’s default temp root is permission-restricted. Verification therefore used the bundled Python runtime, `PYTHONPATH=src`, and `.pytest-tmp-task5` under the repository. No Python runtime blocker remains for the completed focused verification.
+
+## Review-fix evidence
+
+- Updated `tests/windows_tray/test_phase2_capture_flow.py` so its tray fake provides `ensure_visible()` and its app test uses a fake power listener, keeping the existing suite independent of Win32 bindings.
+- Added `test_resume_orders_invalidation_and_cancellation_before_resource_recovery` to prove capture invalidation and speech cancellation occur before tray visibility recovery and hotkey re-registration.
+- Re-ran the focused compatibility/resume/app suite with the bundled runtime: `28 passed in 0.18s`.
+- Re-ran `python -m compileall -q src/piper/windows_tray`: passed.
+- Re-ran `git diff --check`: passed.
+- The complete `tests/windows_tray` suite currently reports `164 passed, 7 failed`. The failures are outside these local Task 5 fixes, including the intentionally deferred Task 6 `drain_once()` EXIT contract and pre-existing Phase 2/3 capture/tray expectation mismatches; no unrelated production behavior was changed here.

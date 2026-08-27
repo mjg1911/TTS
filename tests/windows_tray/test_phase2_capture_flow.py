@@ -69,6 +69,17 @@ class FakeTray:
     def stop(self):
         self.events.append("stop")
 
+    def ensure_visible(self):
+        self.events.append("ensure")
+
+
+class FakePowerListener:
+    def start(self, _callback):
+        pass
+
+    def stop(self):
+        pass
+
 
 class FakeHotkeys:
     def __init__(self, events):
@@ -183,6 +194,7 @@ def test_app_starts_hotkeys_after_voice_setup_and_stops_before_mutex_release(mon
     )
     monkeypatch.setattr(app, "TrayIcon", lambda _path, _enqueue: tray)
     monkeypatch.setattr(app, "HotkeyManager", lambda: hotkeys)
+    monkeypatch.setattr(app, "PowerBroadcastListener", FakePowerListener)
 
     def mainloop():
         controller = controllers[0]

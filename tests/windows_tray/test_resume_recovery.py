@@ -68,6 +68,47 @@ def test_resume_cancels_active_speech_before_restoring_resources() -> None:
     assert hotkeys.reregister_calls == 1
 
 
+def test_resume_orders_invalidation_and_cancellation_before_resource_recovery() -> None:
+    events = []
+
+    class OrderedSpeech(FakeSpeech):
+        def cancel_active(self, generation: int) -> None:
+            events.append("cancel")
+            super().cancel_active(generation)
+
+    class OrderedHotkeys(FakeHotkeys):
+        def reregister(self) -> bool:
+            events.append("reregister")
+            assert controller.state.capture_in_progress is False
+            assert "cancel" in events
+            return super().reregister()
+
+    speech = OrderedSpeech()
+    hotkeys = OrderedHotkeys()
+    controller = Controller(
+        hotkeys=hotkeys,
+        speech_worker=speech,
+        capture_submit=lambda _job: None,
+    )
+
+    def ensure_tray_visible() -> None:
+        events.append("ensure")
+        assert controller.state.capture_in_progress is False
+        assert "cancel" in events
+
+    controller.configure_runtime(
+        ensure_tray_visible=ensure_tray_visible,
+    )
+    controller.state.capture_in_progress = True
+    controller.state.playback = PlaybackState.SPEAKING
+    controller.state.speech_generation = 8
+
+    controller.handle(Command(CommandKind.SYSTEM_RESUME))
+
+    assert events == ["cancel", "ensure", "reregister"]
+    assert controller.state.capture_in_progress is False
+
+
 def test_resume_while_idle_stays_idle() -> None:
     controller, speech, hotkeys, tray_calls, _statuses = make_controller()
 
