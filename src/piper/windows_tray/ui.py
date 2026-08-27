@@ -28,6 +28,14 @@ class TkUi:
         self._assert_main_thread()
         messagebox.showinfo("Piper", message, parent=self.root)
 
+    def show_last_text(self, text: Optional[str]) -> None:
+        self._assert_main_thread()
+        messagebox.showinfo(
+            "Last captured text",
+            text or "No text has been captured yet.",
+            parent=self.root,
+        )
+
     def close(self) -> None:
         self._assert_main_thread()
         self.root.destroy()

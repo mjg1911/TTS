@@ -55,6 +55,8 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
 
     assert [command.kind for command in commands] == [
         CommandKind.CONFIGURE_VOICE,
+        CommandKind.SHOW_LAST_TEXT,
+        CommandKind.CONFIGURE_HOTKEY,
         CommandKind.OPEN_LOG,
         CommandKind.EXIT,
     ]

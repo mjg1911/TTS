@@ -2,8 +2,10 @@ from dataclasses import dataclass
 from dataclasses import replace
 from queue import Empty, Queue
 from pathlib import Path
+import threading
 from typing import Callable, Optional, Tuple
 
+from .capture import CaptureResult, CaptureStatus
 from .commands import Command, CommandKind
 from .settings import TraySettings
 
@@ -21,10 +23,22 @@ VOICE_SETUP_ERRORS = (
 @dataclass
 class AppState:
     last_text: Optional[str] = None
+    capture_generation: int = 0
+    capture_in_progress: bool = False
     shutting_down: bool = False
     settings: Optional[TraySettings] = None
     voice_path: Optional[Path] = None
     voice: Optional[object] = None
+
+
+@dataclass(frozen=True)
+class CaptureCompletion:
+    generation: int
+    result: CaptureResult
+
+
+def _start_daemon_job(job: Callable[[], None]) -> None:
+    threading.Thread(target=job, name="piper-capture", daemon=True).start()
 
 
 class Controller:
@@ -32,6 +46,8 @@ class Controller:
         self,
         settings: Optional[TraySettings] = None,
         save_settings: Optional[Callable[[TraySettings], None]] = None,
+        capture: Optional[Callable[[], CaptureResult]] = None,
+        capture_submit: Optional[Callable[[Callable[[], None]], None]] = None,
     ) -> None:
         self.state = AppState(settings=settings)
         self._commands = Queue()  # type: Queue[Command]
@@ -48,22 +64,36 @@ class Controller:
         self._stop_tray: Callable[[], None] = lambda: None
         self._close_instance: Callable[[], None] = lambda: None
         self._quit_root: Callable[[], None] = lambda: None
+        self._capture = capture or (
+            lambda: CaptureResult(CaptureStatus.ACCESS_ERROR, detail="capture is not configured")
+        )
+        self._capture_submit = capture_submit or _start_daemon_job
+        self._log_info: Callable[[str], None] = lambda _message: None
+        self._show_last_text: Callable[[Optional[str]], None] = lambda _text: None
 
     def configure_runtime(
         self,
-        choose_voice: Callable[[], Optional[Path]],
-        load_voice: Callable[[str], Tuple[Path, object]],
-        show_status: Callable[[str], None],
-        log_error: Callable[[str], None],
+        choose_voice: Optional[Callable[[], Optional[Path]]] = None,
+        load_voice: Optional[Callable[[str], Tuple[Path, object]]] = None,
+        show_status: Optional[Callable[[str], None]] = None,
+        log_error: Optional[Callable[[str], None]] = None,
         open_log: Optional[Callable[[], None]] = None,
         stop_tray: Optional[Callable[[], None]] = None,
         close_instance: Optional[Callable[[], None]] = None,
         quit_root: Optional[Callable[[], None]] = None,
+        capture: Optional[Callable[[], CaptureResult]] = None,
+        capture_submit: Optional[Callable[[Callable[[], None]], None]] = None,
+        log_info: Optional[Callable[[str], None]] = None,
+        show_last_text: Optional[Callable[[Optional[str]], None]] = None,
     ) -> None:
-        self._choose_voice = choose_voice
-        self._load_voice = load_voice
-        self._show_status = show_status
-        self._log_error = log_error
+        if choose_voice is not None:
+            self._choose_voice = choose_voice
+        if load_voice is not None:
+            self._load_voice = load_voice
+        if show_status is not None:
+            self._show_status = show_status
+        if log_error is not None:
+            self._log_error = log_error
         if open_log is not None:
             self._open_log = open_log
         if stop_tray is not None:
@@ -72,6 +102,14 @@ class Controller:
             self._close_instance = close_instance
         if quit_root is not None:
             self._quit_root = quit_root
+        if capture is not None:
+            self._capture = capture
+        if capture_submit is not None:
+            self._capture_submit = capture_submit
+        if log_info is not None:
+            self._log_info = log_info
+        if show_last_text is not None:
+            self._show_last_text = show_last_text
 
     def set_voice(self, path: Path, voice: object) -> None:
         self.state.voice_path = path
@@ -121,7 +159,61 @@ class Controller:
                 self._show_status("The selected Piper voice model could not be loaded.")
                 return
             self.install_voice(candidate_path, candidate_voice, persist=True)
+        elif command.kind is CommandKind.CAPTURE_REQUEST:
+            self._request_capture()
+        elif command.kind in (CommandKind.CAPTURE_SUCCEEDED, CommandKind.CAPTURE_FAILED):
+            self._complete_capture(command)
+        elif command.kind is CommandKind.SHOW_LAST_TEXT:
+            self._show_last_text(self.state.last_text)
+        elif command.kind is CommandKind.CANCEL_REQUEST:
+            return
         elif command.kind is CommandKind.EXIT:
             self._stop_tray()
             self._close_instance()
             self._quit_root()
+
+    def _request_capture(self) -> None:
+        if self.state.capture_in_progress:
+            return
+        self.state.capture_generation += 1
+        generation = self.state.capture_generation
+        self.state.capture_in_progress = True
+
+        def worker() -> None:
+            try:
+                result = self._capture()
+            except Exception as error:
+                result = CaptureResult(CaptureStatus.ACCESS_ERROR, detail=str(error))
+            self._log_info(
+                "capture outcome=%s length=%d"
+                % (result.status.name, len(result.text) if result.text is not None else 0)
+            )
+            kind = (
+                CommandKind.CAPTURE_SUCCEEDED
+                if result.status is CaptureStatus.SUCCESS
+                else CommandKind.CAPTURE_FAILED
+            )
+            self.enqueue(Command(kind, CaptureCompletion(generation, result)))
+
+        self._capture_submit(worker)
+
+    def _complete_capture(self, command: Command) -> None:
+        completion = command.value
+        if isinstance(completion, CaptureCompletion):
+            generation, result = completion.generation, completion.result
+        elif isinstance(completion, CaptureResult):
+            generation, result = self.state.capture_generation, completion
+        elif isinstance(completion, str):
+            generation = self.state.capture_generation
+            result = CaptureResult(CaptureStatus.SUCCESS, completion)
+        else:
+            return
+        if generation != self.state.capture_generation:
+            return
+        self.state.capture_in_progress = False
+        if (
+            command.kind is CommandKind.CAPTURE_SUCCEEDED
+            and result.status is CaptureStatus.SUCCESS
+            and result.text is not None
+        ):
+            self.state.last_text = result.text

@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum, auto
-from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional
 
 
 class CommandKind(Enum):
@@ -9,9 +8,15 @@ class CommandKind(Enum):
     CONFIGURE_VOICE = auto()
     OPEN_LOG = auto()
     EXIT = auto()
+    CAPTURE_REQUEST = auto()
+    CAPTURE_SUCCEEDED = auto()
+    CAPTURE_FAILED = auto()
+    CANCEL_REQUEST = auto()
+    SHOW_LAST_TEXT = auto()
+    CONFIGURE_HOTKEY = auto()
 
 
-CommandValue = Union[Path, str]
+CommandValue = Any
 
 
 @dataclass(frozen=True)
