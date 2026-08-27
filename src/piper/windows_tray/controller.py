@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from dataclasses import replace
+from enum import Enum, auto
 from queue import Empty, Queue
 from pathlib import Path
 import threading
@@ -9,6 +10,7 @@ from .capture import CaptureResult, CaptureStatus
 from .commands import Command, CommandKind
 from .hotkey import parse_hotkey
 from .settings import TraySettings
+from .speech import SpeechEvent, SpeechEventKind, SpeechRequest
 
 
 VOICE_SETUP_ERRORS = (
@@ -21,11 +23,20 @@ VOICE_SETUP_ERRORS = (
 )
 
 
+class PlaybackState(Enum):
+    IDLE = auto()
+    SPEAKING = auto()
+    STOPPED = auto()
+    SHUTTING_DOWN = auto()
+
+
 @dataclass
 class AppState:
     last_text: Optional[str] = None
     capture_generation: int = 0
     capture_in_progress: bool = False
+    speech_generation: int = 0
+    playback: PlaybackState = PlaybackState.IDLE
     shutting_down: bool = False
     settings: Optional[TraySettings] = None
     voice_path: Optional[Path] = None
@@ -50,6 +61,7 @@ class Controller:
         capture: Optional[Callable[[], CaptureResult]] = None,
         capture_submit: Optional[Callable[[Callable[[], None]], None]] = None,
         hotkeys: Optional[object] = None,
+        speech_worker: Optional[object] = None,
     ) -> None:
         self.state = AppState(settings=settings)
         self._commands = Queue()  # type: Queue[Command]
@@ -75,6 +87,8 @@ class Controller:
         self._show_last_text: Callable[[Optional[str]], None] = lambda _text: None
         self._hotkeys = hotkeys
         self._choose_hotkey: Callable[[], Optional[str]] = lambda: None
+        self._speech_worker = speech_worker
+        self._capture_replaced_speech = False
 
     def configure_runtime(
         self,
@@ -92,6 +106,7 @@ class Controller:
         show_last_text: Optional[Callable[[Optional[str]], None]] = None,
         hotkeys: Optional[object] = None,
         choose_hotkey: Optional[Callable[[], Optional[str]]] = None,
+        speech_worker: Optional[object] = None,
     ) -> None:
         if choose_voice is not None:
             self._choose_voice = choose_voice
@@ -121,6 +136,8 @@ class Controller:
             self._hotkeys = hotkeys
         if choose_hotkey is not None:
             self._choose_hotkey = choose_hotkey
+        if speech_worker is not None:
+            self._speech_worker = speech_worker
 
     def set_voice(self, path: Path, voice: object) -> None:
         self.state.voice_path = path
@@ -145,6 +162,10 @@ class Controller:
     def enqueue(self, command: Command) -> None:
         self._commands.put(command)
 
+    def enqueue_worker_event(self, event: SpeechEvent) -> None:
+        """Queue worker output; worker callbacks must not touch controller state."""
+        self.enqueue(Command(CommandKind.WORKER_EVENT, event))
+
     def drain_once(self) -> Optional[Command]:
         try:
             command = self._commands.get_nowait()
@@ -152,6 +173,7 @@ class Controller:
             return None
         if command.kind is CommandKind.EXIT:
             self.state.shutting_down = True
+            self.state.playback = PlaybackState.SHUTTING_DOWN
         return command
 
     def handle(self, command: Command) -> None:
@@ -183,7 +205,13 @@ class Controller:
             if isinstance(requested, str):
                 self.request_hotkey_change(requested)
         elif command.kind is CommandKind.CANCEL_REQUEST:
-            return
+            self._stop_speech()
+        elif command.kind is CommandKind.STOP_REQUEST:
+            self._stop_speech()
+        elif command.kind is CommandKind.REPLAY_REQUEST:
+            self._replay()
+        elif command.kind is CommandKind.WORKER_EVENT:
+            self._handle_worker_event(command.value)
         elif command.kind is CommandKind.HOTKEY_FAILED:
             detail = str(command.value) if command.value else "unknown error"
             self._log_error("Piper hotkey message loop stopped: %s" % detail)
@@ -191,6 +219,10 @@ class Controller:
                 "Piper hotkeys stopped unexpectedly; hotkeys are unavailable."
             )
         elif command.kind is CommandKind.EXIT:
+            self.state.shutting_down = True
+            self.state.playback = PlaybackState.SHUTTING_DOWN
+            if self._speech_worker is not None:
+                self._speech_worker.shutdown()
             for cleanup in (self._stop_tray, self._close_instance, self._quit_root):
                 try:
                     cleanup()
@@ -198,6 +230,9 @@ class Controller:
                     self._log_error("Piper cleanup step failed: %s" % error)
 
     def _request_capture(self) -> None:
+        if self.state.playback is PlaybackState.SPEAKING:
+            self._stop_speech()
+            self._capture_replaced_speech = True
         self.state.capture_generation += 1
         generation = self.state.capture_generation
         if self.state.capture_in_progress:
@@ -248,10 +283,58 @@ class Controller:
             and result.text is not None
         ):
             self.state.last_text = result.text
+            self._capture_replaced_speech = False
+            self.state.speech_generation += 1
+            self.state.playback = PlaybackState.SPEAKING
+            if self._speech_worker is not None:
+                self._speech_worker.submit(
+                    SpeechRequest(self.state.speech_generation, result.text)
+                )
         else:
+            if self._capture_replaced_speech:
+                self.state.playback = PlaybackState.STOPPED
             self._show_status(
                 "No text selected or the application did not provide it"
             )
+
+    def _stop_speech(self) -> None:
+        if self.state.playback is not PlaybackState.SPEAKING:
+            return
+        generation = self.state.speech_generation
+        if self._speech_worker is not None:
+            self._speech_worker.cancel_active(generation)
+        self.state.speech_generation += 1
+        self.state.playback = PlaybackState.STOPPED
+
+    def _replay(self) -> None:
+        if self.state.shutting_down or self.state.last_text is None:
+            return
+        if self.state.playback is PlaybackState.SPEAKING:
+            if self._speech_worker is not None:
+                self._speech_worker.cancel_active(self.state.speech_generation)
+        self.state.speech_generation += 1
+        self.state.playback = PlaybackState.SPEAKING
+        if self._speech_worker is not None:
+            self._speech_worker.submit(
+                SpeechRequest(self.state.speech_generation, self.state.last_text)
+            )
+
+    def _handle_worker_event(self, event: object) -> None:
+        if not isinstance(event, SpeechEvent):
+            return
+        if event.generation != self.state.speech_generation:
+            return
+        if event.kind is SpeechEventKind.STARTED:
+            self.state.playback = PlaybackState.SPEAKING
+        elif event.kind is SpeechEventKind.FINISHED:
+            self.state.playback = PlaybackState.IDLE
+        elif event.kind is SpeechEventKind.CANCELLED:
+            self.state.playback = PlaybackState.STOPPED
+        elif event.kind is SpeechEventKind.FAILED:
+            self.state.playback = PlaybackState.STOPPED
+            if event.error:
+                self._log_error(event.error)
+            self._show_status("Speech playback failed.")
 
     def request_hotkey_change(self, requested: str) -> bool:
         if self._hotkeys is None:
