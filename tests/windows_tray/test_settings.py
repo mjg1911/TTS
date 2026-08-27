@@ -16,6 +16,21 @@ def test_missing_settings_use_safe_defaults(tmp_path: Path) -> None:
     assert result.source == "missing"
 
 
+def test_unreadable_settings_use_safe_defaults(monkeypatch, tmp_path: Path) -> None:
+    from piper.windows_tray import settings
+
+    monkeypatch.setattr(
+        settings.Path,
+        "exists",
+        lambda _path: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    result = settings.load_settings(tmp_path / "settings.json")
+
+    assert result.settings == TraySettings()
+    assert result.source == "corrupt"
+
+
 def test_malformed_settings_are_preserved_and_replaced_in_memory(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     path.write_text("{broken", encoding="utf-8")

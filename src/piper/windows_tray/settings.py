@@ -64,10 +64,9 @@ def _corrupt_path(path: Path) -> Path:
 
 def load_settings(path: Optional[Path] = None) -> SettingsLoadResult:
     path = path or settings_path()
-    if not path.exists():
-        return SettingsLoadResult(TraySettings(), "missing")
-
     try:
+        if not path.exists():
+            return SettingsLoadResult(TraySettings(), "missing")
         return SettingsLoadResult(
             _validated(json.loads(path.read_text(encoding="utf-8"))), "loaded"
         )

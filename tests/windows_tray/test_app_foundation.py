@@ -283,7 +283,13 @@ def test_primary_pre_tray_failures_close_instance(monkeypatch, failure_stage) ->
     else:
         monkeypatch.setattr(app, "TkUi", lambda: FakeUi(events))
     if failure_stage == "controller":
-        monkeypatch.setattr(app, "Controller", lambda: (_ for _ in ()).throw(RuntimeError("controller")))
+        monkeypatch.setattr(
+            app,
+            "Controller",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                RuntimeError("controller")
+            ),
+        )
     else:
         monkeypatch.setattr(app, "Controller", Controller)
 

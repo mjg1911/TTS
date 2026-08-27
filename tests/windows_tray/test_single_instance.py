@@ -224,7 +224,9 @@ def test_kernel_api_configures_win32_handle_function_prototypes(monkeypatch) -> 
     from piper.windows_tray.single_instance import KernelApi
 
     kernel32 = FakeKernel32()
-    monkeypatch.setattr("ctypes.WinDLL", lambda name, use_last_error: kernel32)
+    monkeypatch.setattr(
+        "ctypes.WinDLL", lambda name, use_last_error: kernel32, raising=False
+    )
 
     KernelApi()
 
@@ -355,13 +357,21 @@ def test_kernel_api_rejects_wait_failure_and_unexpected_wait_result(monkeypatch)
             self.ReleaseMutex = OutcomeFunction(1)
             self.CloseHandle = OutcomeFunction(1)
 
-    monkeypatch.setattr("ctypes.WinError", lambda _error: OSError("win32"))
-    monkeypatch.setattr("ctypes.WinDLL", lambda *_args, **_kwargs: Kernel32(single_instance.WAIT_FAILED))
+    monkeypatch.setattr(
+        "ctypes.WinError", lambda _error: OSError("win32"), raising=False
+    )
+    monkeypatch.setattr(
+        "ctypes.WinDLL",
+        lambda *_args, **_kwargs: Kernel32(single_instance.WAIT_FAILED),
+        raising=False,
+    )
     api = single_instance.KernelApi()
     with pytest.raises(OSError):
         api.wait_event(10)
 
-    monkeypatch.setattr("ctypes.WinDLL", lambda *_args, **_kwargs: Kernel32(1))
+    monkeypatch.setattr(
+        "ctypes.WinDLL", lambda *_args, **_kwargs: Kernel32(1), raising=False
+    )
     api = single_instance.KernelApi()
     with pytest.raises(RuntimeError):
         api.wait_event(10)
@@ -380,8 +390,12 @@ def test_kernel_api_rejects_failed_release_and_close(monkeypatch, method) -> Non
             self.ReleaseMutex = OutcomeFunction(0)
             self.CloseHandle = OutcomeFunction(0)
 
-    monkeypatch.setattr("ctypes.WinError", lambda _error: OSError("win32"))
-    monkeypatch.setattr("ctypes.WinDLL", lambda *_args, **_kwargs: Kernel32())
+    monkeypatch.setattr(
+        "ctypes.WinError", lambda _error: OSError("win32"), raising=False
+    )
+    monkeypatch.setattr(
+        "ctypes.WinDLL", lambda *_args, **_kwargs: Kernel32(), raising=False
+    )
     api = single_instance.KernelApi()
 
     with pytest.raises(OSError):
