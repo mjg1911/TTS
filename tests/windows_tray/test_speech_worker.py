@@ -342,6 +342,39 @@ def test_cancellation_at_play_boundary_stops_player_before_chunk_is_played():
         worker.shutdown()
 
 
+def test_cancellation_before_next_discards_chunk_without_advancing_synthesis():
+    events = []
+    played = []
+    entered = threading.Event()
+    cancel_event = CallbackEvent()
+    next_calls = []
+
+    class Chunks:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            next_calls.append(True)
+            return Chunk(b"stale")
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: Chunks(),
+    )
+    worker = make_worker(voice, events, played, entered)
+    worker._cancel_event = cancel_event
+    cancel_event.trigger_call = 2
+    cancel_event.callback = lambda: worker.cancel_active(9)
+
+    try:
+        worker.submit(SpeechRequest(9, "hello"))
+        wait_for_event(events, SpeechEventKind.CANCELLED, 9)
+        assert next_calls == []
+        assert played == []
+    finally:
+        worker.shutdown()
+
+
 def test_cancellation_during_terminal_selection_emits_cancelled():
     events = []
     played = []

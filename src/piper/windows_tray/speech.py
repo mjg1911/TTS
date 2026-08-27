@@ -126,6 +126,9 @@ class SpeechWorker:
                 audio_chunks = iter(voice.synthesize(request.text))
                 while True:
                     phase = "synthesis"
+                    if self._cancel_event.is_set():
+                        terminal_kind = SpeechEventKind.CANCELLED
+                        break
                     try:
                         chunk = next(audio_chunks)
                     except StopIteration:

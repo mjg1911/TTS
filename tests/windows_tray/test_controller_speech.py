@@ -113,6 +113,21 @@ def test_replay_resubmits_last_text_without_mutating_it():
     assert worker.submitted == [SpeechRequest(1, "saved")]
 
 
+def test_replay_is_ignored_while_capture_is_in_progress():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker, capture_submit=lambda _job: None)
+    controller.state.last_text = "saved"
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    controller.handle(Command(CommandKind.REPLAY_REQUEST))
+
+    assert controller.state.capture_in_progress is True
+    assert controller.state.speech_generation == 0
+    assert controller.state.playback is PlaybackState.IDLE
+    assert controller.tray_snapshot().can_replay is False
+    assert worker.submitted == []
+
+
 def test_stale_worker_events_do_not_change_current_playback():
     worker = FakeSpeechWorker()
     controller = Controller(speech_worker=worker)

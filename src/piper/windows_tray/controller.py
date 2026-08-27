@@ -188,7 +188,9 @@ class Controller:
             return TraySnapshot(
                 can_stop=self.state.playback is PlaybackState.SPEAKING,
                 can_replay=(
-                    self.state.last_text is not None and not self.state.shutting_down
+                    self.state.last_text is not None
+                    and not self.state.shutting_down
+                    and not self.state.capture_in_progress
                 ),
                 has_last_text=self.state.last_text is not None,
             )
@@ -360,7 +362,11 @@ class Controller:
         self.install_voice(event.model_path, event.voice, persist=True)
 
     def _replay(self) -> None:
-        if self.state.shutting_down or self.state.last_text is None:
+        if (
+            self.state.shutting_down
+            or self.state.capture_in_progress
+            or self.state.last_text is None
+        ):
             return
         if self.state.playback is PlaybackState.SPEAKING:
             if self._speech_worker is not None:
