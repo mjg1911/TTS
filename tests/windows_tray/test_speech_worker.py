@@ -21,6 +21,7 @@ class FakePlayer:
         self.played = played
         self.entered = entered
         self.stopped = threading.Event()
+        self.play_calls = 0
 
     def __enter__(self):
         self.entered.set()
@@ -30,12 +31,38 @@ class FakePlayer:
         return None
 
     def play(self, data: bytes) -> None:
+        self.play_calls += 1
         if self.stopped.is_set():
             return
         self.played.append(data)
 
     def stop(self) -> None:
         self.stopped.set()
+
+
+class CallbackEvent:
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.calls = 0
+        self.callback = None
+        self.trigger_call = None
+        self.forced_false_calls = set()
+
+    def clear(self) -> None:
+        self.event.clear()
+
+    def set(self) -> None:
+        self.event.set()
+
+    def is_set(self) -> bool:
+        self.calls += 1
+        if self.callback is not None and self.calls == self.trigger_call:
+            callback = self.callback
+            self.callback = None
+            callback()
+        if self.calls in self.forced_false_calls:
+            return False
+        return self.event.is_set()
 
 
 def wait_for_event(events: list, kind: SpeechEventKind, generation: int):
@@ -211,3 +238,81 @@ def test_shutdown_stops_active_work_and_joins_worker():
     worker.shutdown()
 
     assert not worker._thread.is_alive()
+
+
+def test_cancellation_at_play_boundary_stops_player_before_chunk_is_played():
+    events = []
+    played = []
+    entered = threading.Event()
+    cancel_event = CallbackEvent()
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"stale")],
+    )
+    worker = make_worker(voice, events, played, entered)
+    worker._cancel_event = cancel_event
+
+    player = worker._player_factory(22050)
+    worker._player_factory = lambda _sample_rate: player
+    cancel_event.trigger_call = 3
+    cancel_event.forced_false_calls.add(3)
+    cancel_event.callback = lambda: worker.cancel_active(9)
+    try:
+        worker.submit(SpeechRequest(9, "hello"))
+        wait_for_event(events, SpeechEventKind.CANCELLED, 9)
+        assert played == []
+        assert player.play_calls == 0
+    finally:
+        worker.shutdown()
+
+
+def test_cancellation_during_terminal_selection_emits_cancelled():
+    events = []
+    played = []
+    entered = threading.Event()
+    cancel_event = CallbackEvent()
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+    worker = make_worker(voice, events, played, entered)
+    worker._cancel_event = cancel_event
+
+    def cancel_at_terminal_check():
+        worker.cancel_active(10)
+
+    cancel_event.trigger_call = 4
+    cancel_event.forced_false_calls.add(4)
+    cancel_event.callback = cancel_at_terminal_check
+    try:
+        worker.submit(SpeechRequest(10, "hello"))
+        wait_for_event(events, SpeechEventKind.CANCELLED, 10)
+        assert not any(
+            event.kind is SpeechEventKind.FINISHED and event.generation == 10
+            for event in events
+        )
+    finally:
+        worker.shutdown()
+
+
+def test_failure_after_played_chunk_is_reported_as_synthesis_failure():
+    events = []
+    played = []
+    entered = threading.Event()
+
+    def synthesize(_text):
+        yield Chunk(b"first")
+        raise ValueError("later synthesis failure")
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=synthesize
+    )
+    worker = make_worker(voice, events, played, entered)
+
+    try:
+        worker.submit(SpeechRequest(11, "hello"))
+        event = wait_for_event(events, SpeechEventKind.FAILED, 11)
+        assert event.error == "Speech synthesis failed."
+        assert played == [b"first"]
+    finally:
+        worker.shutdown()

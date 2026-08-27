@@ -53,3 +53,55 @@ The broader `tests/windows_tray` run produced `87 passed`, `11 failed`, and `16 
 
 - The full Windows-tray suite remains non-green for unrelated pre-existing/environmental failures noted above. The Task 2 focused and audio-cancellation covering checks are green.
 - The worker’s `player_factory` is injectable for tests and defaults to `AudioPlayer`; integration wiring into the controller is intentionally outside Task 2.
+
+## Fix wave: reviewer Important findings
+
+### Findings addressed
+
+1. Added a dedicated play-entry boundary. The worker holds it across the final cancellation check and entry into `player.play()`. `cancel_active()` never waits on that boundary: it sets cancellation and calls the existing `AudioPlayer.stop()` directly, so blocked playback I/O remains interruptible. A cancellation that wins before playback entry is observed by the boundary and cannot invoke the player.
+2. Added a cancellation check after all synthesis/playback error handling and immediately before terminal event emission, so cancellation wins over `FINISHED` even if it arrives during terminal selection.
+3. Reset the failure phase to synthesis before every generator `next()`, preserving synthesis-failure classification when a later yield raises after earlier chunks have played.
+
+### TDD regression evidence
+
+Command after adding the three regression tests, before the production fix:
+
+```text
+$env:PYTHONPATH = 'src'; & 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m pytest tests/windows_tray/test_speech_worker.py -v
+```
+
+Result: `6 passed, 3 failed`. The three failures were the new play-boundary, terminal-cancellation, and later-synthesis-yield regressions.
+
+### Fix verification
+
+Focused worker command:
+
+```text
+$env:PYTHONPATH = 'src'; & 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m pytest tests/windows_tray/test_speech_worker.py -v
+```
+
+Result: `9 passed`.
+
+Required covering worker/audio command:
+
+```text
+$env:PYTHONPATH = 'src'; & 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m pytest tests/windows_tray/test_speech_worker.py tests/windows_tray/test_audio_playback_cancel.py -q
+```
+
+Result: `12 passed`.
+
+Additional verification:
+
+```text
+& 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m compileall -q src\piper\windows_tray\speech.py tests\windows_tray\test_speech_worker.py
+git diff --check
+```
+
+Result: compilation passed and `git diff --check` passed. The only output was Git’s existing LF-to-CRLF working-copy warning.
+
+### Fix self-review
+
+- The boundary lock is not used by `cancel_active()` or `shutdown()` while stopping a player, so existing cancellable `AudioPlayer.play()` behavior is preserved.
+- The regression tests force cancellation at the player-entry check and terminal-selection check, and verify no player entry or stale `FINISHED` event occurs.
+- The later-yield test verifies that one already-played chunk does not change a subsequent synthesis exception into a playback failure.
+- No unrelated production files were changed.

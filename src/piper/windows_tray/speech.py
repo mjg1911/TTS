@@ -46,6 +46,7 @@ class SpeechWorker:
         self._active_generation: Optional[int] = None
         self._cancel_event = threading.Event()
         self._active_player: Optional[AudioPlayer] = None
+        self._play_boundary = threading.Lock()
         self._shutdown = False
         self._thread = threading.Thread(
             target=self._run, name="piper-speech", daemon=True
@@ -120,6 +121,7 @@ class SpeechWorker:
                 phase = "synthesis"
                 audio_chunks = iter(voice.synthesize(request.text))
                 while True:
+                    phase = "synthesis"
                     try:
                         chunk = next(audio_chunks)
                     except StopIteration:
@@ -131,8 +133,12 @@ class SpeechWorker:
                     if self._cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
-                    phase = "playback"
-                    player.play(audio_bytes)
+                    with self._play_boundary:
+                        if self._cancel_event.is_set():
+                            terminal_kind = SpeechEventKind.CANCELLED
+                            break
+                        phase = "playback"
+                        player.play(audio_bytes)
 
                 if self._cancel_event.is_set():
                     terminal_kind = SpeechEventKind.CANCELLED
@@ -146,5 +152,9 @@ class SpeechWorker:
                     if phase == "playback"
                     else "Speech synthesis failed."
                 )
+
+        if self._cancel_event.is_set():
+            terminal_kind = SpeechEventKind.CANCELLED
+            error = None
 
         self._on_event(SpeechEvent(terminal_kind, request.generation, error))
