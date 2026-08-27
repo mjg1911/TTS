@@ -21,6 +21,27 @@ class InstanceRole(Enum):
 class KernelApi:
     def __init__(self) -> None:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateEventW.restype = wintypes.HANDLE
+        kernel32.CreateEventW.argtypes = [
+            wintypes.LPVOID,
+            wintypes.BOOL,
+            wintypes.BOOL,
+            wintypes.LPCWSTR,
+        ]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CreateMutexW.argtypes = [
+            wintypes.LPVOID,
+            wintypes.BOOL,
+            wintypes.LPCWSTR,
+        ]
+        kernel32.SetEvent.restype = wintypes.BOOL
+        kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.ReleaseMutex.restype = wintypes.BOOL
+        kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         self._kernel32 = kernel32
 
     def create_event(self, name: str) -> int:
@@ -56,6 +77,10 @@ class SingleInstance:
         self._event: Optional[int] = None
         self._mutex: Optional[int] = None
         self._owns_mutex = False
+        self._state_lock = threading.Lock()
+        self._closing = False
+        self._closed = threading.Event()
+        self._watcher: Optional[threading.Thread] = None
 
     def acquire(self) -> InstanceRole:
         self._event = self._kernel.create_event(ACTIVATION_EVENT_NAME)
@@ -67,26 +92,58 @@ class SingleInstance:
         return InstanceRole.PRIMARY
 
     def start_activation_watch(self, callback: Callable[[], None]) -> threading.Thread:
-        assert self._event is not None
-
         def watch() -> None:
-            while self._event is not None:
-                self._kernel.wait_event(self._event)
-                if self._event is not None:
-                    callback()
+            while True:
+                with self._state_lock:
+                    event = self._event
+                if event is None:
+                    return
+                self._kernel.wait_event(event)
+                with self._state_lock:
+                    if self._closing or self._event is None:
+                        return
+                callback()
 
-        thread = threading.Thread(target=watch, name="piper-activation", daemon=True)
+        with self._state_lock:
+            assert self._event is not None
+            if self._closing:
+                raise RuntimeError("single instance is closed")
+            thread = threading.Thread(
+                target=watch, name="piper-activation", daemon=True
+            )
+            self._watcher = thread
         thread.start()
         return thread
 
     def close(self) -> None:
-        event, mutex = self._event, self._mutex
-        self._event = None
-        self._mutex = None
-        if self._owns_mutex and mutex is not None:
-            self._kernel.release_mutex(mutex)
-        if event is not None:
-            self._kernel.close_handle(event)
-        if mutex is not None:
-            self._kernel.close_handle(mutex)
-        self._owns_mutex = False
+        current = threading.current_thread()
+        with self._state_lock:
+            if self._closed.is_set():
+                return
+            watcher = self._watcher
+            if self._closing:
+                if watcher is not current:
+                    self._closed.wait()
+                return
+            self._closing = True
+            event, mutex = self._event, self._mutex
+            owns_mutex = self._owns_mutex
+
+        try:
+            if watcher is not None and watcher is not current and event is not None:
+                self._kernel.signal_event(event)
+                watcher.join()
+
+            with self._state_lock:
+                self._event = None
+                self._mutex = None
+                self._watcher = None
+                self._owns_mutex = False
+            if owns_mutex and mutex is not None:
+                self._kernel.release_mutex(mutex)
+            if event is not None:
+                self._kernel.close_handle(event)
+            if mutex is not None:
+                self._kernel.close_handle(mutex)
+        finally:
+            self._closed.set()
