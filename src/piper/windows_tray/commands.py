@@ -18,6 +18,8 @@ class CommandKind(Enum):
     SHOW_LAST_TEXT = auto()
     CONFIGURE_HOTKEY = auto()
     HOTKEY_FAILED = auto()
+    VOICE_SWITCH_SUCCEEDED = auto()
+    VOICE_SWITCH_FAILED = auto()
 
 
 CommandValue = Any

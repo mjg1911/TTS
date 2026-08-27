@@ -14,6 +14,7 @@ from .logging_setup import configure_logging, log_path
 from .settings import TraySettings, load_settings, save_settings
 from .single_instance import InstanceRole, SingleInstance
 from .tray_icon import TrayIcon
+from .voice_manager import VoiceManager
 
 
 def TkUi():
@@ -133,6 +134,11 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         else:
             controller.set_voice(configured_path, configured_voice)
 
+        voice_manager = VoiceManager(
+            controller.state.voice,
+            lambda reference: load_voice_candidate(reference, data_dirs),
+        )
+
         clipboard = Win32Clipboard()
         capture = SelectionCapture(clipboard, clipboard.send_ctrl_c)
         hotkeys = HotkeyManager()
@@ -161,6 +167,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         controller.configure_runtime(
             choose_voice=ui.choose_voice_model,
             load_voice=lambda reference: load_voice_candidate(reference, data_dirs),
+            voice_manager=voice_manager,
             show_status=ui.show_status,
             log_error=logger.error,
             open_log=lambda: os.startfile(log_path().parent),

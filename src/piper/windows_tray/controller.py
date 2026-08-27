@@ -11,6 +11,7 @@ from .commands import Command, CommandKind
 from .hotkey import parse_hotkey
 from .settings import TraySettings
 from .speech import SpeechEvent, SpeechEventKind, SpeechRequest
+from .voice_manager import VoiceManager, VoiceSwitchEvent
 
 
 VOICE_SETUP_ERRORS = (
@@ -62,6 +63,7 @@ class Controller:
         capture_submit: Optional[Callable[[Callable[[], None]], None]] = None,
         hotkeys: Optional[object] = None,
         speech_worker: Optional[object] = None,
+        voice_manager: Optional[VoiceManager] = None,
     ) -> None:
         self.state = AppState(settings=settings)
         self._commands = Queue()  # type: Queue[Command]
@@ -89,6 +91,7 @@ class Controller:
         self._choose_hotkey: Callable[[], Optional[str]] = lambda: None
         self._speech_worker = speech_worker
         self._capture_replaced_speech = False
+        self._voice_manager = voice_manager
 
     def configure_runtime(
         self,
@@ -107,6 +110,7 @@ class Controller:
         hotkeys: Optional[object] = None,
         choose_hotkey: Optional[Callable[[], Optional[str]]] = None,
         speech_worker: Optional[object] = None,
+        voice_manager: Optional[VoiceManager] = None,
     ) -> None:
         if choose_voice is not None:
             self._choose_voice = choose_voice
@@ -138,10 +142,16 @@ class Controller:
             self._choose_hotkey = choose_hotkey
         if speech_worker is not None:
             self._speech_worker = speech_worker
+        if voice_manager is not None:
+            self._voice_manager = voice_manager
+        elif self._voice_manager is None and self.state.voice is not None and load_voice is not None:
+            self._voice_manager = VoiceManager(self.state.voice, load_voice)
 
     def set_voice(self, path: Path, voice: object) -> None:
         self.state.voice_path = path
         self.state.voice = voice
+        if self._voice_manager is not None:
+            self._voice_manager.replace(voice)
 
     def install_voice(self, path: Path, voice: object, persist: bool = False) -> bool:
         next_settings = self.state.settings
@@ -185,13 +195,25 @@ class Controller:
             selected = self._choose_voice()
             if selected is None:
                 return
-            try:
-                candidate_path, candidate_voice = self._load_voice(str(selected))
-            except VOICE_SETUP_ERRORS as error:
-                self._log_error("Selected Piper voice could not be loaded: %s" % error)
+            if self._voice_manager is None:
+                self._log_error("Selected Piper voice could not be loaded: voice manager is not configured")
                 self._show_status("The selected Piper voice model could not be loaded.")
                 return
-            self.install_voice(candidate_path, candidate_voice, persist=True)
+            self._stop_speech()
+            self.state.voice_generation += 1
+            generation = self.state.voice_generation
+            self._voice_manager.begin_switch(
+                str(selected),
+                generation,
+                lambda event: self.enqueue(
+                    Command(
+                        CommandKind.VOICE_SWITCH_SUCCEEDED
+                        if event.success
+                        else CommandKind.VOICE_SWITCH_FAILED,
+                        event,
+                    )
+                ),
+            )
         elif command.kind is CommandKind.CAPTURE_REQUEST:
             self._request_capture()
         elif command.kind in (CommandKind.CAPTURE_SUCCEEDED, CommandKind.CAPTURE_FAILED):
@@ -212,6 +234,11 @@ class Controller:
             self._replay()
         elif command.kind is CommandKind.WORKER_EVENT:
             self._handle_worker_event(command.value)
+        elif command.kind in (
+            CommandKind.VOICE_SWITCH_SUCCEEDED,
+            CommandKind.VOICE_SWITCH_FAILED,
+        ):
+            self._handle_voice_switch(command.value)
         elif command.kind is CommandKind.HOTKEY_FAILED:
             detail = str(command.value) if command.value else "unknown error"
             self._log_error("Piper hotkey message loop stopped: %s" % detail)
@@ -305,6 +332,19 @@ class Controller:
             self._speech_worker.cancel_active(generation)
         self.state.speech_generation += 1
         self.state.playback = PlaybackState.STOPPED
+
+    def _handle_voice_switch(self, event: object) -> None:
+        if not isinstance(event, VoiceSwitchEvent):
+            return
+        if event.generation != self.state.voice_generation:
+            return
+        if not event.success:
+            self._log_error("Selected Piper voice could not be loaded: %s" % event.error)
+            self._show_status("The selected Piper voice model could not be loaded.")
+            return
+        if event.model_path is None or event.voice is None or self._voice_manager is None:
+            return
+        self.install_voice(event.model_path, event.voice, persist=True)
 
     def _replay(self) -> None:
         if self.state.shutting_down or self.state.last_text is None:
