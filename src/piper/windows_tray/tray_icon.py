@@ -23,6 +23,14 @@ class TrayIcon:
                     ),
                 ),
                 pystray.MenuItem(
+                    "Show last text",
+                    lambda _icon, _item: enqueue(Command(CommandKind.SHOW_LAST_TEXT)),
+                ),
+                pystray.MenuItem(
+                    "Hotkey settings",
+                    lambda _icon, _item: enqueue(Command(CommandKind.CONFIGURE_HOTKEY)),
+                ),
+                pystray.MenuItem(
                     "Open log",
                     lambda _icon, _item: enqueue(Command(CommandKind.OPEN_LOG)),
                 ),

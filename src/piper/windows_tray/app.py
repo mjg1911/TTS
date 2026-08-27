@@ -1,9 +1,15 @@
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence, Tuple
 
 from .commands import Command, CommandKind
 from .controller import Controller, VOICE_SETUP_ERRORS
+from . import DEFAULT_HOTKEY
+from .capture import SelectionCapture
+from .clipboard import Win32Clipboard
+from .hotkey import parse_hotkey
+from .hotkey_service import HotkeyManager
 from .logging_setup import configure_logging, log_path
 from .settings import TraySettings, load_settings, save_settings
 from .single_instance import InstanceRole, SingleInstance
@@ -52,8 +58,33 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
     instance_closed = False
     tray = None
     tray_stopped = False
+    hotkeys = None
+    hotkeys_stopped = False
     ui = None
     logger = None
+
+    def stop_hotkeys() -> None:
+        nonlocal hotkeys_stopped
+        if hotkeys is not None and not hotkeys_stopped:
+            try:
+                hotkeys.stop()
+            except Exception as error:
+                if logger is not None:
+                    logger.error("Piper hotkeys could not be stopped cleanly: %s", error)
+            finally:
+                hotkeys_stopped = True
+
+    def close_instance() -> None:
+        nonlocal instance_closed
+        stop_hotkeys()
+        if not instance_closed:
+            try:
+                instance.close()
+            except Exception as error:
+                if logger is not None:
+                    logger.error("Piper instance could not be closed cleanly: %s", error)
+            finally:
+                instance_closed = True
 
     try:
         if instance.acquire() is InstanceRole.SECONDARY:
@@ -66,6 +97,15 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         ui = TkUi()
         data_dirs = tuple(_voice_data_dirs())
         settings = settings_result.settings
+        try:
+            capture_hotkey = parse_hotkey(settings.hotkey)
+        except ValueError as error:
+            logger.warning("Saved Piper hotkey is invalid: %s", error)
+            ui.show_status(
+                "The saved Piper hotkey was invalid; the default hotkey is being used."
+            )
+            settings = replace(settings, hotkey=DEFAULT_HOTKEY)
+            capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
         controller = Controller(settings=settings, save_settings=save_settings)
 
         try:
@@ -93,20 +133,23 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         else:
             controller.set_voice(configured_path, configured_voice)
 
+        clipboard = Win32Clipboard()
+        capture = SelectionCapture(clipboard, clipboard.send_ctrl_c)
+        hotkeys = HotkeyManager()
+
         icon_path = Path(__file__).resolve().parents[1] / "img" / "logo.png"
         tray = TrayIcon(icon_path, controller.enqueue)
 
         def stop_tray() -> None:
             nonlocal tray_stopped
             if not tray_stopped:
-                tray.stop()
-                tray_stopped = True
-
-        def close_instance() -> None:
-            nonlocal instance_closed
-            if not instance_closed:
-                instance.close()
-                instance_closed = True
+                try:
+                    tray.stop()
+                except Exception as error:
+                    if logger is not None:
+                        logger.error("Piper tray could not be stopped cleanly: %s", error)
+                finally:
+                    tray_stopped = True
 
         def pump() -> None:
             command = controller.drain_once()
@@ -124,12 +167,48 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             stop_tray=stop_tray,
             close_instance=close_instance,
             quit_root=ui.root.quit,
+            capture=capture.capture,
+            log_info=logger.info,
+            hotkeys=hotkeys,
+            choose_hotkey=lambda: ui.prompt_hotkey(
+                controller.state.settings.hotkey
+                if controller.state.settings is not None
+                else settings.hotkey
+            ),
+            show_last_text=ui.show_last_text,
+        )
+        hotkeys.set_failure_callback(
+            lambda error: controller.enqueue(
+                Command(CommandKind.HOTKEY_FAILED, str(error))
+            )
         )
 
         instance.start_activation_watch(
             lambda: controller.enqueue(Command(CommandKind.ACTIVATE))
         )
         tray.start()
+        try:
+            hotkeys.start(
+                capture_hotkey,
+                on_capture=lambda: controller.enqueue(
+                    Command(CommandKind.CAPTURE_REQUEST)
+                ),
+                on_cancel=lambda: controller.enqueue(
+                    Command(CommandKind.CANCEL_REQUEST)
+                ),
+            )
+        except (OSError, ValueError) as error:
+            logger.error("Piper hotkeys could not be started: %s", error)
+            if getattr(error, "role", "capture") == "cancel":
+                ui.show_status(
+                    "Piper could not register F8 for cancellation; resolve the "
+                    "Windows hotkey conflict."
+                )
+            else:
+                ui.show_status(
+                    "Piper hotkeys could not be started. Choose another "
+                    "combination in Hotkey settings."
+                )
         ui.root.after(25, pump)
         ui.root.mainloop()
         return 0
@@ -139,9 +218,9 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         raise
     finally:
         if tray is not None and not tray_stopped:
-            tray.stop()
-        if not instance_closed:
-            instance.close()
+            stop_tray()
+        stop_hotkeys()
+        close_instance()
         if ui is not None:
             try:
                 ui.root.destroy()

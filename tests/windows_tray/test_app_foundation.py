@@ -55,6 +55,8 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
 
     assert [command.kind for command in commands] == [
         CommandKind.CONFIGURE_VOICE,
+        CommandKind.SHOW_LAST_TEXT,
+        CommandKind.CONFIGURE_HOTKEY,
         CommandKind.OPEN_LOG,
         CommandKind.EXIT,
     ]
@@ -125,6 +127,9 @@ class FakeUi:
 
     def show_status(self, message):
         self.statuses.append(message)
+
+    def show_last_text(self, _text):
+        pass
 
     def close(self):
         self.root.destroy()
@@ -217,6 +222,155 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
     ]
     assert events[-2:] == ["instance.close", "destroy"]
     assert tray.events == ["stop"]
+
+
+def test_invalid_persisted_hotkey_recovers_to_default_and_reports_status(monkeypatch):
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    monkeypatch.setattr(
+        app,
+        "load_settings",
+        lambda: SimpleNamespace(
+            settings=app.TraySettings(hotkey="not a hotkey"), source="loaded"
+        ),
+    )
+    class FakeHotkeys:
+        def __init__(self):
+            self.started_spec = None
+
+        def start(self, spec, **_callbacks):
+            self.started_spec = spec.canonical
+
+        def set_failure_callback(self, _callback):
+            pass
+
+        def stop(self):
+            pass
+
+    hotkeys = FakeHotkeys()
+    monkeypatch.setattr(app, "HotkeyManager", lambda: hotkeys)
+    ui.root.mainloop = lambda: None
+
+    assert app.run_app([]) == 0
+    assert hotkeys.started_spec == "alt+backtick"
+    assert ui.statuses == [
+        "The saved Piper hotkey was invalid; the default hotkey is being used."
+    ]
+
+
+def test_hotkey_stop_failure_does_not_skip_other_shutdown_cleanup(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+
+    class FailingHotkeys:
+        def set_failure_callback(self, _callback):
+            pass
+
+        def start(self, _spec, **_callbacks):
+            pass
+
+        def stop(self):
+            raise OSError("stop failed")
+
+    hotkeys = FailingHotkeys()
+    monkeypatch.setattr(app, "HotkeyManager", lambda: hotkeys)
+    ui.root.mainloop = lambda: None
+
+    assert app.run_app([]) == 0
+    assert tray.events == ["start", "stop"]
+    assert "instance.close" in events
+    assert "destroy" in events
+
+
+def test_tray_stop_failure_does_not_skip_hotkeys_instance_or_ui_cleanup(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+
+    class FailingTray(FakeTray):
+        def stop(self):
+            self.events.append("stop")
+            raise OSError("tray stop failed")
+
+    tray = FailingTray(Path("icon.png"), lambda _command: None)
+    monkeypatch.setattr(app, "TrayIcon", lambda _path, _enqueue: tray)
+
+    class RecordingHotkeys:
+        def set_failure_callback(self, _callback):
+            pass
+
+        def start(self, _spec, **_callbacks):
+            pass
+
+        def stop(self):
+            events.append("hotkeys.stop")
+
+    monkeypatch.setattr(app, "HotkeyManager", RecordingHotkeys)
+    ui.root.mainloop = lambda: None
+
+    assert app.run_app([]) == 0
+    assert events.index("hotkeys.stop") < events.index("instance.close")
+    assert "destroy" in events
+    assert tray.events == ["start", "stop"]
+
+
+def test_hotkey_start_conflict_keeps_tray_alive_for_recovery(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+    monkeypatch.setattr(app, "save_settings", lambda _settings: None)
+
+    class ConflictingHotkeys:
+        def __init__(self):
+            self.start_calls = 0
+            self.callbacks = None
+
+        def set_failure_callback(self, _callback):
+            pass
+
+        def start(self, spec, **callbacks):
+            self.start_calls += 1
+            self.callbacks = callbacks
+            if self.start_calls == 1:
+                raise OSError("hotkey in use")
+
+        def rebind(self, candidate):
+            self.start(candidate, **self.callbacks)
+            return True
+
+        def stop(self):
+            events.append("hotkeys.stop")
+
+    hotkeys = ConflictingHotkeys()
+    monkeypatch.setattr(app, "HotkeyManager", lambda: hotkeys)
+
+    controller_holder = []
+    original_controller = app.Controller
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: controller_holder.append(
+            original_controller(*args, **kwargs)
+        )
+        or controller_holder[-1],
+    )
+
+    def mainloop():
+        controller = controller_holder[0]
+        ui.root.callbacks.pop(0)()
+        controller.enqueue(app.Command(app.CommandKind.CONFIGURE_HOTKEY, "ctrl+q"))
+        ui.root.callbacks.pop(0)()
+        controller.enqueue(app.Command(app.CommandKind.EXIT))
+        ui.root.callbacks.pop(0)()
+
+    ui.root.mainloop = mainloop
+
+    assert app.run_app([]) == 0
+    assert hotkeys.start_calls == 2
+    assert ui.statuses == [
+        "Piper hotkeys could not be started. Choose another combination in "
+        "Hotkey settings."
+    ]
+    assert tray.events == ["start", "stop"]
+    assert "instance.close" in events
 
 
 def test_exception_before_existing_cleanup_still_closes_instance(monkeypatch) -> None:
