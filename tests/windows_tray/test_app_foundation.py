@@ -403,8 +403,7 @@ def test_hotkey_start_conflict_keeps_tray_alive_for_recovery(monkeypatch):
     assert app.run_app([]) == 0
     assert hotkeys.start_calls == 2
     assert ui.statuses == [
-        "Piper hotkeys could not be started. Choose another combination in "
-        "Hotkey settings."
+        "That hotkey is already in use. Choose another combination."
     ]
     assert tray.events == ["start", "stop"]
     assert "instance.close" in events

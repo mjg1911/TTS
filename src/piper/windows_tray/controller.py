@@ -11,6 +11,7 @@ from .capture import CaptureResult, CaptureStatus
 from .commands import Command, CommandKind
 from .hotkey import parse_hotkey
 from .logging_setup import log_capture_result, log_exception_safe
+from .errors import UserError, user_message
 from .settings import TraySettings
 from .speech import SpeechEvent, SpeechEventKind, SpeechRequest
 from .voice_manager import VoiceManager, VoiceSwitchEvent
@@ -231,7 +232,7 @@ class Controller:
                 candidate_path, candidate_voice = self._load_voice(str(selected))
             except VOICE_SETUP_ERRORS as error:
                 self._log_error("Selected Piper voice could not be loaded: %s" % error)
-                self._show_status("The selected Piper voice model could not be loaded.")
+                self._show_status(user_message(UserError.VOICE_LOAD))
                 return
             self._stop_speech()
             self.install_voice(candidate_path, candidate_voice, persist=True)
@@ -344,9 +345,10 @@ class Controller:
         else:
             if self._capture_replaced_speech:
                 self.state.playback = PlaybackState.STOPPED
-            self._show_status(
-                "No text selected or the application did not provide it"
-            )
+            if result.status is CaptureStatus.ACCESS_ERROR:
+                self._show_status(user_message(UserError.CLIPBOARD))
+            else:
+                self._show_status(user_message(UserError.NO_TEXT))
 
     def _stop_speech(self) -> None:
         if self.state.playback is not PlaybackState.SPEAKING:
@@ -364,7 +366,7 @@ class Controller:
             return
         if not event.success:
             self._log_error("Selected Piper voice could not be loaded: %s" % event.error)
-            self._show_status("The selected Piper voice model could not be loaded.")
+            self._show_status(user_message(UserError.VOICE_LOAD))
             return
         if event.model_path is None or event.voice is None or self._voice_manager is None:
             return
@@ -402,9 +404,10 @@ class Controller:
             self.state.playback = PlaybackState.STOPPED
         elif event.kind is SpeechEventKind.FAILED:
             self.state.playback = PlaybackState.STOPPED
-            if event.error:
-                self._log_error(event.error)
-            self._show_status("Speech playback failed.")
+            if event.failure_phase == "synthesis":
+                self._show_status(user_message(UserError.SYNTHESIS))
+            else:
+                self._show_status(user_message(UserError.PLAYBACK))
 
     def _begin_shutdown(self) -> None:
         if not self.state.shutting_down:
@@ -426,9 +429,7 @@ class Controller:
             self._show_status("Hotkey settings could not be saved.")
             return False
         if not self._hotkeys.rebind(candidate):
-            self._show_status(
-                "That hotkey is already in use. Choose another combination."
-            )
+            self._show_status(user_message(UserError.HOTKEY_CONFLICT))
             return False
         next_settings = replace(current, hotkey=candidate.canonical)
         try:

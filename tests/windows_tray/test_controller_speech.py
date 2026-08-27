@@ -162,7 +162,57 @@ def test_matching_worker_terminal_events_update_state_and_report_failures():
     )
 
     assert controller.state.playback is PlaybackState.STOPPED
-    assert statuses == ["Speech playback failed."]
+    assert statuses == [
+        "Audio playback failed. See the Piper log for details."
+    ]
+
+
+def test_synthesis_failure_uses_synthesis_message():
+    statuses = []
+    controller = Controller()
+    controller.configure_runtime(show_status=statuses.append)
+    controller.state.speech_generation = 3
+    controller.state.playback = PlaybackState.SPEAKING
+
+    controller.handle(
+        Command(
+            CommandKind.WORKER_EVENT,
+            SpeechEvent(
+                SpeechEventKind.FAILED,
+                3,
+                "Speech synthesis failed.",
+                "synthesis",
+            ),
+        )
+    )
+
+    assert statuses == [
+        "Speech could not be generated. See the Piper log for details."
+    ]
+
+
+def test_playback_failure_uses_playback_message():
+    statuses = []
+    controller = Controller()
+    controller.configure_runtime(show_status=statuses.append)
+    controller.state.speech_generation = 3
+    controller.state.playback = PlaybackState.SPEAKING
+
+    controller.handle(
+        Command(
+            CommandKind.WORKER_EVENT,
+            SpeechEvent(
+                SpeechEventKind.FAILED,
+                3,
+                "Speech playback failed.",
+                "playback",
+            ),
+        )
+    )
+
+    assert statuses == [
+        "Audio playback failed. See the Piper log for details."
+    ]
 
 
 def test_worker_callback_only_enqueues_worker_event():

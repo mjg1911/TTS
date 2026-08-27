@@ -65,6 +65,30 @@ def test_failed_new_capture_does_not_replace_last_successful_text():
     assert controller.state.last_text == "first"
 
 
+def test_clipboard_access_failure_has_specific_recoverable_message():
+    statuses = []
+    controller = Controller(capture_submit=lambda _job: None)
+    controller.configure_runtime(show_status=statuses.append)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_FAILED,
+            CaptureCompletion(
+                generation,
+                CaptureResult(CaptureStatus.ACCESS_ERROR),
+            ),
+        )
+    )
+
+    assert statuses == [
+        "The selected text could not be read from the clipboard."
+    ]
+    assert controller.state.shutting_down is False
+
+
 def test_cancel_request_is_noop_without_speech():
     controller = Controller()
     before = controller.state.capture_generation

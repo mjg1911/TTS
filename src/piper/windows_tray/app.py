@@ -5,6 +5,7 @@ from typing import Any, Iterable, Optional, Sequence, Tuple
 
 from .commands import Command, CommandKind
 from .controller import Controller, VOICE_SETUP_ERRORS
+from .errors import UserError, user_message
 from . import DEFAULT_HOTKEY
 from .capture import SelectionCapture
 from .clipboard import Win32Clipboard
@@ -144,7 +145,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                 logger.error(
                     "Selected Piper voice could not be loaded: %s", candidate_error
                 )
-                ui.show_status("The selected Piper voice model could not be loaded.")
+                ui.show_status(user_message(UserError.VOICE_LOAD))
                 return 1
             if not controller.install_voice(selected_path, selected_voice, persist=True):
                 return 1
@@ -236,8 +237,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                 )
             else:
                 ui.show_status(
-                    "Piper hotkeys could not be started. Choose another "
-                    "combination in Hotkey settings."
+                    user_message(UserError.HOTKEY_CONFLICT)
                 )
         ui.root.after(25, pump)
         ui.root.mainloop()
