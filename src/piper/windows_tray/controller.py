@@ -265,11 +265,21 @@ class Controller:
             self._save_settings(next_settings)
         except (OSError, ValueError) as error:
             self._log_error("Could not save Piper hotkey settings: %s" % error)
+            rollback_succeeded = False
             try:
-                self._hotkeys.rebind(parse_hotkey(current.hotkey))
+                rollback_succeeded = bool(
+                    self._hotkeys.rebind(parse_hotkey(current.hotkey))
+                )
             except (OSError, ValueError):
+                pass
+            if rollback_succeeded:
+                self._show_status("Piper hotkey settings could not be saved.")
+            else:
                 self._log_error("Could not restore the previous Piper hotkey")
-            self._show_status("Piper hotkey settings could not be saved.")
+                self._show_status(
+                    "Piper hotkey settings could not be saved, and the previous "
+                    "hotkey could not be restored."
+                )
             return False
         self.state.settings = next_settings
         return True
