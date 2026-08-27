@@ -3,6 +3,19 @@ from piper.windows_tray.controller import Controller, PlaybackState
 from piper.windows_tray.lifecycle import TeardownCoordinator
 
 
+def make_teardown(*, on_failure, on_complete, calls):
+    return TeardownCoordinator(
+        stop_hotkeys=lambda: calls.append("hotkeys"),
+        stop_power=lambda: calls.append("power"),
+        stop_speech=lambda: calls.append("speech"),
+        stop_tray=lambda: calls.append("tray"),
+        close_instance=lambda: calls.append("instance"),
+        quit_root=lambda: calls.append("quit"),
+        on_failure=on_failure,
+        on_complete=on_complete,
+    )
+
+
 def test_teardown_runs_resources_in_safe_order() -> None:
     calls = []
     failures = []
@@ -75,6 +88,80 @@ def test_cleanup_failure_does_not_skip_later_resources() -> None:
 
     assert calls == ["hotkeys", "power", "speech", "tray", "instance", "quit", "complete"]
     assert failures == [("power", "OSError")]
+
+
+def test_failure_callback_cannot_interrupt_cleanup_or_completion() -> None:
+    calls = []
+
+    def fail_power():
+        calls.append("power")
+        raise OSError("stop failed")
+
+    teardown = TeardownCoordinator(
+        stop_hotkeys=lambda: calls.append("hotkeys"),
+        stop_power=fail_power,
+        stop_speech=lambda: calls.append("speech"),
+        stop_tray=lambda: calls.append("tray"),
+        close_instance=lambda: calls.append("instance"),
+        quit_root=lambda: calls.append("quit"),
+        on_failure=lambda _stage, _error: (_ for _ in ()).throw(RuntimeError("report failed")),
+        on_complete=lambda: calls.append("complete"),
+    )
+
+    teardown.run()
+
+    assert calls == ["hotkeys", "power", "speech", "tray", "instance", "quit", "complete"]
+
+
+def test_completion_callback_is_called_once_and_cannot_break_repeated_run() -> None:
+    calls = []
+    teardown = make_teardown(
+        calls=calls,
+        on_failure=lambda _stage, _error: None,
+        on_complete=lambda: (_ for _ in ()).throw(RuntimeError("complete failed")),
+    )
+
+    teardown.run()
+    teardown.run()
+
+    assert calls == ["hotkeys", "power", "speech", "tray", "instance", "quit"]
+
+
+def test_concurrent_runs_execute_cleanup_once() -> None:
+    import threading
+
+    calls = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def stop_hotkeys():
+        calls.append("hotkeys")
+        entered.set()
+        release.wait(timeout=1.0)
+
+    teardown = TeardownCoordinator(
+        stop_hotkeys=stop_hotkeys,
+        stop_power=lambda: calls.append("power"),
+        stop_speech=lambda: calls.append("speech"),
+        stop_tray=lambda: calls.append("tray"),
+        close_instance=lambda: calls.append("instance"),
+        quit_root=lambda: calls.append("quit"),
+        on_failure=lambda _stage, _error: None,
+        on_complete=lambda: calls.append("complete"),
+    )
+
+    first = threading.Thread(target=teardown.run)
+    second = threading.Thread(target=teardown.run)
+    first.start()
+    assert entered.wait(timeout=1.0)
+    second.start()
+    second.join(timeout=1.0)
+    release.set()
+    first.join(timeout=1.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert calls == ["hotkeys", "power", "speech", "tray", "instance", "quit", "complete"]
 
 
 class FakeSpeech:

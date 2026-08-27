@@ -44,6 +44,16 @@ class TeardownCoordinator:
             try:
                 cleanup()
             except Exception as error:
-                self._on_failure(stage, error)
+                try:
+                    self._on_failure(stage, error)
+                except Exception:
+                    # Failure reporting must never prevent later resources from
+                    # being released during teardown.
+                    pass
 
-        self._on_complete()
+        try:
+            self._on_complete()
+        except Exception:
+            # Completion reporting is diagnostic-only and must not turn a
+            # completed teardown into an application failure.
+            pass

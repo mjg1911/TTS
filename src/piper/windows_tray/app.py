@@ -181,8 +181,6 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
 
     try:
         if instance.acquire() is InstanceRole.SECONDARY:
-            instance.close()
-            instance_closed = True
             return 0
 
         settings_result = load_settings()

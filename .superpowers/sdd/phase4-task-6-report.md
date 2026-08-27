@@ -76,3 +76,18 @@ The system `python` and `pytest` commands are unavailable on PATH, and pytest’
 `C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 
 with `PYTHONPATH=src` and workspace-local `--basetemp .pytest-tmp-task6`. The bundled Python runtime and pytest are functional; there is no blocker for the focused verification. The complete-suite failures are the six baseline failures listed above.
+
+## Review-fix evidence
+
+Applied the Task 6 review fixes on `Phase-4`:
+
+- `TeardownCoordinator` now isolates exceptions raised by `on_failure`, so failure reporting cannot interrupt later cleanup steps; completion reporting is also guarded and remains at-most-once through the existing idempotency gate.
+- Added focused coverage for a raising failure callback, raising completion callback, repeated runs, and concurrent runs.
+- Removed the secondary-instance branch's direct `instance.close()` call; secondary execution now returns through the same app-owned coordinator path as the primary instance.
+
+Verification after the fixes:
+
+- Focused shutdown and app lifecycle tests: PASS — `27 passed`.
+- Complete Windows-tray suite: `173 passed, 6 failed`; the six failures are the same pre-existing baseline failures listed above and are unrelated to these review fixes.
+- `python -m compileall -q src/piper/windows_tray`: PASS — exit code `0`.
+- `git diff --check`: PASS.
