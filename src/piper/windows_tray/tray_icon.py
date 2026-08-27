@@ -94,7 +94,13 @@ class TrayIcon:
         self._running = True
 
     def ensure_visible(self) -> None:
-        if not self._running or self._icon is None:
+        if self._icon is None:
+            # The native tray icon can disappear independently of pystray's
+            # detached loop. Reconcile the adapter state before using the
+            # idempotent start path so the icon is actually rebuilt.
+            self._running = False
+            self.start()
+        elif not self._running:
             self.start()
         else:
             self.update_menu()

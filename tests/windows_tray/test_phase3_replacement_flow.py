@@ -134,6 +134,9 @@ def test_tray_stop_and_replay_actions_use_dynamic_enablement(monkeypatch, tmp_pa
             def __init__(self, _name, _image, _title, menu):
                 self.menu = menu
 
+            def run_detached(self):
+                pass
+
     class ImageApi:
         @staticmethod
         def open(_path):
@@ -143,6 +146,7 @@ def test_tray_stop_and_replay_actions_use_dynamic_enablement(monkeypatch, tmp_pa
     commands = []
     snapshot = type("Snapshot", (), {"can_stop": False, "can_replay": False})()
     tray = tray_icon.TrayIcon(tmp_path / "icon.png", commands.append, lambda: snapshot)
+    tray.start()
 
     items = {item.text: item for item in tray._icon.menu.items}
     assert items["Stop speaking"].enabled(items["Stop speaking"]) is False

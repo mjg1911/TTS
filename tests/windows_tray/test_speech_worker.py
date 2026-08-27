@@ -336,8 +336,15 @@ def test_shutdown_logs_timeout_without_raising(caplog):
             return True
 
     worker._thread = StuckThread()
-    with caplog.at_level(logging.ERROR):
+    speech_logger = logging.getLogger("piper.windows_tray.speech")
+    speech_logger.addHandler(caplog.handler)
+    previous_level = speech_logger.level
+    speech_logger.setLevel(logging.ERROR)
+    try:
         worker.shutdown()
+    finally:
+        speech_logger.removeHandler(caplog.handler)
+        speech_logger.setLevel(previous_level)
 
     assert "speech shutdown timed_out=true thread=piper-speech" in caplog.text
 

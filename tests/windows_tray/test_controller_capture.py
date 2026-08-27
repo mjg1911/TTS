@@ -162,7 +162,7 @@ def test_capture_worker_logs_safe_diagnostics_for_unexpected_exception(caplog):
     assert "capture failed" in caplog.text
     assert "stage=capture_worker" in caplog.text
     assert "exception_type=RuntimeError" in caplog.text
-    assert "test_capture_worker_logs_safe_diagnostics_for_unexpected_exception" in caplog.text
+    assert "traceback=controller.py:" in caplog.text
     assert secret not in caplog.text
 
 

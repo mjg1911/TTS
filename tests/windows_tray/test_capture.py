@@ -66,7 +66,10 @@ def test_changed_sequence_retries_until_non_whitespace_text() -> None:
 
 def test_changed_sequence_with_only_whitespace_returns_empty() -> None:
     clock = FakeClock()
-    clipboard = FakeClipboard([3, 4, 4, 4], [" \t\n", ""])
+    clipboard = FakeClipboard(
+        [3, 4, 4, 4, 4, 4],
+        [" \t\n", "", "", ""],
+    )
 
     result = make_capture(clipboard, clock).capture(timeout_s=0.10, poll_s=0.05)
 
@@ -86,7 +89,10 @@ def test_temporary_clipboard_error_is_retried() -> None:
 
 def test_clipboard_error_until_timeout_returns_access_error() -> None:
     clock = FakeClock()
-    clipboard = FakeClipboard([10, 11, 11, 11], [OSError("busy")])
+    clipboard = FakeClipboard(
+        [10, 11, 11, 11, 11, 11],
+        [OSError("busy"), OSError("busy"), OSError("busy"), OSError("busy")],
+    )
 
     result = make_capture(clipboard, clock).capture(timeout_s=0.10, poll_s=0.05)
 
@@ -148,7 +154,7 @@ def test_capture_waits_for_hotkey_modifiers_before_copying() -> None:
 @pytest.mark.parametrize("value", ["\x00", "\x00\x00"])
 def test_null_only_clipboard_text_is_not_success(value: str) -> None:
     clock = FakeClock()
-    clipboard = FakeClipboard([1, 2, 2], [value])
+    clipboard = FakeClipboard([1, 2, 2, 2, 2], [value, value, value, value])
 
     result = make_capture(clipboard, clock).capture(timeout_s=0.10, poll_s=0.05)
 
