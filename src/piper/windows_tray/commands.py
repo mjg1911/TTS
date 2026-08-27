@@ -12,9 +12,14 @@ class CommandKind(Enum):
     CAPTURE_SUCCEEDED = auto()
     CAPTURE_FAILED = auto()
     CANCEL_REQUEST = auto()
+    STOP_REQUEST = auto()
+    REPLAY_REQUEST = auto()
+    WORKER_EVENT = auto()
     SHOW_LAST_TEXT = auto()
     CONFIGURE_HOTKEY = auto()
     HOTKEY_FAILED = auto()
+    VOICE_SWITCH_SUCCEEDED = auto()
+    VOICE_SWITCH_FAILED = auto()
 
 
 CommandValue = Any

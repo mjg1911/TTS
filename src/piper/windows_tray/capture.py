@@ -6,7 +6,7 @@ from enum import Enum, auto
 from typing import Callable, Optional, Any
 
 
-HOTKEY_RELEASE_DELAY_S = 0.05
+HOTKEY_RELEASE_DELAY_S = 0.15
 
 
 class CaptureStatus(Enum):
