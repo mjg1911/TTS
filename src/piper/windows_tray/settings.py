@@ -30,7 +30,10 @@ def settings_path(appdata: Optional[Path] = None) -> Path:
 def _validated(data: object) -> TraySettings:
     if not isinstance(data, dict):
         raise ValueError("settings root must be an object")
-    if data.get("schema_version") != SETTINGS_SCHEMA_VERSION:
+    if (
+        type(data.get("schema_version")) is not int
+        or data.get("schema_version") != SETTINGS_SCHEMA_VERSION
+    ):
         raise ValueError("unsupported settings schema")
 
     voice = data.get("voice")
@@ -40,7 +43,12 @@ def _validated(data: object) -> TraySettings:
         raise ValueError("voice must be a non-empty string")
     if not isinstance(hotkey, str) or not hotkey.strip():
         raise ValueError("hotkey must be a non-empty string")
-    if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
+    if not isinstance(log_level, str) or log_level not in {
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+    }:
         raise ValueError("invalid log level")
     return TraySettings(voice=voice.strip(), hotkey=hotkey.strip(), log_level=log_level)
 
@@ -72,6 +80,12 @@ def load_settings(path: Optional[Path] = None) -> SettingsLoadResult:
 
 
 def save_settings(settings: TraySettings, path: Optional[Path] = None) -> None:
+    if (
+        type(settings.schema_version) is not int
+        or settings.schema_version != SETTINGS_SCHEMA_VERSION
+    ):
+        raise ValueError("unsupported settings schema")
+
     path = path or settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(asdict(settings), indent=2, sort_keys=True) + "\n"
