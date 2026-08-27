@@ -1,14 +1,19 @@
-import pystray
-from PIL import Image
-
 from .commands import Command, CommandKind
+
+
+def _load_dependencies():
+    import pystray
+    from PIL import Image
+
+    return pystray, Image
 
 
 class TrayIcon:
     def __init__(self, icon_path, enqueue) -> None:
+        pystray, image_api = _load_dependencies()
         self._icon = pystray.Icon(
             "Piper",
-            Image.open(icon_path),
+            image_api.open(icon_path),
             "Piper",
             menu=pystray.Menu(
                 pystray.MenuItem(

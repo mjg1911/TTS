@@ -1,4 +1,5 @@
 import threading
+import pytest
 
 from piper.windows_tray.single_instance import InstanceRole, SingleInstance
 
@@ -221,3 +222,136 @@ def test_kernel_api_configures_win32_handle_function_prototypes(monkeypatch) -> 
         wintypes.HANDLE,
         wintypes.DWORD,
     ]
+
+
+class TransactionKernel:
+    def __init__(self, mutex_error=None, signal_error=None):
+        self.mutex_error = mutex_error
+        self.signal_error = signal_error
+        self.closed = []
+        self.released = []
+
+    def create_event(self, _name):
+        return 10
+
+    def create_mutex(self, _name):
+        if self.mutex_error:
+            raise self.mutex_error
+        return 20, True
+
+    def signal_event(self, _handle):
+        if self.signal_error:
+            raise self.signal_error
+
+    def wait_event(self, _handle):
+        pass
+
+    def release_mutex(self, handle):
+        self.released.append(handle)
+
+    def close_handle(self, handle):
+        self.closed.append(handle)
+
+
+def test_acquire_rolls_back_event_when_mutex_creation_fails() -> None:
+    kernel = TransactionKernel(mutex_error=OSError("mutex"))
+    instance = SingleInstance(kernel)
+
+    with pytest.raises(OSError):
+        instance.acquire()
+
+    assert kernel.closed == [10]
+
+
+def test_secondary_acquire_rolls_back_both_handles_when_signal_fails() -> None:
+    kernel = TransactionKernel(signal_error=OSError("signal"))
+    instance = SingleInstance(kernel)
+
+    with pytest.raises(OSError):
+        instance.acquire()
+
+    assert kernel.released == []
+    assert kernel.closed == [10, 20]
+
+
+def test_close_raises_cleanup_failure_after_attempting_all_handles() -> None:
+    class CleanupFailureKernel(TransactionKernel):
+        def __init__(self):
+            super().__init__()
+
+        def create_mutex(self, _name):
+            return 20, False
+
+        def release_mutex(self, handle):
+            self.released.append(handle)
+            raise OSError("release")
+
+        def close_handle(self, handle):
+            self.closed.append(handle)
+            raise OSError("close")
+
+    kernel = CleanupFailureKernel()
+    instance = SingleInstance(kernel)
+    assert instance.acquire() is InstanceRole.PRIMARY
+
+    with pytest.raises(OSError):
+        instance.close()
+
+    assert kernel.released == [20]
+    assert kernel.closed == [10, 20]
+    instance.close()
+
+
+class OutcomeFunction:
+    def __init__(self, outcome):
+        self.outcome = outcome
+        self.restype = None
+        self.argtypes = None
+
+    def __call__(self, *_args):
+        return self.outcome
+
+
+def test_kernel_api_rejects_wait_failure_and_unexpected_wait_result(monkeypatch) -> None:
+    from piper.windows_tray import single_instance
+
+    class Kernel32:
+        def __init__(self, outcome):
+            self.CreateEventW = OutcomeFunction(1)
+            self.CreateMutexW = OutcomeFunction(1)
+            self.SetEvent = OutcomeFunction(1)
+            self.WaitForSingleObject = OutcomeFunction(outcome)
+            self.ReleaseMutex = OutcomeFunction(1)
+            self.CloseHandle = OutcomeFunction(1)
+
+    monkeypatch.setattr("ctypes.WinError", lambda _error: OSError("win32"))
+    monkeypatch.setattr("ctypes.WinDLL", lambda *_args, **_kwargs: Kernel32(single_instance.WAIT_FAILED))
+    api = single_instance.KernelApi()
+    with pytest.raises(OSError):
+        api.wait_event(10)
+
+    monkeypatch.setattr("ctypes.WinDLL", lambda *_args, **_kwargs: Kernel32(1))
+    api = single_instance.KernelApi()
+    with pytest.raises(RuntimeError):
+        api.wait_event(10)
+
+
+@pytest.mark.parametrize("method", ["ReleaseMutex", "CloseHandle"])
+def test_kernel_api_rejects_failed_release_and_close(monkeypatch, method) -> None:
+    from piper.windows_tray import single_instance
+
+    class Kernel32:
+        def __init__(self):
+            self.CreateEventW = OutcomeFunction(1)
+            self.CreateMutexW = OutcomeFunction(1)
+            self.SetEvent = OutcomeFunction(1)
+            self.WaitForSingleObject = OutcomeFunction(single_instance.WAIT_OBJECT_0)
+            self.ReleaseMutex = OutcomeFunction(0)
+            self.CloseHandle = OutcomeFunction(0)
+
+    monkeypatch.setattr("ctypes.WinError", lambda _error: OSError("win32"))
+    monkeypatch.setattr("ctypes.WinDLL", lambda *_args, **_kwargs: Kernel32())
+    api = single_instance.KernelApi()
+
+    with pytest.raises(OSError):
+        getattr(api, "release_mutex" if method == "ReleaseMutex" else "close_handle")(10)

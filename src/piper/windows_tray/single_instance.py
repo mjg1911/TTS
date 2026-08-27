@@ -3,6 +3,7 @@
 from enum import Enum, auto
 import ctypes
 from ctypes import wintypes
+import logging
 import threading
 from typing import Callable, Optional, Tuple
 
@@ -11,6 +12,10 @@ MUTEX_NAME = r"Local\PiperTray.Singleton.v1"
 ACTIVATION_EVENT_NAME = r"Local\PiperTray.Activate.v1"
 ERROR_ALREADY_EXISTS = 183
 INFINITE = 0xFFFFFFFF
+WAIT_OBJECT_0 = 0
+WAIT_FAILED = 0xFFFFFFFF
+
+_LOGGER = logging.getLogger("piper.windows_tray.single_instance")
 
 
 class InstanceRole(Enum):
@@ -62,13 +67,22 @@ class KernelApi:
             raise ctypes.WinError(ctypes.get_last_error())
 
     def wait_event(self, handle: int) -> None:
-        self._kernel32.WaitForSingleObject(wintypes.HANDLE(handle), INFINITE)
+        result = self._kernel32.WaitForSingleObject(
+            wintypes.HANDLE(handle), INFINITE
+        )
+        if result == WAIT_OBJECT_0:
+            return
+        if result == WAIT_FAILED:
+            raise ctypes.WinError(ctypes.get_last_error())
+        raise RuntimeError("unexpected WaitForSingleObject result: %s" % result)
 
     def release_mutex(self, handle: int) -> None:
-        self._kernel32.ReleaseMutex(wintypes.HANDLE(handle))
+        if not self._kernel32.ReleaseMutex(wintypes.HANDLE(handle)):
+            raise ctypes.WinError(ctypes.get_last_error())
 
     def close_handle(self, handle: int) -> None:
-        self._kernel32.CloseHandle(wintypes.HANDLE(handle))
+        if not self._kernel32.CloseHandle(wintypes.HANDLE(handle)):
+            raise ctypes.WinError(ctypes.get_last_error())
 
 
 class SingleInstance:
@@ -86,13 +100,49 @@ class SingleInstance:
         with self._state_lock:
             if self._closing or self._closed.is_set():
                 raise RuntimeError("single instance is closed")
-            self._event = self._kernel.create_event(ACTIVATION_EVENT_NAME)
-            self._mutex, already_exists = self._kernel.create_mutex(MUTEX_NAME)
-            if already_exists:
-                self._kernel.signal_event(self._event)
-                return InstanceRole.SECONDARY
-            self._owns_mutex = True
-            return InstanceRole.PRIMARY
+            event = None
+            mutex = None
+            owns_mutex = False
+            try:
+                event = self._kernel.create_event(ACTIVATION_EVENT_NAME)
+                mutex, already_exists = self._kernel.create_mutex(MUTEX_NAME)
+                if already_exists:
+                    self._kernel.signal_event(event)
+                else:
+                    owns_mutex = True
+                self._event = event
+                self._mutex = mutex
+                self._owns_mutex = owns_mutex
+                return (
+                    InstanceRole.SECONDARY
+                    if already_exists
+                    else InstanceRole.PRIMARY
+                )
+            except BaseException:
+                self._event = None
+                self._mutex = None
+                self._owns_mutex = False
+                self._cleanup_handles(event, mutex, owns_mutex)
+                raise
+
+    def _cleanup_handles(
+        self, event: Optional[int], mutex: Optional[int], owns_mutex: bool
+    ) -> None:
+        if owns_mutex and mutex is not None:
+            try:
+                self._kernel.release_mutex(mutex)
+            except Exception:
+                _LOGGER.exception("Could not release Piper tray mutex")
+        if event is not None:
+            try:
+                self._kernel.close_handle(event)
+            except Exception:
+                _LOGGER.exception("Could not close Piper tray event handle")
+        if mutex is not None:
+            try:
+                self._kernel.close_handle(mutex)
+            except Exception:
+                _LOGGER.exception("Could not close Piper tray mutex handle")
 
     def start_activation_watch(self, callback: Callable[[], None]) -> threading.Thread:
         def watch() -> None:
@@ -101,7 +151,11 @@ class SingleInstance:
                     event = self._event
                 if event is None:
                     return
-                self._kernel.wait_event(event)
+                try:
+                    self._kernel.wait_event(event)
+                except (OSError, RuntimeError) as error:
+                    _LOGGER.error("Piper activation wait failed: %s", error)
+                    return
                 with self._state_lock:
                     if self._closing or self._event is None:
                         return
@@ -137,10 +191,16 @@ class SingleInstance:
             self._closed.wait()
             return
 
+        errors = []
         try:
             if watcher is not None and watcher is not current and event is not None:
-                self._kernel.signal_event(event)
-                watcher.join()
+                try:
+                    self._kernel.signal_event(event)
+                except Exception as error:
+                    errors.append(error)
+                    _LOGGER.exception("Could not wake Piper activation watcher")
+                else:
+                    watcher.join()
 
             with self._state_lock:
                 self._event = None
@@ -148,10 +208,24 @@ class SingleInstance:
                 self._watcher = None
                 self._owns_mutex = False
             if owns_mutex and mutex is not None:
-                self._kernel.release_mutex(mutex)
+                try:
+                    self._kernel.release_mutex(mutex)
+                except Exception as error:
+                    errors.append(error)
+                    _LOGGER.exception("Could not release Piper tray mutex")
             if event is not None:
-                self._kernel.close_handle(event)
+                try:
+                    self._kernel.close_handle(event)
+                except Exception as error:
+                    errors.append(error)
+                    _LOGGER.exception("Could not close Piper tray event handle")
             if mutex is not None:
-                self._kernel.close_handle(mutex)
+                try:
+                    self._kernel.close_handle(mutex)
+                except Exception as error:
+                    errors.append(error)
+                    _LOGGER.exception("Could not close Piper tray mutex handle")
         finally:
             self._closed.set()
+        if errors:
+            raise errors[0]

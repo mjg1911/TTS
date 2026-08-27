@@ -41,10 +41,12 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
         def stop(self):
             pass
 
-    monkeypatch.setattr(tray_icon, "Image", FakeImageApi)
-    monkeypatch.setattr(tray_icon.pystray, "MenuItem", FakeMenuItem)
-    monkeypatch.setattr(tray_icon.pystray, "Menu", FakeMenu)
-    monkeypatch.setattr(tray_icon.pystray, "Icon", FakeIcon)
+    class FakePystray:
+        MenuItem = FakeMenuItem
+        Menu = FakeMenu
+        Icon = FakeIcon
+
+    monkeypatch.setattr(tray_icon, "_load_dependencies", lambda: (FakePystray, FakeImageApi))
 
     commands = []
     tray = tray_icon.TrayIcon(tmp_path / "icon.png", commands.append)
@@ -73,8 +75,17 @@ def test_tray_start_and_stop_delegate_to_pystray(monkeypatch, tmp_path: Path) ->
         def stop(self):
             calls.append("stop")
 
-    monkeypatch.setattr(tray_icon.Image, "open", lambda _path: object())
-    monkeypatch.setattr(tray_icon.pystray, "Icon", FakeIcon)
+    class FakeImageApi:
+        @staticmethod
+        def open(_path):
+            return object()
+
+    class FakePystray:
+        Icon = FakeIcon
+        Menu = lambda *items: SimpleNamespace(items=items)
+        MenuItem = lambda text, action: SimpleNamespace(text=text, action=action)
+
+    monkeypatch.setattr(tray_icon, "_load_dependencies", lambda: (FakePystray, FakeImageApi))
     tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
 
     tray.start()
@@ -166,7 +177,12 @@ def _patch_primary_app(monkeypatch, events):
     ))
     ui = FakeUi(events)
     monkeypatch.setattr(app, "TkUi", lambda: events.append("ui") or ui)
-    monkeypatch.setattr(app, "Controller", lambda: events.append("controller") or Controller())
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: events.append("controller")
+        or Controller(*args, **kwargs),
+    )
     monkeypatch.setattr(
         app,
         "_load_configured_voice",
@@ -218,6 +234,25 @@ def test_exception_before_existing_cleanup_still_closes_instance(monkeypatch) ->
         pass
     else:
         raise AssertionError("load_settings failure should propagate")
+
+    assert events == ["acquire", "instance.close"]
+
+
+def test_acquire_failure_still_closes_instance(monkeypatch) -> None:
+    import piper.windows_tray.app as app
+
+    events = []
+    instance = FakeInstance(events)
+    monkeypatch.setattr(app, "SingleInstance", lambda: instance)
+    monkeypatch.setattr(
+        instance,
+        "acquire",
+        lambda: events.append("acquire")
+        or (_ for _ in ()).throw(OSError("acquire")),
+    )
+
+    with pytest.raises(OSError):
+        app.run_app([])
 
     assert events == ["acquire", "instance.close"]
 
@@ -277,7 +312,7 @@ def test_tk_thread_dispatches_activation_and_exit(monkeypatch) -> None:
     events = []
     app, instance, ui, tray = _patch_primary_app(monkeypatch, events)
     controller = Controller()
-    monkeypatch.setattr(app, "Controller", lambda: controller)
+    monkeypatch.setattr(app, "Controller", lambda *args, **kwargs: controller)
 
     def mainloop():
         controller.enqueue(app.Command(app.CommandKind.ACTIVATE))
