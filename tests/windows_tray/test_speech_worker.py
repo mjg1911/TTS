@@ -1,4 +1,5 @@
 import threading
+import logging
 import time
 from types import SimpleNamespace
 
@@ -315,6 +316,30 @@ def test_shutdown_stops_active_work_and_joins_worker():
     worker.shutdown()
 
     assert not worker._thread.is_alive()
+
+
+def test_shutdown_logs_timeout_without_raising(caplog):
+    worker = make_worker(
+        SimpleNamespace(config=SimpleNamespace(sample_rate=22050), synthesize=lambda _text: []),
+        [],
+        [],
+        threading.Event(),
+    )
+
+    class StuckThread:
+        name = "piper-speech"
+
+        def join(self, timeout):
+            assert timeout == 5
+
+        def is_alive(self):
+            return True
+
+    worker._thread = StuckThread()
+    with caplog.at_level(logging.ERROR):
+        worker.shutdown()
+
+    assert "speech shutdown timed_out=true thread=piper-speech" in caplog.text
 
 
 def test_cancellation_at_play_boundary_stops_player_before_chunk_is_played():

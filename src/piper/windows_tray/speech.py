@@ -95,6 +95,11 @@ class SpeechWorker:
             self._cancel_event.set()
         if threading.current_thread() is not self._thread:
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                _LOGGER.error(
+                    "speech shutdown timed_out=true thread=%s",
+                    self._thread.name,
+                )
 
     def _run(self) -> None:
         while True:

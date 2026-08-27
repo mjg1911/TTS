@@ -92,9 +92,7 @@ class Controller:
         self._log_error: Callable[[str], None] = lambda _message: None
         self._open_log: Callable[[], None] = lambda: None
         self._ensure_tray_visible: Callable[[], None] = lambda: None
-        self._stop_tray: Callable[[], None] = lambda: None
-        self._close_instance: Callable[[], None] = lambda: None
-        self._quit_root: Callable[[], None] = lambda: None
+        self._request_teardown: Callable[[], None] = lambda: None
         self._capture = capture or (
             lambda: CaptureResult(CaptureStatus.ACCESS_ERROR, detail="capture is not configured")
         )
@@ -117,9 +115,7 @@ class Controller:
         log_error: Optional[Callable[[str], None]] = None,
         open_log: Optional[Callable[[], None]] = None,
         ensure_tray_visible: Optional[Callable[[], None]] = None,
-        stop_tray: Optional[Callable[[], None]] = None,
-        close_instance: Optional[Callable[[], None]] = None,
-        quit_root: Optional[Callable[[], None]] = None,
+        request_teardown: Optional[Callable[[], None]] = None,
         capture: Optional[Callable[[], CaptureResult]] = None,
         capture_submit: Optional[Callable[[Callable[[], None]], None]] = None,
         log_info: Optional[Callable[[str], None]] = None,
@@ -141,12 +137,8 @@ class Controller:
             self._open_log = open_log
         if ensure_tray_visible is not None:
             self._ensure_tray_visible = ensure_tray_visible
-        if stop_tray is not None:
-            self._stop_tray = stop_tray
-        if close_instance is not None:
-            self._close_instance = close_instance
-        if quit_root is not None:
-            self._quit_root = quit_root
+        if request_teardown is not None:
+            self._request_teardown = request_teardown
         if capture is not None:
             self._capture = capture
         if capture_submit is not None:
@@ -271,14 +263,10 @@ class Controller:
         elif command.kind is CommandKind.SYSTEM_RESUME:
             self._recover_from_resume()
         elif command.kind is CommandKind.EXIT:
+            if self.state.shutting_down:
+                return
             self._begin_shutdown()
-            if self._speech_worker is not None:
-                self._speech_worker.shutdown()
-            for cleanup in (self._stop_tray, self._close_instance, self._quit_root):
-                try:
-                    cleanup()
-                except Exception as error:
-                    self._log_error("Piper cleanup step failed: %s" % error)
+            self._request_teardown()
 
     def _recover_from_resume(self) -> None:
         if self.state.shutting_down:
@@ -451,9 +439,19 @@ class Controller:
                 self._show_status(user_message(UserError.PLAYBACK))
 
     def _begin_shutdown(self) -> None:
-        if not self.state.shutting_down:
-            self.state.shutting_down = True
-            self.state.speech_generation += 1
+        if self.state.shutting_down:
+            return
+
+        self.state.shutting_down = True
+        if self.state.capture_in_progress:
+            self.state.capture_generation += 1
+            self.state.capture_in_progress = False
+            self._capture_pending = False
+        if self.state.playback is PlaybackState.SPEAKING:
+            active = self.state.speech_generation
+            if self._speech_worker is not None:
+                self._speech_worker.cancel_active(active)
+        self.state.speech_generation += 1
         self.state.playback = PlaybackState.SHUTTING_DOWN
 
     def request_hotkey_change(self, requested: str) -> bool:

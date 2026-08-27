@@ -226,10 +226,14 @@ def test_worker_callback_only_enqueues_worker_event():
     )
 
 
-def test_exit_shuts_down_speech_and_gates_replay():
+def test_exit_cancels_speech_and_requests_teardown():
     worker = FakeSpeechWorker()
     controller = Controller(speech_worker=worker)
     controller.state.last_text = "saved"
+    controller.state.playback = PlaybackState.SPEAKING
+    controller.state.speech_generation = 4
+    teardown_calls = []
+    controller.configure_runtime(request_teardown=lambda: teardown_calls.append("teardown"))
 
     controller.enqueue(Command(CommandKind.EXIT))
     controller.drain_once()
@@ -237,5 +241,6 @@ def test_exit_shuts_down_speech_and_gates_replay():
     controller.handle(Command(CommandKind.REPLAY_REQUEST))
 
     assert controller.state.playback is PlaybackState.SHUTTING_DOWN
-    assert worker.shutdown_calls == 1
+    assert worker.cancelled == [4]
+    assert teardown_calls == ["teardown"]
     assert worker.submitted == []

@@ -308,7 +308,7 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
         "tray",
         "watch",
     ]
-    assert events[-2:] == ["instance.close", "destroy"]
+    assert events[-2:] == ["quit", "destroy"]
     assert tray.events == ["start", "stop"]
 
 
@@ -539,7 +539,7 @@ def test_primary_pre_tray_failures_close_instance(monkeypatch, failure_stage) ->
 
     expected = ["acquire", "instance.close"]
     if failure_stage == "controller":
-        expected.append("destroy")
+        expected.extend(["quit", "destroy"])
     assert events == expected
 
 
