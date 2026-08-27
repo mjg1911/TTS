@@ -1,7 +1,13 @@
 import threading
 import pytest
 
-from piper.windows_tray.single_instance import InstanceRole, SingleInstance
+from piper.windows_tray.single_instance import (
+    INFINITE,
+    WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
+    InstanceRole,
+    SingleInstance,
+)
 
 
 class FakeKernel:
@@ -27,10 +33,12 @@ class FakeKernel:
         self.signals += 1
         self._event.set()
 
-    def wait_event(self, handle: int) -> None:
+    def wait_event(self, handle: int, timeout: int = INFINITE) -> int:
         self.wait_started.set()
-        self._event.wait()
-        self._event.clear()
+        if self._event.wait(timeout / 1000):
+            self._event.clear()
+            return WAIT_OBJECT_0
+        return WAIT_TIMEOUT
 
     def release_mutex(self, handle: int) -> None:
         self.released.append(handle)
@@ -97,6 +105,29 @@ def test_close_wakes_watcher_without_invoking_callback_and_is_idempotent() -> No
     assert not watcher.is_alive()
     assert not callback_called.is_set()
     assert kernel.released == [20]
+    assert kernel.closed == [10, 20]
+
+
+def test_close_waits_for_watcher_when_set_event_fails() -> None:
+    class FailingSignalKernel(FakeKernel):
+        def signal_event(self, handle: int) -> None:
+            raise OSError("SetEvent failed")
+
+        def close_handle(self, handle: int) -> None:
+            assert not watcher.is_alive()
+            super().close_handle(handle)
+
+    kernel = FailingSignalKernel(already_exists=False)
+    instance = SingleInstance(kernel)
+    instance.acquire()
+    watcher = instance.start_activation_watch(lambda: None)
+    assert kernel.wait_started.wait(timeout=1)
+
+    with pytest.raises(OSError, match="SetEvent failed"):
+        instance.close()
+
+    watcher.join(timeout=1)
+    assert not watcher.is_alive()
     assert kernel.closed == [10, 20]
 
 
@@ -243,7 +274,7 @@ class TransactionKernel:
         if self.signal_error:
             raise self.signal_error
 
-    def wait_event(self, _handle):
+    def wait_event(self, _handle, _timeout=INFINITE):
         pass
 
     def release_mutex(self, handle):

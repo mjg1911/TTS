@@ -8,7 +8,12 @@ from .logging_setup import configure_logging, log_path
 from .settings import TraySettings, load_settings, save_settings
 from .single_instance import InstanceRole, SingleInstance
 from .tray_icon import TrayIcon
-from .ui import TkUi
+
+
+def TkUi():
+    from .ui import TkUi as TkUiClass
+
+    return TkUiClass()
 
 
 def resolve_voice_reference(reference: str, data_dirs: Iterable[Path]) -> Path:

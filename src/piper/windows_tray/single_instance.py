@@ -13,7 +13,9 @@ ACTIVATION_EVENT_NAME = r"Local\PiperTray.Activate.v1"
 ERROR_ALREADY_EXISTS = 183
 INFINITE = 0xFFFFFFFF
 WAIT_OBJECT_0 = 0
+WAIT_TIMEOUT = 258
 WAIT_FAILED = 0xFFFFFFFF
+WATCHER_WAIT_MS = 100
 
 _LOGGER = logging.getLogger("piper.windows_tray.single_instance")
 
@@ -66,12 +68,14 @@ class KernelApi:
         if not self._kernel32.SetEvent(wintypes.HANDLE(handle)):
             raise ctypes.WinError(ctypes.get_last_error())
 
-    def wait_event(self, handle: int) -> None:
+    def wait_event(self, handle: int, timeout: int = INFINITE) -> int:
         result = self._kernel32.WaitForSingleObject(
-            wintypes.HANDLE(handle), INFINITE
+            wintypes.HANDLE(handle), timeout
         )
         if result == WAIT_OBJECT_0:
-            return
+            return result
+        if result == WAIT_TIMEOUT:
+            return result
         if result == WAIT_FAILED:
             raise ctypes.WinError(ctypes.get_last_error())
         raise RuntimeError("unexpected WaitForSingleObject result: %s" % result)
@@ -94,6 +98,7 @@ class SingleInstance:
         self._state_lock = threading.Lock()
         self._closing = False
         self._closed = threading.Event()
+        self._shutdown_requested = threading.Event()
         self._watcher: Optional[threading.Thread] = None
 
     def acquire(self) -> InstanceRole:
@@ -152,10 +157,14 @@ class SingleInstance:
                 if event is None:
                     return
                 try:
-                    self._kernel.wait_event(event)
+                    result = self._kernel.wait_event(event, WATCHER_WAIT_MS)
                 except (OSError, RuntimeError) as error:
                     _LOGGER.error("Piper activation wait failed: %s", error)
                     return
+                if result == WAIT_TIMEOUT:
+                    if self._shutdown_requested.is_set():
+                        return
+                    continue
                 with self._state_lock:
                     if self._closing or self._event is None:
                         return
@@ -185,6 +194,7 @@ class SingleInstance:
             else:
                 wait_for_close = False
                 self._closing = True
+                self._shutdown_requested.set()
                 event, mutex = self._event, self._mutex
                 owns_mutex = self._owns_mutex
         if wait_for_close:
@@ -199,8 +209,7 @@ class SingleInstance:
                 except Exception as error:
                     errors.append(error)
                     _LOGGER.exception("Could not wake Piper activation watcher")
-                else:
-                    watcher.join()
+                watcher.join()
 
             with self._state_lock:
                 self._event = None
