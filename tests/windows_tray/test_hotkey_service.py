@@ -53,6 +53,52 @@ class FakeHotkeyApi:
         return True
 
 
+class ErrorMessageApi(FakeHotkeyApi):
+    def __init__(self, result: int, message: int = 0) -> None:
+        super().__init__()
+        self.result = result
+        self.message = message
+
+    def get_message(self):
+        return self.result, self.message, 0
+
+
+def test_message_loop_unregisters_owned_ids_when_get_message_fails():
+    api = ErrorMessageApi(-1)
+    manager = HotkeyManager(api)
+
+    manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
+    manager._message_thread.join(timeout=1)
+
+    assert not manager._message_thread.is_alive()
+    assert api.registered == {}
+    assert [call[0:2] for call in api.calls[-2:]] == [
+        ("unregister", CAPTURE_IDS[0]),
+        ("unregister", CANCEL_ID),
+    ]
+
+
+def test_stop_after_message_thread_exit_is_safe_and_has_no_leaked_registrations():
+    api = ErrorMessageApi(0)
+    manager = HotkeyManager(api)
+
+    manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
+    manager._message_thread.join(timeout=1)
+    manager.stop()
+
+    assert api.registered == {}
+
+
+def test_message_loop_unregisters_owned_ids_when_wm_quit_exits_loop():
+    api = ErrorMessageApi(1, WM_QUIT)
+    manager = HotkeyManager(api)
+
+    manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
+    manager._message_thread.join(timeout=1)
+
+    assert api.registered == {}
+
+
 def test_failed_rebind_keeps_old_capture_registration() -> None:
     api = FakeHotkeyApi()
     manager = HotkeyManager(api)

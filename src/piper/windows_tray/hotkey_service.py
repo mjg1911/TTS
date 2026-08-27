@@ -3,7 +3,7 @@
 import ctypes
 import queue
 import threading
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Set, Tuple
 
 from .hotkey import MOD_NOREPEAT, VK_F8
 
@@ -112,6 +112,7 @@ class HotkeyManager:
         self._ready = threading.Event()
         self._registration_error: Optional[BaseException] = None
         self._cancel_registered = False
+        self._owned_registrations = set()  # type: Set[int]
         self._lock = threading.RLock()
         self._commands = queue.Queue()
         self._direct_test_mode = False
@@ -127,11 +128,14 @@ class HotkeyManager:
                 return
             if not self._register_capture(self._active_capture_id, capture_spec):
                 raise OSError("capture hotkey registration failed")
+            self._owned_registrations.add(self._active_capture_id)
             if not self._cancel_registered:
                 if not self._api.register(CANCEL_ID, MOD_NOREPEAT, VK_F8):
                     self._api.unregister(self._active_capture_id)
+                    self._owned_registrations.discard(self._active_capture_id)
                     raise OSError("F8 registration failed")
                 self._cancel_registered = True
+                self._owned_registrations.add(CANCEL_ID)
             self.capture_spec = capture_spec
 
     def register_for_test(self, capture_spec: Any) -> None:
@@ -151,6 +155,8 @@ class HotkeyManager:
                 if not self._register_capture(inactive, candidate):
                     return False
                 self._api.unregister(self._active_capture_id)
+                self._owned_registrations.discard(self._active_capture_id)
+                self._owned_registrations.add(inactive)
                 self._active_capture_id = inactive
                 self.capture_spec = candidate
                 return True
@@ -171,14 +177,19 @@ class HotkeyManager:
                     return False
                 for hotkey_id in CAPTURE_IDS:
                     self._api.unregister(hotkey_id)
+                    self._owned_registrations.discard(hotkey_id)
                 self._api.unregister(CANCEL_ID)
+                self._owned_registrations.discard(CANCEL_ID)
                 self._cancel_registered = False
                 if not self._register_capture(self._active_capture_id, self.capture_spec):
                     return False
+                self._owned_registrations.add(self._active_capture_id)
                 if not self._api.register(CANCEL_ID, MOD_NOREPEAT, VK_F8):
                     self._api.unregister(self._active_capture_id)
+                    self._owned_registrations.discard(self._active_capture_id)
                     return False
                 self._cancel_registered = True
+                self._owned_registrations.add(CANCEL_ID)
                 return True
 
         try:
@@ -235,27 +246,50 @@ class HotkeyManager:
         capture_spec = self.capture_spec
         self.capture_spec = None
         try:
-            self._api.ensure_message_queue()
-            self._register_capture_set(capture_spec)
-        except BaseException as exc:
-            self._registration_error = exc
+            try:
+                self._api.ensure_message_queue()
+                self._register_capture_set(capture_spec)
+            except BaseException as exc:
+                self._registration_error = exc
+                self._ready.set()
+                return
             self._ready.set()
-            return
-        self._ready.set()
-        while True:
-            result, message, hotkey_id = self._api.get_message()
-            if result <= 0:
-                return
-            if message == WM_COMMAND:
-                command = self._commands.get()
-                try:
-                    command.result = command.callback()
-                except BaseException as exc:
-                    command.error = exc
-                finally:
-                    command.completed.set()
-            elif not self.dispatch_message(message, hotkey_id):
-                return
+            while True:
+                result, message, hotkey_id = self._api.get_message()
+                if result <= 0:
+                    return
+                if message == WM_COMMAND:
+                    command = self._commands.get()
+                    try:
+                        command.result = command.callback()
+                    except BaseException as exc:
+                        command.error = exc
+                    finally:
+                        command.completed.set()
+                elif not self.dispatch_message(message, hotkey_id):
+                    return
+        finally:
+            self._cleanup_owned_registrations()
+
+    def _cleanup_owned_registrations(self) -> None:
+        with self._lock:
+            owned = tuple(
+                hotkey_id
+                for hotkey_id in CAPTURE_IDS + (CANCEL_ID,)
+                if hotkey_id in self._owned_registrations
+            )
+            self._owned_registrations.clear()
+            self._cancel_registered = False
+            self.capture_spec = None
+        first_error = None
+        for hotkey_id in owned:
+            try:
+                self._api.unregister(hotkey_id)
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
     def start(self, capture_spec: Any, on_capture: Callback, on_cancel: Callback) -> None:
         with self._lock:
@@ -298,7 +332,11 @@ class HotkeyManager:
         elif self._direct_test_mode:
             command()
         elif thread is not None:
-            raise OSError("hotkey message thread is unavailable")
+            with self._lock:
+                self._message_thread = None
+                self.capture_spec = None
+            self._direct_test_mode = False
+            return
         else:
             return
         if thread is not None and thread is not threading.current_thread():

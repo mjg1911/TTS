@@ -229,6 +229,10 @@ class Controller:
             and result.text is not None
         ):
             self.state.last_text = result.text
+        else:
+            self._show_status(
+                "No text selected or the application did not provide it"
+            )
 
     def request_hotkey_change(self, requested: str) -> bool:
         if self._hotkeys is None:

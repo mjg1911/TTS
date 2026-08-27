@@ -74,9 +74,11 @@ class FakeHotkeys:
     def __init__(self, events):
         self.events = events
         self.callbacks = None
+        self.started_spec = None
 
     def start(self, spec, on_capture, on_cancel):
         self.events.append(("hotkeys.start", spec.canonical))
+        self.started_spec = spec.canonical
         self.callbacks = (on_capture, on_cancel)
 
     def stop(self):
@@ -116,6 +118,24 @@ def test_controller_delivers_only_fresh_success_to_last_text():
 
     assert controller.state.last_text == "NEW"
     assert controller.state.capture_in_progress is False
+
+
+def test_controller_notifies_when_capture_fails_without_replacing_last_text():
+    statuses = []
+    jobs = []
+    controller = Controller(
+        capture=lambda: CaptureResult(CaptureStatus.EMPTY),
+        capture_submit=jobs.append,
+    )
+    controller.state.last_text = "previous"
+    controller.configure_runtime(show_status=statuses.append)
+
+    controller.handle(SimpleNamespace(kind=CommandKind.CAPTURE_REQUEST))
+    jobs[0]()
+    controller.handle(controller.drain_once())
+
+    assert statuses == ["No text selected or the application did not provide it"]
+    assert controller.state.last_text == "previous"
 
 
 def test_app_starts_hotkeys_after_voice_setup_and_stops_before_mutex_release(monkeypatch):

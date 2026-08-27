@@ -128,6 +128,9 @@ class FakeUi:
     def show_status(self, message):
         self.statuses.append(message)
 
+    def show_last_text(self, _text):
+        pass
+
     def close(self):
         self.root.destroy()
 
@@ -219,6 +222,80 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
     ]
     assert events[-2:] == ["instance.close", "destroy"]
     assert tray.events == ["stop"]
+
+
+def test_invalid_persisted_hotkey_recovers_to_default_and_reports_status(monkeypatch):
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    monkeypatch.setattr(
+        app,
+        "load_settings",
+        lambda: SimpleNamespace(
+            settings=app.TraySettings(hotkey="not a hotkey"), source="loaded"
+        ),
+    )
+    class FakeHotkeys:
+        def __init__(self):
+            self.started_spec = None
+
+        def start(self, spec, **_callbacks):
+            self.started_spec = spec.canonical
+
+        def stop(self):
+            pass
+
+    hotkeys = FakeHotkeys()
+    monkeypatch.setattr(app, "HotkeyManager", lambda: hotkeys)
+    ui.root.mainloop = lambda: None
+
+    assert app.run_app([]) == 0
+    assert hotkeys.started_spec == "alt+backtick"
+    assert ui.statuses == [
+        "The saved Piper hotkey was invalid; the default hotkey is being used."
+    ]
+
+
+def test_hotkey_stop_failure_does_not_skip_other_shutdown_cleanup(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+
+    class FailingHotkeys:
+        def start(self, _spec, **_callbacks):
+            pass
+
+        def stop(self):
+            raise OSError("stop failed")
+
+    hotkeys = FailingHotkeys()
+    monkeypatch.setattr(app, "HotkeyManager", lambda: hotkeys)
+    ui.root.mainloop = lambda: None
+
+    assert app.run_app([]) == 0
+    assert tray.events == ["start", "stop"]
+    assert "instance.close" in events
+    assert "destroy" in events
+
+
+def test_hotkey_start_conflict_reports_failure_without_aborting_cleanup(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+
+    class ConflictingHotkeys:
+        def start(self, _spec, **_callbacks):
+            raise OSError("hotkey in use")
+
+        def stop(self):
+            events.append("hotkeys.stop")
+
+    monkeypatch.setattr(app, "HotkeyManager", ConflictingHotkeys)
+    ui.root.mainloop = lambda: (_ for _ in ()).throw(
+        AssertionError("mainloop should not start after hotkey failure")
+    )
+
+    assert app.run_app([]) == 1
+    assert ui.statuses == ["Piper hotkeys could not be started."]
+    assert tray.events == ["start", "stop"]
+    assert "instance.close" in events
 
 
 def test_exception_before_existing_cleanup_still_closes_instance(monkeypatch) -> None:

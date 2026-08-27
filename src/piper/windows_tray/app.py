@@ -1,9 +1,11 @@
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence, Tuple
 
 from .commands import Command, CommandKind
 from .controller import Controller, VOICE_SETUP_ERRORS
+from . import DEFAULT_HOTKEY
 from .capture import SelectionCapture
 from .clipboard import Win32Clipboard
 from .hotkey import parse_hotkey
@@ -64,8 +66,13 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
     def stop_hotkeys() -> None:
         nonlocal hotkeys_stopped
         if hotkeys is not None and not hotkeys_stopped:
-            hotkeys.stop()
-            hotkeys_stopped = True
+            try:
+                hotkeys.stop()
+            except Exception as error:
+                if logger is not None:
+                    logger.error("Piper hotkeys could not be stopped cleanly: %s", error)
+            finally:
+                hotkeys_stopped = True
 
     def close_instance() -> None:
         nonlocal instance_closed
@@ -85,6 +92,15 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         ui = TkUi()
         data_dirs = tuple(_voice_data_dirs())
         settings = settings_result.settings
+        try:
+            capture_hotkey = parse_hotkey(settings.hotkey)
+        except ValueError as error:
+            logger.warning("Saved Piper hotkey is invalid: %s", error)
+            ui.show_status(
+                "The saved Piper hotkey was invalid; the default hotkey is being used."
+            )
+            settings = replace(settings, hotkey=DEFAULT_HOTKEY)
+            capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
         controller = Controller(settings=settings, save_settings=save_settings)
 
         try:
@@ -155,13 +171,20 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             lambda: controller.enqueue(Command(CommandKind.ACTIVATE))
         )
         tray.start()
-        hotkeys.start(
-            parse_hotkey(settings.hotkey),
-            on_capture=lambda: controller.enqueue(
-                Command(CommandKind.CAPTURE_REQUEST)
-            ),
-            on_cancel=lambda: controller.enqueue(Command(CommandKind.CANCEL_REQUEST)),
-        )
+        try:
+            hotkeys.start(
+                capture_hotkey,
+                on_capture=lambda: controller.enqueue(
+                    Command(CommandKind.CAPTURE_REQUEST)
+                ),
+                on_cancel=lambda: controller.enqueue(
+                    Command(CommandKind.CANCEL_REQUEST)
+                ),
+            )
+        except (OSError, ValueError) as error:
+            logger.error("Piper hotkeys could not be started: %s", error)
+            ui.show_status("Piper hotkeys could not be started.")
+            return 1
         ui.root.after(25, pump)
         ui.root.mainloop()
         return 0
