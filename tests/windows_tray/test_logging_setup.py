@@ -18,3 +18,16 @@ def test_reconfiguration_closes_existing_handlers(tmp_path: Path) -> None:
         for handler in logger.handlers:
             handler.close()
         logger.handlers.clear()
+
+
+def test_every_configured_log_line_contains_app_version(tmp_path: Path) -> None:
+    path = tmp_path / "piper-tray.log"
+    logger = configure_logging("INFO", path=path)
+
+    logger.info("hello")
+    for handler in logger.handlers:
+        handler.flush()
+
+    text = path.read_text(encoding="utf-8")
+    assert "version=" in text
+    assert "hello" in text

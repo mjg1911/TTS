@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from dataclasses import replace
 from enum import Enum, auto
+import logging
 from queue import Empty, Queue
 from pathlib import Path
 import threading
@@ -9,9 +10,13 @@ from typing import Callable, Optional, Tuple
 from .capture import CaptureResult, CaptureStatus
 from .commands import Command, CommandKind
 from .hotkey import parse_hotkey
+from .logging_setup import log_capture_result
 from .settings import TraySettings
 from .speech import SpeechEvent, SpeechEventKind, SpeechRequest
 from .voice_manager import VoiceManager, VoiceSwitchEvent
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 VOICE_SETUP_ERRORS = (
@@ -290,13 +295,11 @@ class Controller:
                 result = self._capture()
             except Exception as error:
                 result = CaptureResult(CaptureStatus.ACCESS_ERROR, detail=str(error))
-            message = "capture outcome=%s length=%d" % (
+            log_capture_result(
+                _LOGGER,
                 result.status.name,
                 len(result.text) if result.text is not None else 0,
             )
-            if result.detail:
-                message += " detail=%s" % result.detail
-            self._log_info(message)
             kind = (
                 CommandKind.CAPTURE_SUCCEEDED
                 if result.status is CaptureStatus.SUCCESS

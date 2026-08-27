@@ -168,6 +168,7 @@ def test_synthesis_failure_emits_generic_failed_event():
         event = wait_for_event(events, SpeechEventKind.FAILED, 3)
         assert event.error == "Speech synthesis failed."
         assert "secret" not in event.error
+        assert event.failure_phase == "synthesis"
     finally:
         worker.shutdown()
 

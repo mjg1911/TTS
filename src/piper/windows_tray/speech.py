@@ -3,10 +3,17 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
+import logging
 import threading
+import time
 from typing import Optional
 
 from piper.audio_playback import AudioPlayer
+
+from .logging_setup import log_exception_safe, log_synthesis_result
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SpeechEventKind(Enum):
@@ -27,6 +34,7 @@ class SpeechEvent:
     kind: SpeechEventKind
     generation: int
     error: str | None = None
+    failure_phase: str | None = None
 
 
 class SpeechWorker:
@@ -110,7 +118,10 @@ class SpeechWorker:
         self._on_event(SpeechEvent(SpeechEventKind.STARTED, request.generation))
         terminal_kind = SpeechEventKind.FINISHED
         error: str | None = None
-        phase = "playback"
+        failure_phase: str | None = None
+        failure: BaseException | None = None
+        phase = "synthesis"
+        synthesis_seconds = 0.0
         try:
             voice = self._voice_provider()
             sample_rate = voice.config.sample_rate
@@ -129,10 +140,17 @@ class SpeechWorker:
                     if self._cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
+                    before_next = time.monotonic()
                     try:
                         chunk = next(audio_chunks)
                     except StopIteration:
+                        synthesis_seconds += time.monotonic() - before_next
                         break
+                    except Exception:
+                        synthesis_seconds += time.monotonic() - before_next
+                        raise
+                    else:
+                        synthesis_seconds += time.monotonic() - before_next
                     if self._cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
@@ -149,11 +167,13 @@ class SpeechWorker:
 
                 if self._cancel_event.is_set():
                     terminal_kind = SpeechEventKind.CANCELLED
-        except Exception:
+        except Exception as caught:
             if self._cancel_event.is_set():
                 terminal_kind = SpeechEventKind.CANCELLED
-            elif terminal_kind is not SpeechEventKind.CANCELLED:
+            else:
                 terminal_kind = SpeechEventKind.FAILED
+                failure = caught
+                failure_phase = phase
                 error = (
                     "Speech playback failed."
                     if phase == "playback"
@@ -164,4 +184,26 @@ class SpeechWorker:
             if self._cancel_event.is_set():
                 terminal_kind = SpeechEventKind.CANCELLED
                 error = None
-            self._on_event(SpeechEvent(terminal_kind, request.generation, error))
+            elapsed_ms = int(synthesis_seconds * 1000)
+            log_synthesis_result(
+                _LOGGER,
+                request.generation,
+                elapsed_ms,
+                terminal_kind.name,
+            )
+            if terminal_kind is SpeechEventKind.FAILED and failure is not None:
+                log_exception_safe(
+                    _LOGGER,
+                    "speech failure",
+                    failure,
+                    generation=request.generation,
+                    phase=failure_phase,
+                )
+            self._on_event(
+                SpeechEvent(
+                    terminal_kind,
+                    request.generation,
+                    error,
+                    failure_phase,
+                )
+            )

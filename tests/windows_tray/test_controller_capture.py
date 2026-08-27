@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 from piper.windows_tray.capture import CaptureResult, CaptureStatus
@@ -73,33 +74,30 @@ def test_cancel_request_is_noop_without_speech():
     assert controller.state.capture_generation == before
 
 
-def test_capture_worker_logs_outcome_and_length_without_text():
+def test_capture_worker_logs_outcome_and_length_without_text(caplog):
     jobs = []
-    logs = []
     result = CaptureResult(CaptureStatus.SUCCESS, "secret")
     controller = Controller(capture=lambda: result, capture_submit=jobs.append)
-    controller.configure_runtime(log_info=logs.append)
 
-    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
-    jobs[0]()
+    with caplog.at_level(logging.INFO):
+        controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+        jobs[0]()
 
-    assert logs == ["capture outcome=SUCCESS length=6"]
-    assert "secret" not in logs[0]
+    assert "capture outcome=SUCCESS length=6" in caplog.text
+    assert "secret" not in caplog.text
 
 
-def test_capture_worker_logs_access_error_detail_without_text():
+def test_capture_worker_logs_access_error_without_detail(caplog):
     jobs = []
-    logs = []
     result = CaptureResult(CaptureStatus.ACCESS_ERROR, detail="SendInput failed")
     controller = Controller(capture=lambda: result, capture_submit=jobs.append)
-    controller.configure_runtime(log_info=logs.append)
 
-    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
-    jobs[0]()
+    with caplog.at_level(logging.INFO):
+        controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+        jobs[0]()
 
-    assert logs == [
-        "capture outcome=ACCESS_ERROR length=0 detail=SendInput failed"
-    ]
+    assert "capture outcome=ACCESS_ERROR length=0" in caplog.text
+    assert "SendInput failed" not in caplog.text
 
 
 def test_show_last_text_uses_main_thread_ui_callback():
