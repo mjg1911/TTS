@@ -2,6 +2,8 @@
 
 import shutil
 import subprocess
+import sys
+import threading
 from typing import Optional
 
 
@@ -12,45 +14,85 @@ class AudioPlayer:
         """Initializes audio player."""
         self.sample_rate = sample_rate
         self._proc: Optional[subprocess.Popen] = None
+        self._lock = threading.Lock()
+        self._stopped = False
 
     def __enter__(self):
         """Starts ffplay subprocess and returns player."""
-        self._proc = subprocess.Popen(
-            [
-                "ffplay",
-                "-nodisp",
-                "-autoexit",
-                "-f",
-                "s16le",
-                "-sample_rate",
-                str(self.sample_rate),
-                "-ch_layout",
-                "mono",
-                "-",
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        with self._lock:
+            self._proc = subprocess.Popen(
+                [
+                    "ffplay",
+                    "-nodisp",
+                    "-autoexit",
+                    "-f",
+                    "s16le",
+                    "-sample_rate",
+                    str(self.sample_rate),
+                    "-ch_layout",
+                    "mono",
+                    "-",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+            self._stopped = False
         return self
+
+    def stop(self) -> None:
+        """Terminates active ffplay playback."""
+        with self._lock:
+            proc = self._proc
+            if self._stopped or proc is None:
+                return
+            self._stopped = True
+            if proc.poll() is None:
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Stops ffplay subprocess."""
-        if self._proc:
+        with self._lock:
+            proc = self._proc
+            if proc is None:
+                return
             try:
-                if self._proc.stdin:
-                    self._proc.stdin.close()
-            except Exception:
-                pass
-            self._proc.wait(timeout=5)
+                if proc.poll() is None and proc.stdin:
+                    try:
+                        proc.stdin.close()
+                    except Exception:
+                        pass
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+            finally:
+                self._proc = None
 
     def play(self, audio_bytes: bytes) -> None:
         """Plays raw audio using ffplay."""
-        assert self._proc is not None
-        assert self._proc.stdin is not None
-
-        self._proc.stdin.write(audio_bytes)
-        self._proc.stdin.flush()
+        with self._lock:
+            proc = self._proc
+            if (
+                self._stopped
+                or proc is None
+                or proc.poll() is not None
+                or proc.stdin is None
+            ):
+                return
+            try:
+                proc.stdin.write(audio_bytes)
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                return
 
     @staticmethod
     def is_available() -> bool:
