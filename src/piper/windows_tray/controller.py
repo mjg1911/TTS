@@ -37,6 +37,7 @@ class AppState:
     capture_generation: int = 0
     capture_in_progress: bool = False
     speech_generation: int = 0
+    voice_generation: int = 0
     playback: PlaybackState = PlaybackState.IDLE
     shutting_down: bool = False
     settings: Optional[TraySettings] = None
@@ -48,6 +49,13 @@ class AppState:
 class CaptureCompletion:
     generation: int
     result: CaptureResult
+
+
+@dataclass(frozen=True)
+class TraySnapshot:
+    can_stop: bool
+    can_replay: bool
+    has_last_text: bool
 
 
 def _start_daemon_job(job: Callable[[], None]) -> None:
@@ -171,6 +179,15 @@ class Controller:
 
     def enqueue(self, command: Command) -> None:
         self._commands.put(command)
+
+    def tray_snapshot(self) -> TraySnapshot:
+        return TraySnapshot(
+            can_stop=self.state.playback is PlaybackState.SPEAKING,
+            can_replay=(
+                self.state.last_text is not None and not self.state.shutting_down
+            ),
+            has_last_text=self.state.last_text is not None,
+        )
 
     def enqueue_worker_event(self, event: SpeechEvent) -> None:
         """Queue worker output; worker callbacks must not touch controller state."""

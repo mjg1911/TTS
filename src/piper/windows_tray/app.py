@@ -11,6 +11,8 @@ from .clipboard import Win32Clipboard
 from .hotkey import parse_hotkey
 from .hotkey_service import HotkeyManager
 from .logging_setup import configure_logging, log_path
+from piper.audio_playback import AudioPlayer
+from .speech import SpeechWorker
 from .settings import TraySettings, load_settings, save_settings
 from .single_instance import InstanceRole, SingleInstance
 from .tray_icon import TrayIcon
@@ -52,6 +54,19 @@ def _load_configured_voice(
     return model_path, PiperVoice.load(model_path)
 
 
+def _build_speech_worker(controller: Controller, voice_manager: VoiceManager) -> SpeechWorker:
+    def player_factory(sample_rate: int) -> AudioPlayer:
+        if not AudioPlayer.is_available():
+            raise RuntimeError("ffplay is not available")
+        return AudioPlayer(sample_rate)
+
+    return SpeechWorker(
+        voice_manager.current,
+        controller.enqueue_worker_event,
+        player_factory,
+    )
+
+
 def run_app(argv: Optional[Sequence[str]] = None) -> int:
     del argv
 
@@ -61,6 +76,8 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
     tray_stopped = False
     hotkeys = None
     hotkeys_stopped = False
+    speech_worker = None
+    speech_stopped = False
     ui = None
     logger = None
 
@@ -138,6 +155,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             controller.state.voice,
             lambda reference: load_voice_candidate(reference, data_dirs),
         )
+        speech_worker = _build_speech_worker(controller, voice_manager)
 
         clipboard = Win32Clipboard()
         capture = SelectionCapture(clipboard, clipboard.send_ctrl_c)
@@ -145,6 +163,8 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
 
         icon_path = Path(__file__).resolve().parents[1] / "img" / "logo.png"
         tray = TrayIcon(icon_path, controller.enqueue)
+        if hasattr(tray, "set_snapshot_provider"):
+            tray.set_snapshot_provider(controller.tray_snapshot)
 
         def stop_tray() -> None:
             nonlocal tray_stopped
@@ -168,6 +188,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             choose_voice=ui.choose_voice_model,
             load_voice=lambda reference: load_voice_candidate(reference, data_dirs),
             voice_manager=voice_manager,
+            speech_worker=speech_worker,
             show_status=ui.show_status,
             log_error=logger.error,
             open_log=lambda: os.startfile(log_path().parent),
@@ -175,7 +196,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             close_instance=close_instance,
             quit_root=ui.root.quit,
             capture=capture.capture,
-            log_info=logger.info,
+            log_info=getattr(logger, "info", lambda *_args: None),
             hotkeys=hotkeys,
             choose_hotkey=lambda: ui.prompt_hotkey(
                 controller.state.settings.hotkey
@@ -226,6 +247,14 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
     finally:
         if tray is not None and not tray_stopped:
             stop_tray()
+        if speech_worker is not None and not speech_stopped:
+            try:
+                speech_worker.shutdown()
+            except Exception as error:
+                if logger is not None:
+                    logger.error("Piper speech worker could not be stopped cleanly: %s", error)
+            finally:
+                speech_stopped = True
         stop_hotkeys()
         close_instance()
         if ui is not None:

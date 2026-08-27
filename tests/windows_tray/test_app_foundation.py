@@ -23,9 +23,10 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
             return FakeImage()
 
     class FakeMenuItem:
-        def __init__(self, text, action):
+        def __init__(self, text, action, enabled=None):
             self.text = text
             self.action = action
+            self.enabled = enabled
 
     class FakeMenu:
         def __init__(self, *items):
@@ -56,6 +57,8 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
     assert [command.kind for command in commands] == [
         CommandKind.CONFIGURE_VOICE,
         CommandKind.SHOW_LAST_TEXT,
+        CommandKind.STOP_REQUEST,
+        CommandKind.REPLAY_REQUEST,
         CommandKind.CONFIGURE_HOTKEY,
         CommandKind.OPEN_LOG,
         CommandKind.EXIT,
@@ -85,7 +88,9 @@ def test_tray_start_and_stop_delegate_to_pystray(monkeypatch, tmp_path: Path) ->
     class FakePystray:
         Icon = FakeIcon
         Menu = lambda *items: SimpleNamespace(items=items)
-        MenuItem = lambda text, action: SimpleNamespace(text=text, action=action)
+        MenuItem = lambda text, action, enabled=None: SimpleNamespace(
+            text=text, action=action, enabled=enabled
+        )
 
     monkeypatch.setattr(tray_icon, "_load_dependencies", lambda: (FakePystray, FakeImageApi))
     tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
@@ -221,7 +226,7 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
         "watch",
     ]
     assert events[-2:] == ["instance.close", "destroy"]
-    assert tray.events == ["stop"]
+    assert tray.events == ["start", "stop"]
 
 
 def test_invalid_persisted_hotkey_recovers_to_default_and_reports_status(monkeypatch):
@@ -450,7 +455,10 @@ def test_primary_pre_tray_failures_close_instance(monkeypatch, failure_stage) ->
     with pytest.raises((OSError, RuntimeError)):
         app.run_app([])
 
-    assert events == ["acquire", "instance.close"]
+    expected = ["acquire", "instance.close"]
+    if failure_stage == "controller":
+        expected.append("destroy")
+    assert events == expected
 
 
 def test_programming_error_in_voice_setup_is_not_treated_as_first_run(monkeypatch) -> None:
@@ -484,7 +492,7 @@ def test_tk_thread_dispatches_activation_and_exit(monkeypatch) -> None:
     assert app.run_app([]) == 0
 
     assert ui.statuses == ["Piper is already running."]
-    assert tray.events == ["stop"]
+    assert tray.events == ["start", "stop"]
     assert events.count("instance.close") == 1
     assert "quit" in events
 
