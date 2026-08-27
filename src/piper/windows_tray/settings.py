@@ -1,0 +1,85 @@
+from dataclasses import asdict, dataclass
+import json
+import os
+from pathlib import Path
+import tempfile
+from typing import Literal, Optional
+
+from . import DEFAULT_HOTKEY, DEFAULT_VOICE, SETTINGS_SCHEMA_VERSION
+
+
+@dataclass(frozen=True)
+class TraySettings:
+    schema_version: int = SETTINGS_SCHEMA_VERSION
+    voice: str = DEFAULT_VOICE
+    hotkey: str = DEFAULT_HOTKEY
+    log_level: str = "INFO"
+
+
+@dataclass(frozen=True)
+class SettingsLoadResult:
+    settings: TraySettings
+    source: Literal["loaded", "missing", "corrupt"]
+
+
+def settings_path(appdata: Optional[Path] = None) -> Path:
+    base = appdata or Path(os.environ["APPDATA"])
+    return base / "Piper" / "settings.json"
+
+
+def _validated(data: object) -> TraySettings:
+    if not isinstance(data, dict):
+        raise ValueError("settings root must be an object")
+    if data.get("schema_version") != SETTINGS_SCHEMA_VERSION:
+        raise ValueError("unsupported settings schema")
+
+    voice = data.get("voice")
+    hotkey = data.get("hotkey")
+    log_level = data.get("log_level", "INFO")
+    if not isinstance(voice, str) or not voice.strip():
+        raise ValueError("voice must be a non-empty string")
+    if not isinstance(hotkey, str) or not hotkey.strip():
+        raise ValueError("hotkey must be a non-empty string")
+    if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
+        raise ValueError("invalid log level")
+    return TraySettings(voice=voice.strip(), hotkey=hotkey.strip(), log_level=log_level)
+
+
+def _corrupt_path(path: Path) -> Path:
+    candidate = path.with_name(path.name + ".corrupt")
+    index = 1
+    while candidate.exists():
+        candidate = path.with_name(path.name + f".corrupt.{index}")
+        index += 1
+    return candidate
+
+
+def load_settings(path: Optional[Path] = None) -> SettingsLoadResult:
+    path = path or settings_path()
+    if not path.exists():
+        return SettingsLoadResult(TraySettings(), "missing")
+
+    try:
+        return SettingsLoadResult(
+            _validated(json.loads(path.read_text(encoding="utf-8"))), "loaded"
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        try:
+            path.replace(_corrupt_path(path))
+        except OSError:
+            pass
+        return SettingsLoadResult(TraySettings(), "corrupt")
+
+
+def save_settings(settings: TraySettings, path: Optional[Path] = None) -> None:
+    path = path or settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(asdict(settings), indent=2, sort_keys=True) + "\n"
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+        temp_path = Path(handle.name)
+    os.replace(temp_path, path)
