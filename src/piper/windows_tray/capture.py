@@ -6,6 +6,9 @@ from enum import Enum, auto
 from typing import Callable, Optional, Any
 
 
+HOTKEY_RELEASE_DELAY_S = 0.05
+
+
 class CaptureStatus(Enum):
     SUCCESS = auto()
     TIMEOUT = auto()
@@ -36,6 +39,7 @@ class SelectionCapture:
     def capture(self, timeout_s: float = 1.0, poll_s: float = 0.05) -> CaptureResult:
         try:
             before = self._clipboard.sequence_number()
+            self._sleep(HOTKEY_RELEASE_DELAY_S)
             self._send_copy()
         except OSError as error:
             return CaptureResult(CaptureStatus.ACCESS_ERROR, detail=str(error))

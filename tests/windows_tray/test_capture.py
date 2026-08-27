@@ -135,6 +135,16 @@ def test_capture_sends_ctrl_c_after_reading_sequence() -> None:
     assert events[:2] == ["sequence", "copy"]
 
 
+def test_capture_waits_for_hotkey_modifiers_before_copying() -> None:
+    clock = FakeClock()
+    clipboard = FakeClipboard([1, 2], ["text"])
+
+    result = make_capture(clipboard, clock).capture(timeout_s=0.10, poll_s=0.05)
+
+    assert result.status is CaptureStatus.SUCCESS
+    assert clock.now >= 0.05
+
+
 @pytest.mark.parametrize("value", ["\x00", "\x00\x00"])
 def test_null_only_clipboard_text_is_not_success(value: str) -> None:
     clock = FakeClock()

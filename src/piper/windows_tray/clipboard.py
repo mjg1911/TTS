@@ -23,8 +23,31 @@ class _KEYBDINPUT(ctypes.Structure):
     ]
 
 
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
+    ]
+
+
 class _INPUT_UNION(ctypes.Union):
-    _fields_ = [("ki", _KEYBDINPUT)]
+    _fields_ = [
+        ("mi", _MOUSEINPUT),
+        ("ki", _KEYBDINPUT),
+        ("hi", _HARDWAREINPUT),
+    ]
 
 
 class _INPUT(ctypes.Structure):
@@ -46,6 +69,18 @@ class Win32Clipboard:
             raise OSError("Win32 clipboard is only available on Windows")
         self._user32 = ctypes.WinDLL("user32", use_last_error=True)
         self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._user32.OpenClipboard.argtypes = [wintypes.HWND]
+        self._user32.OpenClipboard.restype = wintypes.BOOL
+        self._user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+        self._user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
+        self._user32.GetClipboardData.argtypes = [wintypes.UINT]
+        self._user32.GetClipboardData.restype = ctypes.c_void_p
+        self._user32.CloseClipboard.argtypes = []
+        self._user32.CloseClipboard.restype = wintypes.BOOL
+        self._kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        self._kernel32.GlobalLock.restype = ctypes.c_void_p
+        self._kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        self._kernel32.GlobalUnlock.restype = wintypes.BOOL
 
     def sequence_number(self) -> int:
         self._load_libraries()

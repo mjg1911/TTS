@@ -208,10 +208,13 @@ class Controller:
                 result = self._capture()
             except Exception as error:
                 result = CaptureResult(CaptureStatus.ACCESS_ERROR, detail=str(error))
-            self._log_info(
-                "capture outcome=%s length=%d"
-                % (result.status.name, len(result.text) if result.text is not None else 0)
+            message = "capture outcome=%s length=%d" % (
+                result.status.name,
+                len(result.text) if result.text is not None else 0,
             )
+            if result.detail:
+                message += " detail=%s" % result.detail
+            self._log_info(message)
             kind = (
                 CommandKind.CAPTURE_SUCCEEDED
                 if result.status is CaptureStatus.SUCCESS

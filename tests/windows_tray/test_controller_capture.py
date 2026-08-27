@@ -74,6 +74,21 @@ def test_capture_worker_logs_outcome_and_length_without_text():
     assert "secret" not in logs[0]
 
 
+def test_capture_worker_logs_access_error_detail_without_text():
+    jobs = []
+    logs = []
+    result = CaptureResult(CaptureStatus.ACCESS_ERROR, detail="SendInput failed")
+    controller = Controller(capture=lambda: result, capture_submit=jobs.append)
+    controller.configure_runtime(log_info=logs.append)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    jobs[0]()
+
+    assert logs == [
+        "capture outcome=ACCESS_ERROR length=0 detail=SendInput failed"
+    ]
+
+
 def test_show_last_text_uses_main_thread_ui_callback():
     shown = []
     controller = Controller()

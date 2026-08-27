@@ -152,6 +152,12 @@ def test_app_starts_hotkeys_after_voice_setup_and_stops_before_mutex_release(mon
     tray = FakeTray(Path("icon.png"), lambda _command: None)
     hotkeys = FakeHotkeys(events)
     controllers = []
+    logger = SimpleNamespace(
+        warning=lambda *_args: None,
+        error=lambda *_args: None,
+        exception=lambda *_args: None,
+        info=lambda *_args: None,
+    )
 
     monkeypatch.setattr(app, "SingleInstance", lambda: instance)
     monkeypatch.setattr(
@@ -162,11 +168,7 @@ def test_app_starts_hotkeys_after_voice_setup_and_stops_before_mutex_release(mon
     monkeypatch.setattr(
         app,
         "configure_logging",
-        lambda _level: SimpleNamespace(
-            warning=lambda *_args: None,
-            error=lambda *_args: None,
-            exception=lambda *_args: None,
-        ),
+        lambda _level: logger,
     )
     monkeypatch.setattr(app, "TkUi", lambda: ui)
     monkeypatch.setattr(
@@ -194,6 +196,7 @@ def test_app_starts_hotkeys_after_voice_setup_and_stops_before_mutex_release(mon
     assert app.run_app([]) == 0
     assert events.index("voice") < events.index(("hotkeys.start", "alt+backtick"))
     assert events.index("hotkeys.stop") < events.index("instance.close")
+    assert controllers[0]._log_info == logger.info
     assert ui.statuses == [
         "Piper hotkeys stopped unexpectedly; hotkeys are unavailable."
     ]

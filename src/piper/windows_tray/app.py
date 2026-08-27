@@ -168,6 +168,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             close_instance=close_instance,
             quit_root=ui.root.quit,
             capture=capture.capture,
+            log_info=logger.info,
             hotkeys=hotkeys,
             choose_hotkey=lambda: ui.prompt_hotkey(
                 controller.state.settings.hotkey
