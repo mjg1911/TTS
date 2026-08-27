@@ -1,6 +1,8 @@
 import threading
 from unittest.mock import Mock
 
+import pytest
+
 from piper.audio_playback import AudioPlayer
 
 
@@ -59,3 +61,15 @@ def test_stop_can_terminate_while_play_is_blocked_in_stdin_write() -> None:
         release_write.set()
         play_thread.join(timeout=2)
         stop_thread.join(timeout=2)
+
+
+@pytest.mark.parametrize("error", [BrokenPipeError("pipe"), OSError("device")])
+def test_play_propagates_unexpected_stdin_errors(error) -> None:
+    process = Mock()
+    process.poll.return_value = None
+    process.stdin.write.side_effect = error
+    player = AudioPlayer(22050)
+    player._proc = process
+
+    with pytest.raises(type(error), match=str(error)):
+        player.play(b"audio")

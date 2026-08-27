@@ -199,6 +199,33 @@ def test_playback_failure_emits_generic_failed_event():
         worker.shutdown()
 
 
+def test_audio_player_broken_pipe_is_reported_as_playback_failure():
+    events = []
+    entered = threading.Event()
+
+    class BrokenPipePlayer(FakePlayer):
+        def play(self, _data: bytes) -> None:
+            raise BrokenPipeError("pipe closed")
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: BrokenPipePlayer([], entered),
+    )
+
+    try:
+        event = None
+        worker.submit(SpeechRequest(40, "hello"))
+        event = wait_for_event(events, SpeechEventKind.FAILED, 40)
+        assert event.error == "Speech playback failed."
+    finally:
+        worker.shutdown()
+
+
 def test_latest_pending_request_replaces_older_pending_request():
     events = []
     played = []

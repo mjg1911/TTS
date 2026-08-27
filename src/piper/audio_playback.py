@@ -95,11 +95,8 @@ class AudioPlayer:
                 or proc.stdin is None
             ):
                 return
-        try:
-            proc.stdin.write(audio_bytes)
-            proc.stdin.flush()
-        except (BrokenPipeError, OSError):
-            return
+        proc.stdin.write(audio_bytes)
+        proc.stdin.flush()
 
     @staticmethod
     def is_available() -> bool:

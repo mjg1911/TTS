@@ -2,6 +2,7 @@ from pathlib import Path
 
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import Controller, PlaybackState
+from piper.windows_tray.settings import TraySettings
 from piper.windows_tray.voice_manager import VoiceManager
 
 
@@ -57,9 +58,17 @@ def test_controller_stops_active_speech_before_starting_voice_switch() -> None:
 
     worker = FakeSpeechWorker()
     manager = VoiceManager(object(), FakeLoader())
-    controller = Controller(speech_worker=worker, voice_manager=manager)
+    controller = Controller(
+        speech_worker=worker,
+        voice_manager=manager,
+        settings=TraySettings(voice="old.onnx"),
+        save_settings=lambda _settings: None,
+    )
     controller.set_voice(Path("old.onnx"), object())
-    controller.configure_runtime(choose_voice=lambda: Path("new.onnx"))
+    controller.configure_runtime(
+        choose_voice=lambda: Path("new.onnx"),
+        load_voice=lambda reference: (Path(reference), "new voice"),
+    )
     controller.state.playback = PlaybackState.SPEAKING
     controller.state.speech_generation = 8
 

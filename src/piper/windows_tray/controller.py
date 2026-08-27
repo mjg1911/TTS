@@ -100,6 +100,7 @@ class Controller:
         self._speech_worker = speech_worker
         self._capture_replaced_speech = False
         self._voice_manager = voice_manager
+        self._state_lock = threading.RLock()
 
     def configure_runtime(
         self,
@@ -156,38 +157,41 @@ class Controller:
             self._voice_manager = VoiceManager(self.state.voice, load_voice)
 
     def set_voice(self, path: Path, voice: object) -> None:
-        self.state.voice_path = path
-        self.state.voice = voice
-        if self._voice_manager is not None:
-            self._voice_manager.replace(voice)
+        with self._state_lock:
+            self.state.voice_path = path
+            self.state.voice = voice
+            if self._voice_manager is not None:
+                self._voice_manager.replace(voice)
 
     def install_voice(self, path: Path, voice: object, persist: bool = False) -> bool:
-        next_settings = self.state.settings
-        if persist:
-            if next_settings is None or self._save_settings is None:
-                raise RuntimeError("settings persistence is not configured")
-            next_settings = replace(next_settings, voice=str(path))
-            try:
-                self._save_settings(next_settings)
-            except (OSError, ValueError) as error:
-                self._log_error("Could not save Piper voice settings: %s" % error)
-                self._show_status("Piper voice settings could not be saved.")
-                return False
-        self.state.settings = next_settings
-        self.set_voice(path, voice)
-        return True
+        with self._state_lock:
+            next_settings = self.state.settings
+            if persist:
+                if next_settings is None or self._save_settings is None:
+                    raise RuntimeError("settings persistence is not configured")
+                next_settings = replace(next_settings, voice=str(path))
+                try:
+                    self._save_settings(next_settings)
+                except (OSError, ValueError) as error:
+                    self._log_error("Could not save Piper voice settings: %s" % error)
+                    self._show_status("Piper voice settings could not be saved.")
+                    return False
+            self.state.settings = next_settings
+            self.set_voice(path, voice)
+            return True
 
     def enqueue(self, command: Command) -> None:
         self._commands.put(command)
 
     def tray_snapshot(self) -> TraySnapshot:
-        return TraySnapshot(
-            can_stop=self.state.playback is PlaybackState.SPEAKING,
-            can_replay=(
-                self.state.last_text is not None and not self.state.shutting_down
-            ),
-            has_last_text=self.state.last_text is not None,
-        )
+        with self._state_lock:
+            return TraySnapshot(
+                can_stop=self.state.playback is PlaybackState.SPEAKING,
+                can_replay=(
+                    self.state.last_text is not None and not self.state.shutting_down
+                ),
+                has_last_text=self.state.last_text is not None,
+            )
 
     def enqueue_worker_event(self, event: SpeechEvent) -> None:
         """Queue worker output; worker callbacks must not touch controller state."""
@@ -199,11 +203,15 @@ class Controller:
         except Empty:
             return None
         if command.kind is CommandKind.EXIT:
-            self.state.shutting_down = True
-            self.state.playback = PlaybackState.SHUTTING_DOWN
+            with self._state_lock:
+                self._begin_shutdown()
         return command
 
     def handle(self, command: Command) -> None:
+        with self._state_lock:
+            self._handle(command)
+
+    def _handle(self, command: Command) -> None:
         if command.kind is CommandKind.ACTIVATE:
             self._show_status("Piper is already running.")
         elif command.kind is CommandKind.OPEN_LOG:
@@ -212,25 +220,14 @@ class Controller:
             selected = self._choose_voice()
             if selected is None:
                 return
-            if self._voice_manager is None:
-                self._log_error("Selected Piper voice could not be loaded: voice manager is not configured")
+            try:
+                candidate_path, candidate_voice = self._load_voice(str(selected))
+            except VOICE_SETUP_ERRORS as error:
+                self._log_error("Selected Piper voice could not be loaded: %s" % error)
                 self._show_status("The selected Piper voice model could not be loaded.")
                 return
             self._stop_speech()
-            self.state.voice_generation += 1
-            generation = self.state.voice_generation
-            self._voice_manager.begin_switch(
-                str(selected),
-                generation,
-                lambda event: self.enqueue(
-                    Command(
-                        CommandKind.VOICE_SWITCH_SUCCEEDED
-                        if event.success
-                        else CommandKind.VOICE_SWITCH_FAILED,
-                        event,
-                    )
-                ),
-            )
+            self.install_voice(candidate_path, candidate_voice, persist=True)
         elif command.kind is CommandKind.CAPTURE_REQUEST:
             self._request_capture()
         elif command.kind in (CommandKind.CAPTURE_SUCCEEDED, CommandKind.CAPTURE_FAILED):
@@ -263,8 +260,7 @@ class Controller:
                 "Piper hotkeys stopped unexpectedly; hotkeys are unavailable."
             )
         elif command.kind is CommandKind.EXIT:
-            self.state.shutting_down = True
-            self.state.playback = PlaybackState.SHUTTING_DOWN
+            self._begin_shutdown()
             if self._speech_worker is not None:
                 self._speech_worker.shutdown()
             for cleanup in (self._stop_tray, self._close_instance, self._quit_root):
@@ -379,6 +375,8 @@ class Controller:
     def _handle_worker_event(self, event: object) -> None:
         if not isinstance(event, SpeechEvent):
             return
+        if self.state.shutting_down:
+            return
         if event.generation != self.state.speech_generation:
             return
         if event.kind is SpeechEventKind.STARTED:
@@ -392,6 +390,12 @@ class Controller:
             if event.error:
                 self._log_error(event.error)
             self._show_status("Speech playback failed.")
+
+    def _begin_shutdown(self) -> None:
+        if not self.state.shutting_down:
+            self.state.shutting_down = True
+            self.state.speech_generation += 1
+        self.state.playback = PlaybackState.SHUTTING_DOWN
 
     def request_hotkey_change(self, requested: str) -> bool:
         if self._hotkeys is None:

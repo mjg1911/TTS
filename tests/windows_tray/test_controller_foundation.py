@@ -1,10 +1,13 @@
 from pathlib import Path
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from piper.windows_tray.commands import Command, CommandKind
-from piper.windows_tray.controller import Controller
+from piper.windows_tray.controller import Controller, PlaybackState
+from piper.windows_tray.speech import SpeechEvent, SpeechEventKind
 
 
 def test_exit_state_changes_only_when_controller_drains_command() -> None:
@@ -93,3 +96,67 @@ def test_failed_voice_settings_save_retains_known_good_state() -> None:
     assert controller.state.voice_path == Path("old.onnx")
     assert controller.state.voice is old_voice
     assert statuses and errors
+
+
+def test_configure_voice_loads_candidate_synchronously_before_commit() -> None:
+    from piper.windows_tray.settings import TraySettings
+
+    old_voice = object()
+    new_voice = object()
+    controller = Controller(
+        settings=TraySettings(voice="old.onnx"), save_settings=lambda _settings: None
+    )
+    controller.set_voice(Path("old.onnx"), old_voice)
+    controller.configure_runtime(
+        choose_voice=lambda: Path("new.onnx"),
+        load_voice=lambda reference: (Path(reference), new_voice),
+    )
+
+    controller.handle(Command(CommandKind.CONFIGURE_VOICE))
+
+    assert controller.state.voice_path == Path("new.onnx")
+    assert controller.state.voice is new_voice
+    assert controller.state.settings.voice == "new.onnx"
+
+
+def test_tray_snapshot_waits_for_controller_state_lock() -> None:
+    controller = Controller()
+    started = threading.Event()
+    finished = threading.Event()
+
+    controller._state_lock.acquire()
+    try:
+        def read_snapshot() -> None:
+            started.set()
+            controller.tray_snapshot()
+            finished.set()
+
+        thread = threading.Thread(target=read_snapshot)
+        thread.start()
+        assert started.wait(timeout=1)
+        time.sleep(0.05)
+        assert not finished.is_set()
+    finally:
+        controller._state_lock.release()
+        thread.join(timeout=1)
+
+    assert finished.is_set()
+
+
+def test_shutdown_invalidates_generation_and_ignores_queued_worker_events() -> None:
+    controller = Controller()
+    controller.state.last_text = "saved"
+    controller.handle(Command(CommandKind.REPLAY_REQUEST))
+    generation = controller.state.speech_generation
+    controller.enqueue(Command(CommandKind.EXIT))
+
+    controller.handle(controller.drain_once())
+    controller.handle(
+        Command(
+            CommandKind.WORKER_EVENT,
+            SpeechEvent(SpeechEventKind.FINISHED, generation),
+        )
+    )
+
+    assert controller.state.playback is PlaybackState.SHUTTING_DOWN
+    assert controller.state.speech_generation > generation

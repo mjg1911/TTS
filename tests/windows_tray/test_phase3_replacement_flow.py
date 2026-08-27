@@ -3,7 +3,7 @@ from pathlib import Path
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import Controller, PlaybackState
 from piper.windows_tray.speech import SpeechEvent, SpeechEventKind
-from piper.windows_tray.voice_manager import VoiceManager, VoiceSwitchEvent
+from piper.windows_tray.voice_manager import VoiceManager
 from piper.windows_tray.settings import TraySettings
 
 
@@ -58,50 +58,28 @@ def test_second_hotkey_plays_only_new_selection_and_ignores_stale_worker_event()
     assert controller.state.playback is PlaybackState.SPEAKING
 
 
-def test_stale_voice_switch_success_and_failure_do_not_change_current_voice():
+def test_configure_voice_switches_synchronously_to_each_loaded_candidate():
     old_voice = object()
     new_voice = object()
-    manager = VoiceManager(old_voice, lambda _reference: (Path("new.onnx"), new_voice))
     saved = []
     statuses = []
     controller = Controller(
         settings=TraySettings(voice="old.onnx"),
         save_settings=saved.append,
-        voice_manager=manager,
     )
     controller.set_voice(Path("old.onnx"), old_voice)
     controller.configure_runtime(
         choose_voice=lambda: Path("new.onnx"),
+        load_voice=lambda _reference: (Path("new.onnx"), new_voice),
         show_status=statuses.append,
     )
 
     controller.handle(Command(CommandKind.CONFIGURE_VOICE))
-    first_generation = controller.state.voice_generation
     controller.handle(Command(CommandKind.CONFIGURE_VOICE))
-    second_generation = controller.state.voice_generation
 
-    controller.handle(
-        Command(
-            CommandKind.VOICE_SWITCH_SUCCEEDED,
-            VoiceSwitchEvent(second_generation, True, Path("new.onnx"), new_voice),
-        )
-    )
-    controller.handle(
-        Command(
-            CommandKind.VOICE_SWITCH_SUCCEEDED,
-            VoiceSwitchEvent(first_generation, True, Path("stale.onnx"), object()),
-        )
-    )
-    controller.handle(
-        Command(
-            CommandKind.VOICE_SWITCH_FAILED,
-            VoiceSwitchEvent(first_generation, False, error=ValueError("stale")),
-        )
-    )
-
-    assert manager.current() is new_voice
     assert controller.state.voice_path == Path("new.onnx")
-    assert len(saved) == 1
+    assert controller.state.voice is new_voice
+    assert len(saved) == 2
     assert statuses == []
 
 
