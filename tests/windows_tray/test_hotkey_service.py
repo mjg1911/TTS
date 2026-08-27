@@ -19,6 +19,7 @@ class FakeHotkeyApi:
         self.fail_vk = None
         self.calls = []
         self.messages = queue.Queue()
+        self.fail_post_quit = False
 
     def register(self, hotkey_id: int, modifiers: int, vk: int) -> bool:
         self.calls.append(("register", hotkey_id, modifiers, vk, threading.get_ident()))
@@ -35,6 +36,9 @@ class FakeHotkeyApi:
         message, wparam = self.messages.get()
         return 1, message, wparam
 
+    def ensure_message_queue(self) -> None:
+        self.calls.append(("ensure_queue", threading.get_ident()))
+
     def post_command(self, thread_id: int) -> bool:
         self.calls.append(("post_command", thread_id, threading.get_ident()))
         self.messages.put((0x8001, 0))
@@ -42,6 +46,9 @@ class FakeHotkeyApi:
 
     def post_quit(self, thread_id: int) -> bool:
         self.calls.append(("post_quit", thread_id, threading.get_ident()))
+        if self.fail_post_quit:
+            self.fail_post_quit = False
+            return False
         self.messages.put((WM_QUIT, 0))
         return True
 
@@ -114,9 +121,50 @@ def test_stop_unregisters_both_capture_ids_and_posts_quit() -> None:
 
     assert api.registered == {}
     assert [call[0:2] for call in api.calls[-3:]] == [
+        ("unregister", CAPTURE_IDS[0]),
         ("unregister", CAPTURE_IDS[1]),
         ("unregister", CANCEL_ID),
     ]
+
+
+def test_message_queue_is_initialized_before_hotkey_registration() -> None:
+    api = FakeHotkeyApi()
+    manager = HotkeyManager(api)
+
+    manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
+    manager.stop()
+
+    queue_index = next(index for index, call in enumerate(api.calls) if call[0] == "ensure_queue")
+    first_register_index = next(index for index, call in enumerate(api.calls) if call[0] == "register")
+    assert queue_index < first_register_index
+
+
+def test_production_lifecycle_does_not_fallback_after_message_thread_stops() -> None:
+    api = FakeHotkeyApi()
+    manager = HotkeyManager(api)
+    manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
+    api.post_quit(manager._message_thread_id)
+    manager._message_thread.join(timeout=1.0)
+    before = list(api.calls)
+
+    assert manager.rebind(parse_hotkey("ctrl+q")) is False
+    assert manager.reregister() is False
+    assert api.calls == before
+
+
+def test_stop_surfaces_quit_failure_and_retains_live_thread() -> None:
+    api = FakeHotkeyApi()
+    manager = HotkeyManager(api)
+    manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
+    thread = manager._message_thread
+    api.fail_post_quit = True
+
+    with pytest.raises(OSError, match="failed to stop hotkey message thread"):
+        manager.stop()
+
+    assert manager._message_thread is thread
+    assert thread.is_alive()
+    manager.stop()
 
 
 def test_production_lifecycle_mutations_run_on_message_thread() -> None:

@@ -13,6 +13,7 @@ CANCEL_ID = 2
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 WM_COMMAND = 0x8001
+PM_NOREMOVE = 0x0000
 
 Callback = Callable[[], None]
 
@@ -50,6 +51,14 @@ class _Win32HotkeyApi:
                 ctypes.c_uint,
             ]
             self._user32.GetMessageW.restype = ctypes.c_int
+            self._user32.PeekMessageW.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+            ]
+            self._user32.PeekMessageW.restype = ctypes.c_int
             self._user32.PostThreadMessageW.argtypes = [
                 ctypes.c_uint,
                 ctypes.c_uint,
@@ -81,6 +90,9 @@ class _Win32HotkeyApi:
         result = self._load_user32().GetMessageW(ctypes.byref(msg), None, 0, 0)
         return result, int(msg.message), int(msg.wparam)
 
+    def ensure_message_queue(self) -> None:
+        self._load_user32().PeekMessageW(None, None, 0, 0, PM_NOREMOVE)
+
     def post_quit(self, thread_id: int) -> bool:
         return bool(self._load_user32().PostThreadMessageW(thread_id, WM_QUIT, 0, 0))
 
@@ -102,13 +114,14 @@ class HotkeyManager:
         self._cancel_registered = False
         self._lock = threading.RLock()
         self._commands = queue.Queue()
+        self._direct_test_mode = False
 
     def _register_capture(self, hotkey_id: int, spec: Any) -> bool:
         return self._api.register(
             hotkey_id, spec.modifiers | MOD_NOREPEAT, spec.vk
         )
 
-    def register_for_test(self, capture_spec: Any) -> None:
+    def _register_capture_set(self, capture_spec: Any) -> None:
         with self._lock:
             if self.capture_spec is not None:
                 return
@@ -120,6 +133,10 @@ class HotkeyManager:
                     raise OSError("F8 registration failed")
                 self._cancel_registered = True
             self.capture_spec = capture_spec
+
+    def register_for_test(self, capture_spec: Any) -> None:
+        self._direct_test_mode = True
+        self._register_capture_set(capture_spec)
 
     def rebind(self, candidate: Any) -> bool:
         def command() -> bool:
@@ -138,18 +155,14 @@ class HotkeyManager:
                 self.capture_spec = candidate
                 return True
 
-        if self._message_thread_is_running():
-            return bool(self._run_on_message_thread(command))
-        with self._lock:
-            if self.capture_spec is None:
-                return False
-            inactive = CAPTURE_IDS[1] if self._active_capture_id == CAPTURE_IDS[0] else CAPTURE_IDS[0]
-            if not self._register_capture(inactive, candidate):
-                return False
-            self._api.unregister(self._active_capture_id)
-            self._active_capture_id = inactive
-            self.capture_spec = candidate
-            return True
+        try:
+            if self._message_thread_is_running():
+                return bool(self._run_on_message_thread(command))
+            if self._direct_test_mode:
+                return bool(command())
+            return False
+        except OSError:
+            return False
 
     def reregister(self) -> bool:
         def command() -> bool:
@@ -168,22 +181,14 @@ class HotkeyManager:
                 self._cancel_registered = True
                 return True
 
-        if self._message_thread_is_running():
-            return bool(self._run_on_message_thread(command))
-        with self._lock:
-            if self.capture_spec is None:
-                return False
-            for hotkey_id in CAPTURE_IDS:
-                self._api.unregister(hotkey_id)
-            self._api.unregister(CANCEL_ID)
-            self._cancel_registered = False
-            if not self._register_capture(self._active_capture_id, self.capture_spec):
-                return False
-            if not self._api.register(CANCEL_ID, MOD_NOREPEAT, VK_F8):
-                self._api.unregister(self._active_capture_id)
-                return False
-            self._cancel_registered = True
-            return True
+        try:
+            if self._message_thread_is_running():
+                return bool(self._run_on_message_thread(command))
+            if self._direct_test_mode:
+                return bool(command())
+            return False
+        except OSError:
+            return False
 
     def dispatch_message(
         self,
@@ -210,13 +215,17 @@ class HotkeyManager:
         return thread is not None and thread.is_alive()
 
     def _run_on_message_thread(self, callback: Callable[[], Any]) -> Any:
-        if threading.get_ident() == self._message_thread.ident:
+        thread = self._message_thread
+        if thread is None or not thread.is_alive():
+            raise OSError("hotkey message thread is unavailable")
+        if threading.get_ident() == thread.ident:
             return callback()
         command = _MessageCommand(callback)
         self._commands.put(command)
         if not self._api.post_command(self._message_thread_id):
             raise OSError("failed to wake hotkey message thread")
-        command.completed.wait()
+        if not command.completed.wait(timeout=1.0):
+            raise OSError("hotkey message thread did not complete command")
         if command.error is not None:
             raise command.error
         return command.result
@@ -226,7 +235,8 @@ class HotkeyManager:
         capture_spec = self.capture_spec
         self.capture_spec = None
         try:
-            self.register_for_test(capture_spec)
+            self._api.ensure_message_queue()
+            self._register_capture_set(capture_spec)
         except BaseException as exc:
             self._registration_error = exc
             self._ready.set()
@@ -258,6 +268,7 @@ class HotkeyManager:
             self._on_cancel = on_cancel
             self._ready.clear()
             self._registration_error = None
+            self._direct_test_mode = False
             self._message_thread = threading.Thread(
                 target=self._message_loop, name="piper-hotkeys", daemon=True
             )
@@ -282,10 +293,20 @@ class HotkeyManager:
         thread = self._message_thread
         if thread is not None and thread.is_alive():
             self._run_on_message_thread(command)
-            self._api.post_quit(self._message_thread_id)
-        else:
+            if not self._api.post_quit(self._message_thread_id):
+                raise OSError("failed to stop hotkey message thread")
+        elif self._direct_test_mode:
             command()
+        elif thread is not None:
+            raise OSError("hotkey message thread is unavailable")
+        else:
+            return
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1.0)
+            if thread.is_alive():
+                raise OSError("hotkey message thread did not stop")
+        elif thread is threading.current_thread():
+            raise OSError("cannot stop hotkey message thread from its owner thread")
         with self._lock:
             self._message_thread = None
+            self._direct_test_mode = False
