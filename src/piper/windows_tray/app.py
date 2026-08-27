@@ -14,6 +14,16 @@ from .ui import TkUi
 from .voice_config import load_voice_candidate, resolve_voice_reference
 
 
+_VOICE_SETUP_ERRORS = (
+    FileNotFoundError,
+    OSError,
+    ValueError,
+    KeyError,
+    TypeError,
+    RuntimeError,
+)
+
+
 def _voice_data_dirs() -> Iterable[Path]:
     local_appdata = os.environ.get("LOCALAPPDATA")
     directories = [Path.cwd()]
@@ -47,35 +57,37 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         instance.close()
         return 0
 
-    settings_result = load_settings()
-    logger = configure_logging(settings_result.settings.log_level)
-    ui = TkUi()
-    controller = Controller()
-    data_dirs = tuple(_voice_data_dirs())
-    settings = settings_result.settings
     tray = None
     tray_stopped = False
+    instance_closed = False
+    ui = None
+    logger = None
 
     try:
+        settings_result = load_settings()
+        logger = configure_logging(settings_result.settings.log_level)
+        ui = TkUi()
+        controller = Controller()
+        data_dirs = tuple(_voice_data_dirs())
+        settings = settings_result.settings
+
         try:
             current_path, current_voice = _load_configured_voice(settings, data_dirs)
-        except Exception as error:
+        except _VOICE_SETUP_ERRORS as error:
             logger.warning("Configured voice could not be loaded: %s", error)
             selected = ui.choose_voice_model()
             if selected is None:
                 logger.error("No Piper voice model selected")
-                ui.close()
-                instance.close()
                 return 1
             try:
                 current_path, current_voice = load_voice_candidate(
                     str(selected), data_dirs
                 )
-            except Exception as candidate_error:
-                logger.error("Selected Piper voice could not be loaded: %s", candidate_error)
+            except _VOICE_SETUP_ERRORS as candidate_error:
+                logger.error(
+                    "Selected Piper voice could not be loaded: %s", candidate_error
+                )
                 ui.show_status("The selected Piper voice model could not be loaded.")
-                ui.close()
-                instance.close()
                 return 1
             _persist_voice(settings, current_path)
 
@@ -83,7 +95,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         tray = TrayIcon(icon_path, controller.enqueue)
 
         def pump() -> None:
-            nonlocal current_path, current_voice, settings, tray_stopped
+            nonlocal current_path, current_voice, settings, tray_stopped, instance_closed
             command = controller.drain_once()
             if command is not None:
                 if command.kind is CommandKind.ACTIVATE:
@@ -97,8 +109,10 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                             candidate_path, candidate_voice = load_voice_candidate(
                                 str(selected), data_dirs
                             )
-                        except Exception as error:
-                            logger.error("Selected Piper voice could not be loaded: %s", error)
+                        except _VOICE_SETUP_ERRORS as error:
+                            logger.error(
+                                "Selected Piper voice could not be loaded: %s", error
+                            )
                             ui.show_status(
                                 "The selected Piper voice model could not be loaded."
                             )
@@ -115,6 +129,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                     tray.stop()
                     tray_stopped = True
                     instance.close()
+                    instance_closed = True
                     ui.root.quit()
 
             if not controller.state.shutting_down:
@@ -128,13 +143,16 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         ui.root.mainloop()
         return 0
     except Exception:
-        logger.exception("Piper tray application stopped unexpectedly")
+        if logger is not None:
+            logger.exception("Piper tray application stopped unexpectedly")
         raise
     finally:
         if tray is not None and not tray_stopped:
             tray.stop()
-        instance.close()
-        try:
-            ui.root.destroy()
-        except Exception:
-            pass
+        if not instance_closed:
+            instance.close()
+        if ui is not None:
+            try:
+                ui.root.destroy()
+            except Exception:
+                pass
