@@ -97,6 +97,9 @@ class _Win32PowerApi:
         ]
         self._user32.DefWindowProcW.restype = ctypes.c_ssize_t
 
+        self._user32.DestroyWindow.argtypes = [wintypes.HWND]
+        self._user32.DestroyWindow.restype = wintypes.BOOL
+
         self._user32.PostQuitMessage.argtypes = [ctypes.c_int]
         self._user32.PostQuitMessage.restype = None
 
@@ -125,17 +128,16 @@ class _Win32PowerApi:
         ]
         self._user32.UnregisterClassW.restype = wintypes.BOOL
 
-    def create_hidden_window(self, on_resume: Callable[[], None]) -> int:
-        class_name = f"PiperTrayPowerBroadcast_{id(self):x}"
-        hinstance = self._kernel32.GetModuleHandleW(None)
-        if not hinstance:
-            raise ctypes.WinError(ctypes.get_last_error())
-
+    def _make_wndproc(self, on_resume: Callable[[], None]):
         @self._WNDPROC
         def wndproc(hwnd, message, w_param, l_param):
             if message == WM_POWERBROADCAST and is_resume_event(int(w_param)):
                 on_resume()
                 return 1
+
+            if message == WM_CLOSE:
+                self._user32.DestroyWindow(hwnd)
+                return 0
 
             if message == WM_DESTROY:
                 self._user32.PostQuitMessage(0)
@@ -147,6 +149,16 @@ class _Win32PowerApi:
                 w_param,
                 l_param,
             )
+
+        return wndproc
+
+    def create_hidden_window(self, on_resume: Callable[[], None]) -> int:
+        class_name = f"PiperTrayPowerBroadcast_{id(self):x}"
+        hinstance = self._kernel32.GetModuleHandleW(None)
+        if not hinstance:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        wndproc = self._make_wndproc(on_resume)
 
         window_class = self._WNDCLASSW()
         window_class.lpfnWndProc = wndproc
