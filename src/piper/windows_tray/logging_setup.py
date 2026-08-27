@@ -22,6 +22,8 @@ def configure_logging(level: str, path: Optional[Path] = None) -> Logger:
     )
     logger = getLogger("piper.windows_tray")
     logger.setLevel(getattr(logging, level))
+    for existing_handler in logger.handlers:
+        existing_handler.close()
     logger.handlers.clear()
     logger.addHandler(handler)
     logger.propagate = False
