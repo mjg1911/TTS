@@ -111,3 +111,43 @@ Unrelated existing untracked files were not modified or staged.
 
 - The focused pytest suite remains unavailable because pytest is not installed in the available runtime.
 - Real Win32 API execution remains untested in this non-Windows environment.
+
+## Re-review-fix addendum (2026-08-27)
+
+### Findings addressed
+
+- `start_activation_watch()` now starts the watcher while holding `_state_lock`, so `close()` cannot observe an unstarted thread and call `join()` on it.
+- `acquire()` now rejects calls after close begins, before creating any event or mutex handles.
+- Added deterministic delayed-thread-start coverage and post-close acquisition coverage while preserving the existing wake/join, callback, prototype, and public-interface behavior.
+- Concurrent close waiting was kept outside `_state_lock` so cleanup can complete without a lock-order deadlock.
+
+### Re-review-fix commit
+
+- `6e4d793 fix: close Task 4 lifecycle races`
+
+### Exact verification results
+
+1. `C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest tests\windows_tray\test_single_instance.py -v`
+
+   Output: `No module named pytest`; exit code 1.
+
+2. Isolated deterministic race and post-close acquisition smoke check using the bundled Python runtime.
+
+   Output: `race/acquire smoke passed`; exit code 0.
+
+3. `C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m py_compile src\piper\windows_tray\single_instance.py tests\windows_tray\test_single_instance.py`
+
+   Output: no output; exit code 0.
+
+4. `git diff --check`
+
+   Output: no whitespace errors; exit code 0.
+
+5. Post-commit `git show --stat --oneline --summary HEAD`
+
+   Output confirmed `6e4d793 fix: close Task 4 lifecycle races` with only `src/piper/windows_tray/single_instance.py` and `tests/windows_tray/test_single_instance.py` changed.
+
+### Re-review-fix concerns
+
+- The focused pytest suite remains unavailable because pytest is not installed in the available runtime.
+- Real Win32 API execution remains untested in this non-Windows environment.
