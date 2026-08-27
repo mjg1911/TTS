@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from piper.windows_tray.commands import CommandKind
+from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import Controller
 
 
@@ -51,6 +51,7 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
 
     commands = []
     tray = tray_icon.TrayIcon(tmp_path / "icon.png", commands.append)
+    tray.start()
     for item in tray._icon.menu.items:
         item.action(None, item)
 
@@ -110,6 +111,9 @@ def test_tray_update_menu_delegates_to_pystray(monkeypatch, tmp_path: Path) -> N
         def __init__(self, *_args, **_kwargs):
             pass
 
+        def run_detached(self):
+            pass
+
         def update_menu(self):
             calls.append("update")
 
@@ -128,6 +132,7 @@ def test_tray_update_menu_delegates_to_pystray(monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr(tray_icon, "_load_dependencies", lambda: (FakePystray, FakeImageApi))
     tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
 
+    tray.start()
     tray.update_menu()
 
     assert calls == ["update"]
@@ -199,6 +204,24 @@ class FakeTray:
     def stop(self):
         self.events.append("stop")
 
+    def ensure_visible(self):
+        self.events.append("ensure")
+
+
+class FakePowerListener:
+    last = None
+
+    def __init__(self):
+        FakePowerListener.last = self
+        self.callback = None
+        self.stop_calls = 0
+
+    def start(self, callback):
+        self.callback = callback
+
+    def stop(self):
+        self.stop_calls += 1
+
 
 def _patch_primary_app(monkeypatch, events):
     import piper.windows_tray.app as app
@@ -232,7 +255,35 @@ def _patch_primary_app(monkeypatch, events):
     )
     tray = FakeTray(Path("icon.png"), lambda command: None)
     monkeypatch.setattr(app, "TrayIcon", lambda path, enqueue: events.append("tray") or tray)
+    monkeypatch.setattr(app, "PowerBroadcastListener", FakePowerListener)
     return app, instance, ui, tray
+
+
+def test_power_resume_callback_enqueues_system_resume_and_stops(monkeypatch):
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+
+    controller_holder = []
+    original_controller = app.Controller
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: controller_holder.append(
+            original_controller(*args, **kwargs)
+        )
+        or controller_holder[-1],
+    )
+
+    ui.root.mainloop = lambda: None
+    assert app.run_app([]) == 0
+
+    controller = controller_holder[0]
+    power = FakePowerListener.last
+    power.callback()
+    command = controller.drain_once()
+
+    assert command.kind is CommandKind.SYSTEM_RESUME
+    assert power.stop_calls == 1
 
 
 def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> None:

@@ -11,7 +11,8 @@ from .capture import SelectionCapture
 from .clipboard import Win32Clipboard
 from .hotkey import parse_hotkey
 from .hotkey_service import HotkeyManager
-from .logging_setup import configure_logging, log_path
+from .logging_setup import configure_logging, log_exception_safe, log_path
+from .power_events import PowerBroadcastListener
 from piper.audio_playback import AudioPlayer
 from .speech import SpeechWorker
 from .settings import TraySettings, load_settings, save_settings
@@ -79,6 +80,8 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
     hotkeys_stopped = False
     speech_worker = None
     speech_stopped = False
+    power_listener = None
+    power_stopped = False
     ui = None
     logger = None
 
@@ -104,6 +107,22 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                     logger.error("Piper instance could not be closed cleanly: %s", error)
             finally:
                 instance_closed = True
+
+    def stop_power_listener() -> None:
+        nonlocal power_stopped
+        if power_listener is not None and not power_stopped:
+            try:
+                power_listener.stop()
+            except Exception as error:
+                if logger is not None:
+                    log_exception_safe(
+                        logger,
+                        "power listener stop failed",
+                        error,
+                        stage="shutdown",
+                    )
+            finally:
+                power_stopped = True
 
     try:
         if instance.acquire() is InstanceRole.SECONDARY:
@@ -195,6 +214,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             show_status=ui.show_status,
             log_error=logger.error,
             open_log=lambda: os.startfile(log_path().parent),
+            ensure_tray_visible=tray.ensure_visible,
             stop_tray=stop_tray,
             close_instance=close_instance,
             quit_root=ui.root.quit,
@@ -239,6 +259,12 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                 ui.show_status(
                     user_message(UserError.HOTKEY_CONFLICT)
                 )
+        power_listener = PowerBroadcastListener()
+        power_listener.start(
+            lambda: controller.enqueue(
+                Command(CommandKind.SYSTEM_RESUME)
+            )
+        )
         ui.root.after(25, pump)
         ui.root.mainloop()
         return 0
@@ -247,6 +273,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             logger.exception("Piper tray application stopped unexpectedly")
         raise
     finally:
+        stop_power_listener()
         if tray is not None and not tray_stopped:
             stop_tray()
         if speech_worker is not None and not speech_stopped:

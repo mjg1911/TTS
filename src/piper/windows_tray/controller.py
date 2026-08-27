@@ -91,6 +91,7 @@ class Controller:
         self._show_status: Callable[[str], None] = lambda _message: None
         self._log_error: Callable[[str], None] = lambda _message: None
         self._open_log: Callable[[], None] = lambda: None
+        self._ensure_tray_visible: Callable[[], None] = lambda: None
         self._stop_tray: Callable[[], None] = lambda: None
         self._close_instance: Callable[[], None] = lambda: None
         self._quit_root: Callable[[], None] = lambda: None
@@ -115,6 +116,7 @@ class Controller:
         show_status: Optional[Callable[[str], None]] = None,
         log_error: Optional[Callable[[str], None]] = None,
         open_log: Optional[Callable[[], None]] = None,
+        ensure_tray_visible: Optional[Callable[[], None]] = None,
         stop_tray: Optional[Callable[[], None]] = None,
         close_instance: Optional[Callable[[], None]] = None,
         quit_root: Optional[Callable[[], None]] = None,
@@ -137,6 +139,8 @@ class Controller:
             self._log_error = log_error
         if open_log is not None:
             self._open_log = open_log
+        if ensure_tray_visible is not None:
+            self._ensure_tray_visible = ensure_tray_visible
         if stop_tray is not None:
             self._stop_tray = stop_tray
         if close_instance is not None:
@@ -210,9 +214,6 @@ class Controller:
             command = self._commands.get_nowait()
         except Empty:
             return None
-        if command.kind is CommandKind.EXIT:
-            with self._state_lock:
-                self._begin_shutdown()
         return command
 
     def handle(self, command: Command) -> None:
@@ -267,6 +268,8 @@ class Controller:
             self._show_status(
                 "Piper hotkeys stopped unexpectedly; hotkeys are unavailable."
             )
+        elif command.kind is CommandKind.SYSTEM_RESUME:
+            self._recover_from_resume()
         elif command.kind is CommandKind.EXIT:
             self._begin_shutdown()
             if self._speech_worker is not None:
@@ -276,6 +279,44 @@ class Controller:
                     cleanup()
                 except Exception as error:
                     self._log_error("Piper cleanup step failed: %s" % error)
+
+    def _recover_from_resume(self) -> None:
+        if self.state.shutting_down:
+            return
+
+        if self.state.capture_in_progress:
+            self.state.capture_generation += 1
+            self.state.capture_in_progress = False
+            self._capture_pending = False
+
+        if self.state.playback is PlaybackState.SPEAKING:
+            active = self.state.speech_generation
+            if self._speech_worker is not None:
+                self._speech_worker.cancel_active(active)
+
+            self.state.speech_generation += 1
+            self.state.playback = PlaybackState.STOPPED
+
+        self._ensure_tray_visible()
+
+        restored = (
+            self._hotkeys is not None
+            and bool(self._hotkeys.reregister())
+        )
+
+        if not restored:
+            self._show_status(user_message(UserError.HOTKEY_CONFLICT))
+
+        hotkey = "unavailable"
+        if self._hotkeys is not None:
+            spec = getattr(self._hotkeys, "capture_spec", None)
+            if spec is not None:
+                hotkey = getattr(spec, "canonical", "unavailable")
+
+        self._log_info(
+            "system resume playback=%s hotkey=%s"
+            % (self.state.playback.name, hotkey)
+        )
 
     def _request_capture(self) -> None:
         if self.state.playback is PlaybackState.SPEAKING:
