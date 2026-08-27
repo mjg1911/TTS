@@ -1,3 +1,6 @@
+import queue
+import threading
+
 import pytest
 
 from piper.windows_tray.hotkey import MOD_NOREPEAT, VK_F8, parse_hotkey
@@ -15,20 +18,31 @@ class FakeHotkeyApi:
         self.registered = {}
         self.fail_vk = None
         self.calls = []
+        self.messages = queue.Queue()
 
     def register(self, hotkey_id: int, modifiers: int, vk: int) -> bool:
-        self.calls.append(("register", hotkey_id, modifiers, vk))
+        self.calls.append(("register", hotkey_id, modifiers, vk, threading.get_ident()))
         if vk == self.fail_vk:
             return False
         self.registered[hotkey_id] = (modifiers, vk)
         return True
 
     def unregister(self, hotkey_id: int) -> None:
-        self.calls.append(("unregister", hotkey_id))
+        self.calls.append(("unregister", hotkey_id, threading.get_ident()))
         self.registered.pop(hotkey_id, None)
 
+    def get_message(self):
+        message, wparam = self.messages.get()
+        return 1, message, wparam
+
+    def post_command(self, thread_id: int) -> bool:
+        self.calls.append(("post_command", thread_id, threading.get_ident()))
+        self.messages.put((0x8001, 0))
+        return True
+
     def post_quit(self, thread_id: int) -> bool:
-        self.calls.append(("post_quit", thread_id))
+        self.calls.append(("post_quit", thread_id, threading.get_ident()))
+        self.messages.put((WM_QUIT, 0))
         return True
 
 
@@ -103,3 +117,34 @@ def test_stop_unregisters_both_capture_ids_and_posts_quit() -> None:
         ("unregister", CAPTURE_IDS[1]),
         ("unregister", CANCEL_ID),
     ]
+
+
+def test_production_lifecycle_mutations_run_on_message_thread() -> None:
+    api = FakeHotkeyApi()
+    manager = HotkeyManager(api)
+    caller_thread = threading.get_ident()
+
+    manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
+    manager.rebind(parse_hotkey("ctrl+q"))
+    manager.reregister()
+    manager.stop()
+
+    mutation_calls = [call for call in api.calls if call[0] in {"register", "unregister"}]
+    mutation_threads = {call[-1] for call in mutation_calls}
+    assert len(mutation_threads) == 1
+    assert caller_thread not in mutation_threads
+
+    rebind_calls = mutation_calls[2:4]
+    assert rebind_calls[0][0:2] == ("register", CAPTURE_IDS[1])
+    assert rebind_calls[1][0:2] == ("unregister", CAPTURE_IDS[0])
+
+
+def test_production_reregister_rolls_back_on_f8_conflict() -> None:
+    api = FakeHotkeyApi()
+    manager = HotkeyManager(api)
+    manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
+    api.fail_vk = VK_F8
+
+    assert manager.reregister() is False
+    assert api.registered == {}
+    manager.stop()
