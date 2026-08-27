@@ -7,7 +7,8 @@ class UserError(Enum):
     NO_TEXT = auto()
     HOTKEY_CONFLICT = auto()
     HOTKEY_INVALID = auto()
-    VOICE_LOAD = auto()
+    VOICE_LOAD_REPLACEMENT = auto()
+    VOICE_LOAD_STARTUP = auto()
     SYNTHESIS = auto()
     PLAYBACK = auto()
     CLIPBOARD = auto()
@@ -21,10 +22,11 @@ USER_MESSAGES = {
     UserError.HOTKEY_INVALID: (
         "That hotkey is not valid. Choose another combination."
     ),
-    UserError.VOICE_LOAD: (
+    UserError.VOICE_LOAD_REPLACEMENT: (
         "The selected voice could not be loaded. "
         "The previous voice is still active."
     ),
+    UserError.VOICE_LOAD_STARTUP: "The selected voice could not be loaded.",
     UserError.SYNTHESIS: (
         "Speech could not be generated. See the Piper log for details."
     ),

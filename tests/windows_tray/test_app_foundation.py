@@ -600,7 +600,7 @@ def test_failed_voice_candidate_does_not_persist_settings(monkeypatch) -> None:
     assert app.run_app([]) == 1
     assert saved == []
     assert ui.statuses == [
-        "The selected voice could not be loaded. The previous voice is still active."
+        "The selected voice could not be loaded."
     ]
     assert raw_loader_error not in ui.statuses
 

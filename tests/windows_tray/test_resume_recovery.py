@@ -106,7 +106,7 @@ def test_resume_orders_invalidation_and_cancellation_before_resource_recovery() 
     controller.handle(Command(CommandKind.SYSTEM_RESUME))
 
     assert events == ["cancel", "ensure", "reregister"]
-    assert controller.state.capture_in_progress is False
+    assert controller.state.capture_in_progress is True
 
 
 def test_resume_while_idle_stays_idle() -> None:
@@ -130,7 +130,7 @@ def test_resume_invalidates_capture_started_before_suspend() -> None:
 
     controller.handle(Command(CommandKind.SYSTEM_RESUME))
 
-    assert controller.state.capture_in_progress is False
+    assert controller.state.capture_in_progress is True
     assert controller.state.capture_generation == stale_generation + 1
 
     controller.handle(
@@ -147,6 +147,39 @@ def test_resume_invalidates_capture_started_before_suspend() -> None:
     )
 
     assert speech.submitted == []
+    assert controller.state.capture_in_progress is False
+
+
+def test_resume_serializes_new_capture_until_stale_worker_finishes() -> None:
+    jobs = []
+    controller, _speech, _hotkeys, _tray_calls, _statuses = make_controller()
+    controller.configure_runtime(capture_submit=jobs.append)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    stale_generation = controller.state.capture_generation
+    assert len(jobs) == 1
+
+    controller.handle(Command(CommandKind.SYSTEM_RESUME))
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+
+    assert controller.state.capture_in_progress is True
+    assert controller.state.capture_generation == stale_generation + 2
+    assert len(jobs) == 1
+
+    jobs[0]()
+    stale_completion = controller.drain_once()
+    assert stale_completion is not None
+    controller.handle(stale_completion)
+
+    assert controller.state.capture_in_progress is True
+    assert len(jobs) == 2
+
+    jobs[1]()
+    current_completion = controller.drain_once()
+    assert current_completion is not None
+    controller.handle(current_completion)
+
+    assert controller.state.capture_in_progress is False
 
 
 def test_resume_hotkey_conflict_keeps_controller_alive() -> None:

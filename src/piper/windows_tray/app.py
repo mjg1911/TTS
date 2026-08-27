@@ -217,7 +217,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                 logger.error(
                     "Selected Piper voice could not be loaded: %s", candidate_error
                 )
-                ui.show_status(user_message(UserError.VOICE_LOAD))
+                ui.show_status(user_message(UserError.VOICE_LOAD_STARTUP))
                 return 1
             if not controller.install_voice(selected_path, selected_voice, persist=True):
                 return 1

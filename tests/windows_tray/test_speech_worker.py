@@ -201,6 +201,56 @@ def test_playback_failure_emits_generic_failed_event():
         worker.shutdown()
 
 
+def test_player_factory_failure_is_reported_as_playback_failure():
+    events = []
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+
+    def player_factory(_sample_rate):
+        raise RuntimeError("ffplay unavailable")
+
+    worker = SpeechWorker(lambda: voice, events.append, player_factory)
+
+    try:
+        worker.submit(SpeechRequest(41, "hello"))
+        event = wait_for_event(events, SpeechEventKind.FAILED, 41)
+        assert event.error == "Speech playback failed."
+        assert event.failure_phase == "playback"
+    finally:
+        worker.shutdown()
+
+
+def test_player_context_entry_failure_is_reported_as_playback_failure():
+    events = []
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+
+    class BrokenPlayerContext:
+        def __enter__(self):
+            raise OSError("audio backend unavailable")
+
+        def __exit__(self, *_args):
+            return None
+
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: BrokenPlayerContext(),
+    )
+
+    try:
+        worker.submit(SpeechRequest(42, "hello"))
+        event = wait_for_event(events, SpeechEventKind.FAILED, 42)
+        assert event.error == "Speech playback failed."
+        assert event.failure_phase == "playback"
+    finally:
+        worker.shutdown()
+
+
 def test_audio_player_broken_pipe_is_reported_as_playback_failure():
     events = []
     entered = threading.Event()

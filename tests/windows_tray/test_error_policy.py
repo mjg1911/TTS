@@ -15,9 +15,12 @@ def test_user_error_messages_are_stable() -> None:
     assert user_message(UserError.HOTKEY_INVALID) == (
         "That hotkey is not valid. Choose another combination."
     )
-    assert user_message(UserError.VOICE_LOAD) == (
+    assert user_message(UserError.VOICE_LOAD_REPLACEMENT) == (
         "The selected voice could not be loaded. "
         "The previous voice is still active."
+    )
+    assert user_message(UserError.VOICE_LOAD_STARTUP) == (
+        "The selected voice could not be loaded."
     )
     assert user_message(UserError.SYNTHESIS) == (
         "Speech could not be generated. See the Piper log for details."

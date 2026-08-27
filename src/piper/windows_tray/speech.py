@@ -130,6 +130,7 @@ class SpeechWorker:
         try:
             voice = self._voice_provider()
             sample_rate = voice.config.sample_rate
+            phase = "playback"
             player_context = self._player_factory(sample_rate)
             with player_context as player:
                 with self._condition:

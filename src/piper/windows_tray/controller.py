@@ -225,7 +225,7 @@ class Controller:
                 candidate_path, candidate_voice = self._load_voice(str(selected))
             except VOICE_SETUP_ERRORS as error:
                 self._log_error("Selected Piper voice could not be loaded: %s" % error)
-                self._show_status(user_message(UserError.VOICE_LOAD))
+                self._show_status(user_message(UserError.VOICE_LOAD_REPLACEMENT))
                 return
             self._stop_speech()
             self.install_voice(candidate_path, candidate_voice, persist=True)
@@ -274,7 +274,6 @@ class Controller:
 
         if self.state.capture_in_progress:
             self.state.capture_generation += 1
-            self.state.capture_in_progress = False
             self._capture_pending = False
 
         if self.state.playback is PlaybackState.SPEAKING:
@@ -353,7 +352,8 @@ class Controller:
         if not isinstance(result, CaptureResult):
             return
         if generation != self.state.capture_generation:
-            if self._capture_pending and self.state.capture_in_progress:
+            self.state.capture_in_progress = False
+            if self._capture_pending:
                 self._capture_pending = False
                 self._start_capture(self.state.capture_generation)
             return
@@ -395,7 +395,7 @@ class Controller:
             return
         if not event.success:
             self._log_error("Selected Piper voice could not be loaded: %s" % event.error)
-            self._show_status(user_message(UserError.VOICE_LOAD))
+            self._show_status(user_message(UserError.VOICE_LOAD_REPLACEMENT))
             return
         if event.model_path is None or event.voice is None or self._voice_manager is None:
             return

@@ -83,6 +83,26 @@ def test_configure_voice_switches_synchronously_to_each_loaded_candidate():
     assert statuses == []
 
 
+def test_configure_voice_failure_reports_previous_voice_still_active():
+    statuses = []
+    controller = Controller(
+        settings=TraySettings(voice="old.onnx"),
+        save_settings=lambda _settings: None,
+    )
+    controller.set_voice(Path("old.onnx"), object())
+    controller.configure_runtime(
+        choose_voice=lambda: Path("bad.onnx"),
+        load_voice=lambda _reference: (_ for _ in ()).throw(OSError("bad model")),
+        show_status=statuses.append,
+    )
+
+    controller.handle(Command(CommandKind.CONFIGURE_VOICE))
+
+    assert statuses == [
+        "The selected voice could not be loaded. The previous voice is still active."
+    ]
+
+
 def test_app_speech_worker_reads_voice_manager_current_and_enqueues_events():
     import piper.windows_tray.app as app
 
