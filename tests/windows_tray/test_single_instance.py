@@ -9,13 +9,17 @@ class FakeKernel:
         self.signals = 0
         self._event = threading.Event()
         self.wait_started = threading.Event()
+        self.events_created = 0
+        self.mutexes_created = 0
         self.released: list[int] = []
         self.closed: list[int] = []
 
     def create_event(self, name: str) -> int:
+        self.events_created += 1
         return 10
 
     def create_mutex(self, name: str) -> tuple[int, bool]:
+        self.mutexes_created += 1
         return 20, self.already_exists
 
     def signal_event(self, handle: int) -> None:
@@ -93,6 +97,77 @@ def test_close_wakes_watcher_without_invoking_callback_and_is_idempotent() -> No
     assert not callback_called.is_set()
     assert kernel.released == [20]
     assert kernel.closed == [10, 20]
+
+
+def test_close_waits_until_watcher_thread_has_started(monkeypatch) -> None:
+    from piper.windows_tray import single_instance
+
+    real_thread = threading.Thread
+    start_entered = threading.Event()
+    allow_start = threading.Event()
+    start_errors: list[BaseException] = []
+    close_errors: list[BaseException] = []
+    watcher_holder: list[threading.Thread] = []
+
+    class DelayedStartThread(real_thread):
+        def start(self) -> None:
+            start_entered.set()
+            if not allow_start.wait(timeout=1):
+                raise AssertionError("test did not release delayed thread start")
+            super().start()
+
+    monkeypatch.setattr(single_instance.threading, "Thread", DelayedStartThread)
+    kernel = FakeKernel(already_exists=False)
+    instance = SingleInstance(kernel)
+    instance.acquire()
+
+    def start_watcher() -> None:
+        try:
+            watcher_holder.append(instance.start_activation_watch(lambda: None))
+        except BaseException as error:
+            start_errors.append(error)
+
+    starter = real_thread(target=start_watcher)
+    starter.start()
+    assert start_entered.wait(timeout=1)
+
+    close_attempted = threading.Event()
+
+    def close_instance() -> None:
+        close_attempted.set()
+        try:
+            instance.close()
+        except BaseException as error:
+            close_errors.append(error)
+
+    closer = real_thread(target=close_instance)
+    closer.start()
+    assert close_attempted.wait(timeout=1)
+    allow_start.set()
+
+    starter.join(timeout=1)
+    closer.join(timeout=1)
+    assert not starter.is_alive()
+    assert not closer.is_alive()
+    assert start_errors == []
+    assert close_errors == []
+    assert watcher_holder and not watcher_holder[0].is_alive()
+
+
+def test_acquire_rejects_calls_after_close() -> None:
+    kernel = FakeKernel(already_exists=False)
+    instance = SingleInstance(kernel)
+    instance.close()
+
+    try:
+        instance.acquire()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("acquire() should reject a closed instance")
+
+    assert kernel.events_created == 0
+    assert kernel.mutexes_created == 0
 
 
 class FakeFunction:

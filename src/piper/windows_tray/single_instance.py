@@ -83,13 +83,16 @@ class SingleInstance:
         self._watcher: Optional[threading.Thread] = None
 
     def acquire(self) -> InstanceRole:
-        self._event = self._kernel.create_event(ACTIVATION_EVENT_NAME)
-        self._mutex, already_exists = self._kernel.create_mutex(MUTEX_NAME)
-        if already_exists:
-            self._kernel.signal_event(self._event)
-            return InstanceRole.SECONDARY
-        self._owns_mutex = True
-        return InstanceRole.PRIMARY
+        with self._state_lock:
+            if self._closing or self._closed.is_set():
+                raise RuntimeError("single instance is closed")
+            self._event = self._kernel.create_event(ACTIVATION_EVENT_NAME)
+            self._mutex, already_exists = self._kernel.create_mutex(MUTEX_NAME)
+            if already_exists:
+                self._kernel.signal_event(self._event)
+                return InstanceRole.SECONDARY
+            self._owns_mutex = True
+            return InstanceRole.PRIMARY
 
     def start_activation_watch(self, callback: Callable[[], None]) -> threading.Thread:
         def watch() -> None:
@@ -112,7 +115,7 @@ class SingleInstance:
                 target=watch, name="piper-activation", daemon=True
             )
             self._watcher = thread
-        thread.start()
+            thread.start()
         return thread
 
     def close(self) -> None:
@@ -122,12 +125,17 @@ class SingleInstance:
                 return
             watcher = self._watcher
             if self._closing:
-                if watcher is not current:
-                    self._closed.wait()
-                return
-            self._closing = True
-            event, mutex = self._event, self._mutex
-            owns_mutex = self._owns_mutex
+                if watcher is current:
+                    return
+                wait_for_close = True
+            else:
+                wait_for_close = False
+                self._closing = True
+                event, mutex = self._event, self._mutex
+                owns_mutex = self._owns_mutex
+        if wait_for_close:
+            self._closed.wait()
+            return
 
         try:
             if watcher is not None and watcher is not current and event is not None:
