@@ -27,3 +27,7 @@ class TkUi:
     def show_status(self, message: str) -> None:
         self._assert_main_thread()
         messagebox.showinfo("Piper", message, parent=self.root)
+
+    def close(self) -> None:
+        self._assert_main_thread()
+        self.root.destroy()
