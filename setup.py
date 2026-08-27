@@ -109,9 +109,14 @@ setup(
         "ja": [
             "pyopenjtalk-plus>=0.4,<1",
         ],
+        "windows-tray": [
+            "pystray>=0.19.5,<1",
+            "Pillow>=10,<12",
+        ],
     },
     packages=[
         "piper",
+        "piper.windows_tray",
         "piper.tashkeel",
         "piper.hebrew",
         "piper.train",
@@ -136,6 +141,7 @@ setup(
     entry_points={
         "console_scripts": [
             "piper = piper.__main__:main",
+            "piper-tray = piper.windows_tray.__main__:main",
         ]
     },
 )
