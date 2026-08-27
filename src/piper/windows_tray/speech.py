@@ -62,8 +62,10 @@ class SpeechWorker:
             self._condition.notify()
 
     def cancel_active(self, generation: int) -> None:
-        """Cancel the active request only when its generation still matches."""
+        """Cancel matching active work and discard a matching pending request."""
         with self._condition:
+            if self._pending is not None and self._pending.generation == generation:
+                self._pending = None
             if self._active_generation != generation:
                 return
             player = self._active_player

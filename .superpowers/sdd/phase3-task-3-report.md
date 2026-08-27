@@ -43,6 +43,19 @@ Using the bundled workspace Python runtime with `PYTHONPATH=src`:
 
 The complete `tests/windows_tray` run was also attempted. It reported 101 passed, 11 failed, and 16 errors. The failures/errors are outside the Task 3 files and include pytest temporary-directory permission errors, existing app-test logger fixture mismatches, and capture fixture exhaustion. The Task 3 focused/regression set passed independently.
 
+## Review Fix: Pending Speech Cancellation
+
+The review finding was reproducible: when an active request occupied the worker and the controller advanced to a newer generation, `SpeechWorker.cancel_active()` returned because the requested generation was not active, leaving the matching pending request queued. That request could then play after cancellation.
+
+The fix updates `SpeechWorker.cancel_active()` to discard a pending request with the cancelled generation while retaining the existing active-player cancellation behavior. A regression test holds active generation 14, queues generation 15, cancels generation 15, and verifies that only generation 14 plays and no generation-15 event is emitted.
+
+Review-fix verification:
+
+- RED: `test_cancel_active_discards_matching_pending_request` failed because the stale pending audio played.
+- GREEN: the focused regression and controller speech tests passed: 10 passed.
+- Covering controller/worker suite after the fix: 36 passed.
+- Focused syntax compilation and `git diff --check`: passed.
+
 ## Commit
 
 `feat: serialize tray speech state transitions`

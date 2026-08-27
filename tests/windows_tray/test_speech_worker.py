@@ -230,6 +230,40 @@ def test_latest_pending_request_replaces_older_pending_request():
         worker.shutdown()
 
 
+def test_cancel_active_discards_matching_pending_request():
+    events = []
+    played = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def synthesize(text):
+        if text == "active":
+            entered.set()
+            release.wait(timeout=2)
+        yield Chunk(text.encode())
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=synthesize
+    )
+    worker = make_worker(voice, events, played, entered)
+
+    try:
+        worker.submit(SpeechRequest(14, "active"))
+        assert entered.wait(timeout=1)
+        worker.submit(SpeechRequest(15, "stale pending"))
+
+        worker.cancel_active(15)
+        release.set()
+        wait_for_event(events, SpeechEventKind.FINISHED, 14)
+        time.sleep(0.1)
+
+        assert played == [b"active"]
+        assert not any(event.generation == 15 for event in events)
+    finally:
+        release.set()
+        worker.shutdown()
+
+
 def test_shutdown_stops_active_work_and_joins_worker():
     events = []
     played = []
