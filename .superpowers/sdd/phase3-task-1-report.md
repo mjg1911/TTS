@@ -38,3 +38,92 @@ Implemented cancellable, windowless `AudioPlayer` behavior while preserving the 
 ## Concerns
 
 - Full pytest verification could not be completed in this checkout because the normal Python/pytest commands are unavailable, the fallback environment lacks `numpy`, and the required `tests/test_piper.py` file is absent. A dependency-complete checkout should rerun the two required pytest commands before merging.
+
+## Fix: cancellation while playback I/O is blocked
+
+Review finding: `play()` previously held `_lock` across `stdin.write()` and `flush()`, preventing `stop()` from acquiring the lock while either operation was blocked.
+
+The fix snapshots process state under `_lock`, performs stdin I/O outside the lock, and keeps `__exit__`'s stdin close/wait/kill operations outside the lock. A focused threaded regression test now proves that `stop()` terminates an active process while `play()` is blocked in `stdin.write()`.
+
+### TDD red check
+
+Command:
+
+```text
+& 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -c "import importlib.util, threading; from unittest.mock import Mock; s=importlib.util.spec_from_file_location('audio_playback','src/piper/audio_playback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); started=threading.Event(); release=threading.Event(); stream=Mock(); stream.write.side_effect=lambda data:(started.set(), release.wait(2)); proc=Mock(); proc.poll.return_value=None; proc.stdin=stream; player=m.AudioPlayer(22050); player._proc=proc; play=threading.Thread(target=player.play,args=(b'audio',)); done=threading.Event(); stop=threading.Thread(target=lambda:(player.stop(),done.set())); play.start(); assert started.wait(1); stop.start(); failed=not done.wait(0.2); release.set(); play.join(2); stop.join(2); assert not failed, 'stop remained blocked by play I/O'; print('unexpected PASS')"
+```
+
+Output:
+
+```text
+AssertionError: stop remained blocked by play I/O
+```
+
+Exit code: `1`.
+
+### Covering checks
+
+Command:
+
+```text
+& 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -c "import importlib.util, threading; from unittest.mock import Mock; s=importlib.util.spec_from_file_location('audio_playback','src/piper/audio_playback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); started=threading.Event(); release=threading.Event(); stream=Mock(); stream.write.side_effect=lambda data:(started.set(), release.wait(2)); proc=Mock(); proc.poll.return_value=None; proc.stdin=stream; player=m.AudioPlayer(22050); player._proc=proc; play=threading.Thread(target=player.play,args=(b'audio',)); done=threading.Event(); stop=threading.Thread(target=lambda:(player.stop(),done.set())); play.start(); assert started.wait(1); stop.start(); assert done.wait(1), 'stop remained blocked by play I/O'; proc.terminate.assert_called_once(); release.set(); play.join(2); stop.join(2); print('concurrency cancellation check: PASS')"
+```
+
+Output:
+
+```text
+concurrency cancellation check: PASS
+```
+
+Exit code: `0`.
+
+Command:
+
+```text
+& 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m py_compile src\piper\audio_playback.py; git diff --check
+```
+
+Output:
+
+```text
+py_compile + git diff --check: PASS
+```
+
+Exit code: `0`.
+
+Command:
+
+```text
+pytest tests/windows_tray/test_audio_playback_cancel.py -v
+```
+
+Output:
+
+```text
+ModuleNotFoundError: No module named 'numpy'
+```
+
+Exit code: `1` during collection in the available fallback environment.
+
+Command:
+
+```text
+pytest tests/windows_tray/test_audio_playback_cancel.py tests/test_piper.py -q
+```
+
+Output:
+
+```text
+ERROR: file or directory not found: tests/test_piper.py
+no tests ran in 0.00s
+```
+
+Exit code: `1`.
+
+### Fix self-review
+
+- Lock scope no longer includes `stdin.write()`, `stdin.flush()`, `stdin.close()`, or `proc.wait()`.
+- `stop()` can acquire the lock and call `terminate()` while playback I/O is blocked.
+- `_stopped` preserves idempotent termination; `_closing` prevents new playback during exit.
+- Existing CLI context-manager behavior, Windows `CREATE_NO_WINDOW`, and `is_available()` remain unchanged.
+- No unrelated files or phase-plan files were modified.

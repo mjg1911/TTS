@@ -16,6 +16,7 @@ class AudioPlayer:
         self._proc: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._stopped = False
+        self._closing = False
 
     def __enter__(self):
         """Starts ffplay subprocess and returns player."""
@@ -40,6 +41,7 @@ class AudioPlayer:
                 creationflags=creationflags,
             )
             self._stopped = False
+            self._closing = False
         return self
 
     def stop(self) -> None:
@@ -61,21 +63,25 @@ class AudioPlayer:
             proc = self._proc
             if proc is None:
                 return
-            try:
-                if proc.poll() is None and proc.stdin:
-                    try:
-                        proc.stdin.close()
-                    except Exception:
-                        pass
+            self._closing = True
+        try:
+            if proc.poll() is None and proc.stdin:
                 try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    try:
-                        proc.kill()
-                    except OSError:
-                        pass
-            finally:
-                self._proc = None
+                    proc.stdin.close()
+                except Exception:
+                    pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+        finally:
+            with self._lock:
+                if self._proc is proc:
+                    self._proc = None
+                self._closing = False
 
     def play(self, audio_bytes: bytes) -> None:
         """Plays raw audio using ffplay."""
@@ -83,16 +89,17 @@ class AudioPlayer:
             proc = self._proc
             if (
                 self._stopped
+                or self._closing
                 or proc is None
                 or proc.poll() is not None
                 or proc.stdin is None
             ):
                 return
-            try:
-                proc.stdin.write(audio_bytes)
-                proc.stdin.flush()
-            except (BrokenPipeError, OSError):
-                return
+        try:
+            proc.stdin.write(audio_bytes)
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            return
 
     @staticmethod
     def is_available() -> bool:
