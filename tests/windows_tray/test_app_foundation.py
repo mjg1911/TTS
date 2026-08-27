@@ -537,16 +537,21 @@ def test_failed_voice_candidate_does_not_persist_settings(monkeypatch) -> None:
         lambda _settings, _dirs: (_ for _ in ()).throw(FileNotFoundError("voice")),
     )
     ui.choose_voice_model = lambda: Path("bad.onnx")
+    raw_loader_error = "RAW-VOICE-LOADER-DETAIL"
     monkeypatch.setattr(
         app,
         "load_voice_candidate",
-        lambda _reference, _dirs: (_ for _ in ()).throw(OSError("bad model")),
+        lambda _reference, _dirs: (_ for _ in ()).throw(OSError(raw_loader_error)),
     )
     saved = []
     monkeypatch.setattr(app, "save_settings", saved.append)
 
     assert app.run_app([]) == 1
     assert saved == []
+    assert ui.statuses == [
+        "The selected voice could not be loaded. The previous voice is still active."
+    ]
+    assert raw_loader_error not in ui.statuses
 
 
 def test_successful_first_run_voice_is_persisted_after_load(monkeypatch) -> None:

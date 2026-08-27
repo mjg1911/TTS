@@ -6,6 +6,7 @@ from enum import Enum, auto
 class UserError(Enum):
     NO_TEXT = auto()
     HOTKEY_CONFLICT = auto()
+    HOTKEY_INVALID = auto()
     VOICE_LOAD = auto()
     SYNTHESIS = auto()
     PLAYBACK = auto()
@@ -16,6 +17,9 @@ USER_MESSAGES = {
     UserError.NO_TEXT: "No text selected or the application did not provide it",
     UserError.HOTKEY_CONFLICT: (
         "That hotkey is already in use. Choose another combination."
+    ),
+    UserError.HOTKEY_INVALID: (
+        "That hotkey is not valid. Choose another combination."
     ),
     UserError.VOICE_LOAD: (
         "The selected voice could not be loaded. "

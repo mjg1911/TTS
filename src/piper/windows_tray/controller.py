@@ -421,8 +421,8 @@ class Controller:
             return False
         try:
             candidate = parse_hotkey(requested)
-        except ValueError as error:
-            self._show_status(str(error))
+        except ValueError:
+            self._show_status(user_message(UserError.HOTKEY_INVALID))
             return False
         current = self.state.settings
         if current is None or self._save_settings is None:

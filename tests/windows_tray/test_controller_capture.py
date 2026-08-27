@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from piper.windows_tray.capture import CaptureResult, CaptureStatus
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import CaptureCompletion, Controller
+from piper.windows_tray.settings import TraySettings
 
 
 def test_capture_requests_collapse_to_newest_pending_request():
@@ -96,6 +97,27 @@ def test_cancel_request_is_noop_without_speech():
     controller.handle(Command(CommandKind.CANCEL_REQUEST))
 
     assert controller.state.capture_generation == before
+
+
+def test_invalid_hotkey_does_not_show_user_input_or_exception_text():
+    statuses = []
+
+    class FakeHotkeys:
+        def rebind(self, _candidate):
+            raise AssertionError("invalid hotkey must be rejected before rebind")
+
+    controller = Controller(
+        settings=TraySettings(hotkey="alt+backtick"),
+        save_settings=lambda _settings: None,
+        hotkeys=FakeHotkeys(),
+    )
+    controller.configure_runtime(show_status=statuses.append)
+    malicious_input = "unsupported key: <SCRIPT>selected text</SCRIPT>"
+
+    assert controller.request_hotkey_change(malicious_input) is False
+
+    assert statuses == ["That hotkey is not valid. Choose another combination."]
+    assert malicious_input not in statuses
 
 
 def test_capture_worker_logs_outcome_and_length_without_text(caplog):
