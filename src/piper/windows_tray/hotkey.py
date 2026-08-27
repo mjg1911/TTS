@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 
 MOD_ALT = 0x0001
@@ -40,7 +41,7 @@ def parse_hotkey(value: str) -> HotkeySpec:
         raise ValueError("hotkey is empty")
 
     modifiers = 0
-    key_token: str | None = None
+    key_token: Optional[str] = None
     canonical_modifiers: list[str] = []
     for token in tokens:
         if token in _MODIFIERS:
