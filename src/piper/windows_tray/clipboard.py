@@ -81,6 +81,12 @@ class Win32Clipboard:
         self._kernel32.GlobalLock.restype = ctypes.c_void_p
         self._kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
         self._kernel32.GlobalUnlock.restype = wintypes.BOOL
+        self._user32.SendInput.argtypes = [
+            wintypes.UINT,
+            ctypes.POINTER(_INPUT),
+            ctypes.c_int,
+        ]
+        self._user32.SendInput.restype = wintypes.UINT
 
     def sequence_number(self) -> int:
         self._load_libraries()
@@ -124,7 +130,8 @@ class Win32Clipboard:
             _keyboard_input(VK_C, KEYEVENTF_KEYUP),
             _keyboard_input(VK_CONTROL, KEYEVENTF_KEYUP),
         )
-        sent = self._user32.SendInput(4, ctypes.byref(inputs), ctypes.sizeof(_INPUT))
+        input_pointer = ctypes.cast(inputs, ctypes.POINTER(_INPUT))
+        sent = self._user32.SendInput(4, input_pointer, ctypes.sizeof(_INPUT))
         if sent != 4:
             raise _last_error("SendInput failed")
 

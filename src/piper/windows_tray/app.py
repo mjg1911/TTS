@@ -181,6 +181,8 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             command = controller.drain_once()
             if command is not None:
                 controller.handle(command)
+            if hasattr(tray, "update_menu"):
+                tray.update_menu()
             if not controller.state.shutting_down:
                 ui.root.after(25, pump)
 

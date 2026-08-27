@@ -32,12 +32,12 @@ class TrayIcon:
                 pystray.MenuItem(
                     "Stop speaking",
                     lambda _icon, _item: enqueue(Command(CommandKind.STOP_REQUEST)),
-                    enabled=lambda: self._snapshot_provider().can_stop,
+                    enabled=lambda _item: self._snapshot_provider().can_stop,
                 ),
                 pystray.MenuItem(
                     "Replay",
                     lambda _icon, _item: enqueue(Command(CommandKind.REPLAY_REQUEST)),
-                    enabled=lambda: self._snapshot_provider().can_replay,
+                    enabled=lambda _item: self._snapshot_provider().can_replay,
                 ),
                 pystray.MenuItem(
                     "Hotkey settings",
@@ -62,3 +62,6 @@ class TrayIcon:
 
     def stop(self) -> None:
         self._icon.stop()
+
+    def update_menu(self) -> None:
+        self._icon.update_menu()

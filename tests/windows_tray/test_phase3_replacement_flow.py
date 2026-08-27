@@ -145,11 +145,11 @@ def test_tray_stop_and_replay_actions_use_dynamic_enablement(monkeypatch, tmp_pa
     tray = tray_icon.TrayIcon(tmp_path / "icon.png", commands.append, lambda: snapshot)
 
     items = {item.text: item for item in tray._icon.menu.items}
-    assert items["Stop speaking"].enabled() is False
+    assert items["Stop speaking"].enabled(items["Stop speaking"]) is False
     snapshot.can_stop = True
     snapshot.can_replay = True
-    assert items["Stop speaking"].enabled() is True
-    assert items["Replay"].enabled() is True
+    assert items["Stop speaking"].enabled(items["Stop speaking"]) is True
+    assert items["Replay"].enabled(items["Replay"]) is True
     items["Stop speaking"].action(None, items["Stop speaking"])
     items["Replay"].action(None, items["Replay"])
     assert [command.kind for command in commands] == [

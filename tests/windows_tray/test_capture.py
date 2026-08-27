@@ -142,7 +142,7 @@ def test_capture_waits_for_hotkey_modifiers_before_copying() -> None:
     result = make_capture(clipboard, clock).capture(timeout_s=0.10, poll_s=0.05)
 
     assert result.status is CaptureStatus.SUCCESS
-    assert clock.now >= 0.05
+    assert clock.now >= 0.15
 
 
 @pytest.mark.parametrize("value", ["\x00", "\x00\x00"])

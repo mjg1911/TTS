@@ -101,6 +101,38 @@ def test_tray_start_and_stop_delegate_to_pystray(monkeypatch, tmp_path: Path) ->
     assert calls == ["start", "stop"]
 
 
+def test_tray_update_menu_delegates_to_pystray(monkeypatch, tmp_path: Path) -> None:
+    import piper.windows_tray.tray_icon as tray_icon
+
+    calls = []
+
+    class FakeIcon:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def update_menu(self):
+            calls.append("update")
+
+    class FakeImageApi:
+        @staticmethod
+        def open(_path):
+            return object()
+
+    class FakePystray:
+        Icon = FakeIcon
+        Menu = lambda *items: SimpleNamespace(items=items)
+        MenuItem = lambda text, action, enabled=None: SimpleNamespace(
+            text=text, action=action, enabled=enabled
+        )
+
+    monkeypatch.setattr(tray_icon, "_load_dependencies", lambda: (FakePystray, FakeImageApi))
+    tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
+
+    tray.update_menu()
+
+    assert calls == ["update"]
+
+
 class FakeRoot:
     def __init__(self, events):
         self.events = events
