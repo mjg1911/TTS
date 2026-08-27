@@ -70,6 +70,7 @@ class Controller:
             lambda: CaptureResult(CaptureStatus.ACCESS_ERROR, detail="capture is not configured")
         )
         self._capture_submit = capture_submit or _start_daemon_job
+        self._capture_pending = False
         self._log_info: Callable[[str], None] = lambda _message: None
         self._show_last_text: Callable[[Optional[str]], None] = lambda _text: None
         self._hotkeys = hotkeys
@@ -197,10 +198,14 @@ class Controller:
                     self._log_error("Piper cleanup step failed: %s" % error)
 
     def _request_capture(self) -> None:
-        if self.state.capture_in_progress:
-            return
         self.state.capture_generation += 1
         generation = self.state.capture_generation
+        if self.state.capture_in_progress:
+            self._capture_pending = True
+            return
+        self._start_capture(generation)
+
+    def _start_capture(self, generation: int) -> None:
         self.state.capture_in_progress = True
 
         def worker() -> None:
@@ -232,6 +237,9 @@ class Controller:
         if not isinstance(result, CaptureResult):
             return
         if generation != self.state.capture_generation:
+            if self._capture_pending and self.state.capture_in_progress:
+                self._capture_pending = False
+                self._start_capture(self.state.capture_generation)
             return
         self.state.capture_in_progress = False
         if (

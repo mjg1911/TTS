@@ -15,6 +15,11 @@ def test_f8_is_reserved_for_cancel() -> None:
         parse_hotkey("f8")
 
 
+def test_f12_is_reserved_by_windows() -> None:
+    with pytest.raises(ValueError, match="F12 is reserved"):
+        parse_hotkey("ctrl+f12")
+
+
 def test_unknown_key_is_rejected() -> None:
     with pytest.raises(ValueError, match="unsupported key"):
         parse_hotkey("alt+not-a-key")

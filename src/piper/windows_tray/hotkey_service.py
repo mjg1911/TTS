@@ -18,6 +18,24 @@ PM_NOREMOVE = 0x0000
 Callback = Callable[[], None]
 
 
+class HotkeyRegistrationError(OSError):
+    def __init__(self, message: str, role: str) -> None:
+        super().__init__(message)
+        self.role = role
+
+
+class _MSG(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", ctypes.c_void_p),
+        ("message", ctypes.c_uint),
+        ("wparam", ctypes.c_size_t),
+        ("lparam", ctypes.c_ssize_t),
+        ("time", ctypes.c_uint),
+        ("pt_x", ctypes.c_long),
+        ("pt_y", ctypes.c_long),
+    ]
+
+
 class _MessageCommand:
     def __init__(self, callback: Callable[[], Any]) -> None:
         self.callback = callback
@@ -75,23 +93,13 @@ class _Win32HotkeyApi:
         self._load_user32().UnregisterHotKey(None, hotkey_id)
 
     def get_message(self) -> Tuple[int, int, int]:
-        class MSG(ctypes.Structure):
-            _fields_ = [
-                ("hwnd", ctypes.c_void_p),
-                ("message", ctypes.c_uint),
-                ("wparam", ctypes.c_size_t),
-                ("lparam", ctypes.c_ssize_t),
-                ("time", ctypes.c_uint),
-                ("pt_x", ctypes.c_long),
-                ("pt_y", ctypes.c_long),
-            ]
-
-        msg = MSG()
+        msg = _MSG()
         result = self._load_user32().GetMessageW(ctypes.byref(msg), None, 0, 0)
         return result, int(msg.message), int(msg.wparam)
 
     def ensure_message_queue(self) -> None:
-        self._load_user32().PeekMessageW(None, None, 0, 0, PM_NOREMOVE)
+        msg = _MSG()
+        self._load_user32().PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_NOREMOVE)
 
     def post_quit(self, thread_id: int) -> bool:
         return bool(self._load_user32().PostThreadMessageW(thread_id, WM_QUIT, 0, 0))
@@ -134,7 +142,7 @@ class HotkeyManager:
                 if not self._api.register(CANCEL_ID, MOD_NOREPEAT, VK_F8):
                     self._api.unregister(self._active_capture_id)
                     self._owned_registrations.discard(self._active_capture_id)
-                    raise OSError("F8 registration failed")
+                    raise HotkeyRegistrationError("F8 registration failed", "cancel")
                 self._cancel_registered = True
                 self._owned_registrations.add(CANCEL_ID)
             self.capture_spec = capture_spec
@@ -160,7 +168,8 @@ class HotkeyManager:
         def command() -> bool:
             with self._lock:
                 if self.capture_spec is None:
-                    return False
+                    self._register_capture_set(candidate)
+                    return True
                 inactive = (
                     CAPTURE_IDS[1]
                     if self._active_capture_id == CAPTURE_IDS[0]
@@ -180,6 +189,13 @@ class HotkeyManager:
                 return bool(self._run_on_message_thread(command))
             if self._direct_test_mode:
                 return bool(command())
+            if (
+                self._message_thread is None
+                and self._on_capture is not None
+                and self._on_cancel is not None
+            ):
+                self.start(candidate, self._on_capture, self._on_cancel)
+                return True
             return False
         except OSError:
             return False

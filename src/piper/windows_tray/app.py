@@ -199,8 +199,16 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             )
         except (OSError, ValueError) as error:
             logger.error("Piper hotkeys could not be started: %s", error)
-            ui.show_status("Piper hotkeys could not be started.")
-            return 1
+            if getattr(error, "role", "capture") == "cancel":
+                ui.show_status(
+                    "Piper could not register F8 for cancellation; resolve the "
+                    "Windows hotkey conflict."
+                )
+            else:
+                ui.show_status(
+                    "Piper hotkeys could not be started. Choose another "
+                    "combination in Hotkey settings."
+                )
         ui.root.after(25, pump)
         ui.root.mainloop()
         return 0

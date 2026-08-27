@@ -313,27 +313,62 @@ def test_tray_stop_failure_does_not_skip_hotkeys_instance_or_ui_cleanup(monkeypa
     assert tray.events == ["start", "stop"]
 
 
-def test_hotkey_start_conflict_reports_failure_without_aborting_cleanup(monkeypatch):
+def test_hotkey_start_conflict_keeps_tray_alive_for_recovery(monkeypatch):
     events = []
     app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+    monkeypatch.setattr(app, "save_settings", lambda _settings: None)
 
     class ConflictingHotkeys:
+        def __init__(self):
+            self.start_calls = 0
+            self.callbacks = None
+
         def set_failure_callback(self, _callback):
             pass
 
-        def start(self, _spec, **_callbacks):
-            raise OSError("hotkey in use")
+        def start(self, spec, **callbacks):
+            self.start_calls += 1
+            self.callbacks = callbacks
+            if self.start_calls == 1:
+                raise OSError("hotkey in use")
+
+        def rebind(self, candidate):
+            self.start(candidate, **self.callbacks)
+            return True
 
         def stop(self):
             events.append("hotkeys.stop")
 
-    monkeypatch.setattr(app, "HotkeyManager", ConflictingHotkeys)
-    ui.root.mainloop = lambda: (_ for _ in ()).throw(
-        AssertionError("mainloop should not start after hotkey failure")
+    hotkeys = ConflictingHotkeys()
+    monkeypatch.setattr(app, "HotkeyManager", lambda: hotkeys)
+
+    controller_holder = []
+    original_controller = app.Controller
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: controller_holder.append(
+            original_controller(*args, **kwargs)
+        )
+        or controller_holder[-1],
     )
 
-    assert app.run_app([]) == 1
-    assert ui.statuses == ["Piper hotkeys could not be started."]
+    def mainloop():
+        controller = controller_holder[0]
+        ui.root.callbacks.pop(0)()
+        controller.enqueue(app.Command(app.CommandKind.CONFIGURE_HOTKEY, "ctrl+q"))
+        ui.root.callbacks.pop(0)()
+        controller.enqueue(app.Command(app.CommandKind.EXIT))
+        ui.root.callbacks.pop(0)()
+
+    ui.root.mainloop = mainloop
+
+    assert app.run_app([]) == 0
+    assert hotkeys.start_calls == 2
+    assert ui.statuses == [
+        "Piper hotkeys could not be started. Choose another combination in "
+        "Hotkey settings."
+    ]
     assert tray.events == ["start", "stop"]
     assert "instance.close" in events
 

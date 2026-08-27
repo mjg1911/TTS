@@ -8,6 +8,7 @@ from piper.windows_tray.hotkey_service import (
     CANCEL_ID,
     CAPTURE_IDS,
     HotkeyManager,
+    _Win32HotkeyApi,
     WM_HOTKEY,
     WM_QUIT,
 )
@@ -172,6 +173,21 @@ def test_register_for_test_rolls_back_capture_when_f8_conflicts() -> None:
     assert manager.capture_spec is None
 
 
+def test_startup_capture_conflict_can_be_recovered_by_initial_rebind() -> None:
+    api = FakeHotkeyApi()
+    old = parse_hotkey("alt+backtick")
+    api.fail_vk = old.vk
+    manager = HotkeyManager(api)
+
+    with pytest.raises(OSError, match="capture hotkey registration failed"):
+        manager.start(old, lambda: None, lambda: None)
+
+    api.fail_vk = None
+    assert manager.rebind(parse_hotkey("ctrl+q")) is True
+    assert manager.capture_spec.vk == ord("Q")
+    manager.stop()
+
+
 def test_message_thread_only_invokes_callbacks_for_hotkey_messages() -> None:
     api = FakeHotkeyApi()
     manager = HotkeyManager(api)
@@ -210,6 +226,22 @@ def test_message_queue_is_initialized_before_hotkey_registration() -> None:
     queue_index = next(index for index, call in enumerate(api.calls) if call[0] == "ensure_queue")
     first_register_index = next(index for index, call in enumerate(api.calls) if call[0] == "register")
     assert queue_index < first_register_index
+
+
+def test_production_message_queue_initialization_passes_msg_pointer() -> None:
+    calls = []
+
+    class FakeUser32:
+        def PeekMessageW(self, *args):
+            calls.append(args)
+            return 0
+
+    api = _Win32HotkeyApi()
+    api._user32 = FakeUser32()
+    api.ensure_message_queue()
+
+    assert calls
+    assert calls[0][0] is not None
 
 
 def test_production_lifecycle_does_not_fallback_after_message_thread_stops() -> None:

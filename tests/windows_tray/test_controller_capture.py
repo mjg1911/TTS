@@ -5,16 +5,29 @@ from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import CaptureCompletion, Controller
 
 
-def test_capture_requests_are_serialized_and_completion_is_generation_tagged():
+def test_capture_requests_collapse_to_newest_pending_request():
     jobs = []
     controller = Controller(capture_submit=jobs.append)
 
     controller.handle(Command(CommandKind.CAPTURE_REQUEST))
     controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
 
-    assert controller.state.capture_generation == 1
+    assert controller.state.capture_generation == 3
     assert controller.state.capture_in_progress is True
     assert len(jobs) == 1
+
+    jobs[0]()
+    stale_completion = controller.drain_once()
+    controller.handle(stale_completion)
+
+    assert controller.state.capture_in_progress is True
+    assert len(jobs) == 2
+
+    jobs[1]()
+    current_completion = controller.drain_once()
+    controller.handle(current_completion)
+    assert controller.state.capture_in_progress is False
 
 
 def test_stale_capture_completion_is_ignored():

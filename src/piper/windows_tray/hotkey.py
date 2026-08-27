@@ -8,6 +8,7 @@ MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 VK_F8 = 0x77
+VK_F12 = 0x7B
 
 _MODIFIERS = {
     "alt": MOD_ALT,
@@ -62,6 +63,8 @@ def parse_hotkey(value: str) -> HotkeySpec:
     vk = _KEYS[key_token]
     if vk == VK_F8:
         raise ValueError("F8 is reserved for cancellation")
+    if vk == VK_F12:
+        raise ValueError("F12 is reserved by Windows")
 
     key_name = "backtick" if vk == 0xC0 else key_token
     order = {"ctrl": 0, "alt": 1, "shift": 2, "win": 3}
