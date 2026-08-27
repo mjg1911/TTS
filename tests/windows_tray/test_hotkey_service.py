@@ -78,6 +78,33 @@ def test_message_loop_unregisters_owned_ids_when_get_message_fails():
     ]
 
 
+@pytest.mark.parametrize("result", [0, -1])
+def test_message_loop_failure_notifies_registered_callback_after_startup(result):
+    api = ErrorMessageApi(result)
+    manager = HotkeyManager(api)
+    failures = []
+    manager.set_failure_callback(failures.append)
+
+    manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
+    manager._message_thread.join(timeout=1)
+
+    assert len(failures) == 1
+    assert "GetMessageW returned %d" % result in str(failures[0])
+    assert api.registered == {}
+
+
+def test_expected_quit_does_not_notify_failure_callback():
+    api = ErrorMessageApi(1, WM_QUIT)
+    manager = HotkeyManager(api)
+    failures = []
+    manager.set_failure_callback(failures.append)
+
+    manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
+    manager._message_thread.join(timeout=1)
+
+    assert failures == []
+
+
 def test_stop_after_message_thread_exit_is_safe_and_has_no_leaked_registrations():
     api = ErrorMessageApi(0)
     manager = HotkeyManager(api)

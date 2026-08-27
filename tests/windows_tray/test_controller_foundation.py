@@ -27,6 +27,18 @@ def test_empty_controller_drain_returns_none() -> None:
     assert Controller().drain_once() is None
 
 
+def test_hotkey_failure_command_reports_that_hotkeys_are_unavailable() -> None:
+    statuses = []
+    errors = []
+    controller = Controller()
+    controller.configure_runtime(show_status=statuses.append, log_error=errors.append)
+
+    controller.handle(Command(CommandKind.HOTKEY_FAILED, "GetMessageW returned -1"))
+
+    assert statuses == ["Piper hotkeys stopped unexpectedly; hotkeys are unavailable."]
+    assert errors == ["Piper hotkey message loop stopped: GetMessageW returned -1"]
+
+
 def test_controller_owns_settings_and_active_voice() -> None:
     from piper.windows_tray.settings import TraySettings
 

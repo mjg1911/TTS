@@ -14,6 +14,7 @@ class CommandKind(Enum):
     CANCEL_REQUEST = auto()
     SHOW_LAST_TEXT = auto()
     CONFIGURE_HOTKEY = auto()
+    HOTKEY_FAILED = auto()
 
 
 CommandValue = Any

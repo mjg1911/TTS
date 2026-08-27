@@ -183,6 +183,12 @@ class Controller:
                 self.request_hotkey_change(requested)
         elif command.kind is CommandKind.CANCEL_REQUEST:
             return
+        elif command.kind is CommandKind.HOTKEY_FAILED:
+            detail = str(command.value) if command.value else "unknown error"
+            self._log_error("Piper hotkey message loop stopped: %s" % detail)
+            self._show_status(
+                "Piper hotkeys stopped unexpectedly; hotkeys are unavailable."
+            )
         elif command.kind is CommandKind.EXIT:
             self._stop_tray()
             self._close_instance()

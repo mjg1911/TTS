@@ -74,7 +74,11 @@ class FakeHotkeys:
     def __init__(self, events):
         self.events = events
         self.callbacks = None
+        self.failure_callback = None
         self.started_spec = None
+
+    def set_failure_callback(self, callback):
+        self.failure_callback = callback
 
     def start(self, spec, on_capture, on_cancel):
         self.events.append(("hotkeys.start", spec.canonical))
@@ -180,6 +184,8 @@ def test_app_starts_hotkeys_after_voice_setup_and_stops_before_mutex_release(mon
 
     def mainloop():
         controller = controllers[0]
+        hotkeys.failure_callback(OSError("GetMessageW returned 0"))
+        ui.root.callbacks.pop(0)()
         controller.enqueue(app.Command(app.CommandKind.EXIT))
         ui.root.callbacks.pop(0)()
 
@@ -188,3 +194,6 @@ def test_app_starts_hotkeys_after_voice_setup_and_stops_before_mutex_release(mon
     assert app.run_app([]) == 0
     assert events.index("voice") < events.index(("hotkeys.start", "alt+backtick"))
     assert events.index("hotkeys.stop") < events.index("instance.close")
+    assert ui.statuses == [
+        "Piper hotkeys stopped unexpectedly; hotkeys are unavailable."
+    ]

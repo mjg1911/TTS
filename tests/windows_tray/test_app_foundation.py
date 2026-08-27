@@ -241,6 +241,9 @@ def test_invalid_persisted_hotkey_recovers_to_default_and_reports_status(monkeyp
         def start(self, spec, **_callbacks):
             self.started_spec = spec.canonical
 
+        def set_failure_callback(self, _callback):
+            pass
+
         def stop(self):
             pass
 
@@ -260,6 +263,9 @@ def test_hotkey_stop_failure_does_not_skip_other_shutdown_cleanup(monkeypatch):
     app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
 
     class FailingHotkeys:
+        def set_failure_callback(self, _callback):
+            pass
+
         def start(self, _spec, **_callbacks):
             pass
 
@@ -281,6 +287,9 @@ def test_hotkey_start_conflict_reports_failure_without_aborting_cleanup(monkeypa
     app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
 
     class ConflictingHotkeys:
+        def set_failure_callback(self, _callback):
+            pass
+
         def start(self, _spec, **_callbacks):
             raise OSError("hotkey in use")
 

@@ -166,6 +166,11 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             ),
             show_last_text=ui.show_last_text,
         )
+        hotkeys.set_failure_callback(
+            lambda error: controller.enqueue(
+                Command(CommandKind.HOTKEY_FAILED, str(error))
+            )
+        )
 
         instance.start_activation_watch(
             lambda: controller.enqueue(Command(CommandKind.ACTIVATE))

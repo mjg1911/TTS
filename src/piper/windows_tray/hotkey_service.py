@@ -107,6 +107,7 @@ class HotkeyManager:
         self.capture_spec = None
         self._on_capture: Optional[Callback] = None
         self._on_cancel: Optional[Callback] = None
+        self._on_failure: Optional[Callable[[BaseException], None]] = None
         self._message_thread: Optional[threading.Thread] = None
         self._message_thread_id = 0
         self._ready = threading.Event()
@@ -141,6 +142,19 @@ class HotkeyManager:
     def register_for_test(self, capture_spec: Any) -> None:
         self._direct_test_mode = True
         self._register_capture_set(capture_spec)
+
+    def set_failure_callback(
+        self, on_failure: Optional[Callable[[BaseException], None]]
+    ) -> None:
+        self._on_failure = on_failure
+
+    def _notify_failure(self, error: BaseException) -> None:
+        callback = self._on_failure
+        if callback is not None:
+            try:
+                callback(error)
+            except BaseException:
+                pass
 
     def rebind(self, candidate: Any) -> bool:
         def command() -> bool:
@@ -257,6 +271,9 @@ class HotkeyManager:
             while True:
                 result, message, hotkey_id = self._api.get_message()
                 if result <= 0:
+                    self._notify_failure(
+                        OSError("GetMessageW returned %d" % result)
+                    )
                     return
                 if message == WM_COMMAND:
                     command = self._commands.get()
@@ -268,6 +285,8 @@ class HotkeyManager:
                         command.completed.set()
                 elif not self.dispatch_message(message, hotkey_id):
                     return
+        except BaseException as error:
+            self._notify_failure(error)
         finally:
             self._cleanup_owned_registrations()
 
