@@ -33,8 +33,20 @@ def test_stale_capture_completion_is_ignored():
 
 def test_failed_new_capture_does_not_replace_last_successful_text():
     controller = Controller()
-    controller.handle(Command(CommandKind.CAPTURE_SUCCEEDED, "first"))
-    controller.handle(Command(CommandKind.CAPTURE_FAILED, CaptureResult(CaptureStatus.TIMEOUT)))
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_SUCCEEDED,
+            CaptureCompletion(1, CaptureResult(CaptureStatus.SUCCESS, "first")),
+        )
+    )
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_FAILED,
+            CaptureCompletion(2, CaptureResult(CaptureStatus.TIMEOUT)),
+        )
+    )
 
     assert controller.state.last_text == "first"
 

@@ -7,6 +7,7 @@ from typing import Callable, Optional, Tuple
 
 from .capture import CaptureResult, CaptureStatus
 from .commands import Command, CommandKind
+from .hotkey import parse_hotkey
 from .settings import TraySettings
 
 
@@ -48,6 +49,7 @@ class Controller:
         save_settings: Optional[Callable[[TraySettings], None]] = None,
         capture: Optional[Callable[[], CaptureResult]] = None,
         capture_submit: Optional[Callable[[Callable[[], None]], None]] = None,
+        hotkeys: Optional[object] = None,
     ) -> None:
         self.state = AppState(settings=settings)
         self._commands = Queue()  # type: Queue[Command]
@@ -70,6 +72,8 @@ class Controller:
         self._capture_submit = capture_submit or _start_daemon_job
         self._log_info: Callable[[str], None] = lambda _message: None
         self._show_last_text: Callable[[Optional[str]], None] = lambda _text: None
+        self._hotkeys = hotkeys
+        self._choose_hotkey: Callable[[], Optional[str]] = lambda: None
 
     def configure_runtime(
         self,
@@ -85,6 +89,8 @@ class Controller:
         capture_submit: Optional[Callable[[Callable[[], None]], None]] = None,
         log_info: Optional[Callable[[str], None]] = None,
         show_last_text: Optional[Callable[[Optional[str]], None]] = None,
+        hotkeys: Optional[object] = None,
+        choose_hotkey: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
         if choose_voice is not None:
             self._choose_voice = choose_voice
@@ -110,6 +116,10 @@ class Controller:
             self._log_info = log_info
         if show_last_text is not None:
             self._show_last_text = show_last_text
+        if hotkeys is not None:
+            self._hotkeys = hotkeys
+        if choose_hotkey is not None:
+            self._choose_hotkey = choose_hotkey
 
     def set_voice(self, path: Path, voice: object) -> None:
         self.state.voice_path = path
@@ -165,6 +175,12 @@ class Controller:
             self._complete_capture(command)
         elif command.kind is CommandKind.SHOW_LAST_TEXT:
             self._show_last_text(self.state.last_text)
+        elif command.kind is CommandKind.CONFIGURE_HOTKEY:
+            requested = command.value
+            if requested is None:
+                requested = self._choose_hotkey()
+            if isinstance(requested, str):
+                self.request_hotkey_change(requested)
         elif command.kind is CommandKind.CANCEL_REQUEST:
             return
         elif command.kind is CommandKind.EXIT:
@@ -199,14 +215,10 @@ class Controller:
 
     def _complete_capture(self, command: Command) -> None:
         completion = command.value
-        if isinstance(completion, CaptureCompletion):
-            generation, result = completion.generation, completion.result
-        elif isinstance(completion, CaptureResult):
-            generation, result = self.state.capture_generation, completion
-        elif isinstance(completion, str):
-            generation = self.state.capture_generation
-            result = CaptureResult(CaptureStatus.SUCCESS, completion)
-        else:
+        if not isinstance(completion, CaptureCompletion):
+            return
+        generation, result = completion.generation, completion.result
+        if not isinstance(result, CaptureResult):
             return
         if generation != self.state.capture_generation:
             return
@@ -217,3 +229,35 @@ class Controller:
             and result.text is not None
         ):
             self.state.last_text = result.text
+
+    def request_hotkey_change(self, requested: str) -> bool:
+        if self._hotkeys is None:
+            self._show_status("Hotkey settings are not available.")
+            return False
+        try:
+            candidate = parse_hotkey(requested)
+        except ValueError as error:
+            self._show_status(str(error))
+            return False
+        current = self.state.settings
+        if current is None or self._save_settings is None:
+            self._show_status("Hotkey settings could not be saved.")
+            return False
+        if not self._hotkeys.rebind(candidate):
+            self._show_status(
+                "That hotkey is already in use. Choose another combination."
+            )
+            return False
+        next_settings = replace(current, hotkey=candidate.canonical)
+        try:
+            self._save_settings(next_settings)
+        except (OSError, ValueError) as error:
+            self._log_error("Could not save Piper hotkey settings: %s" % error)
+            try:
+                self._hotkeys.rebind(parse_hotkey(current.hotkey))
+            except (OSError, ValueError):
+                self._log_error("Could not restore the previous Piper hotkey")
+            self._show_status("Piper hotkey settings could not be saved.")
+            return False
+        self.state.settings = next_settings
+        return True

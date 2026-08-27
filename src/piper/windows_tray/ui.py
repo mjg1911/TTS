@@ -1,7 +1,7 @@
 from pathlib import Path
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 from typing import Optional
 
 
@@ -35,6 +35,16 @@ class TkUi:
             text or "No text has been captured yet.",
             parent=self.root,
         )
+
+    def prompt_hotkey(self, current: str) -> Optional[str]:
+        self._assert_main_thread()
+        value = simpledialog.askstring(
+            "Capture hotkey",
+            "Enter a hotkey such as Alt+backtick or Ctrl+Shift+Q",
+            initialvalue=current,
+            parent=self.root,
+        )
+        return value.strip() if value and value.strip() else None
 
     def close(self) -> None:
         self._assert_main_thread()

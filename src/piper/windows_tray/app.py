@@ -4,6 +4,10 @@ from typing import Any, Iterable, Optional, Sequence, Tuple
 
 from .commands import Command, CommandKind
 from .controller import Controller, VOICE_SETUP_ERRORS
+from .capture import SelectionCapture
+from .clipboard import Win32Clipboard
+from .hotkey import parse_hotkey
+from .hotkey_service import HotkeyManager
 from .logging_setup import configure_logging, log_path
 from .settings import TraySettings, load_settings, save_settings
 from .single_instance import InstanceRole, SingleInstance
@@ -52,8 +56,23 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
     instance_closed = False
     tray = None
     tray_stopped = False
+    hotkeys = None
+    hotkeys_stopped = False
     ui = None
     logger = None
+
+    def stop_hotkeys() -> None:
+        nonlocal hotkeys_stopped
+        if hotkeys is not None and not hotkeys_stopped:
+            hotkeys.stop()
+            hotkeys_stopped = True
+
+    def close_instance() -> None:
+        nonlocal instance_closed
+        stop_hotkeys()
+        if not instance_closed:
+            instance.close()
+            instance_closed = True
 
     try:
         if instance.acquire() is InstanceRole.SECONDARY:
@@ -93,6 +112,10 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         else:
             controller.set_voice(configured_path, configured_voice)
 
+        clipboard = Win32Clipboard()
+        capture = SelectionCapture(clipboard, clipboard.send_ctrl_c)
+        hotkeys = HotkeyManager()
+
         icon_path = Path(__file__).resolve().parents[1] / "img" / "logo.png"
         tray = TrayIcon(icon_path, controller.enqueue)
 
@@ -101,12 +124,6 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             if not tray_stopped:
                 tray.stop()
                 tray_stopped = True
-
-        def close_instance() -> None:
-            nonlocal instance_closed
-            if not instance_closed:
-                instance.close()
-                instance_closed = True
 
         def pump() -> None:
             command = controller.drain_once()
@@ -124,12 +141,27 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             stop_tray=stop_tray,
             close_instance=close_instance,
             quit_root=ui.root.quit,
+            capture=capture.capture,
+            hotkeys=hotkeys,
+            choose_hotkey=lambda: ui.prompt_hotkey(
+                controller.state.settings.hotkey
+                if controller.state.settings is not None
+                else settings.hotkey
+            ),
+            show_last_text=ui.show_last_text,
         )
 
         instance.start_activation_watch(
             lambda: controller.enqueue(Command(CommandKind.ACTIVATE))
         )
         tray.start()
+        hotkeys.start(
+            parse_hotkey(settings.hotkey),
+            on_capture=lambda: controller.enqueue(
+                Command(CommandKind.CAPTURE_REQUEST)
+            ),
+            on_cancel=lambda: controller.enqueue(Command(CommandKind.CANCEL_REQUEST)),
+        )
         ui.root.after(25, pump)
         ui.root.mainloop()
         return 0
@@ -140,6 +172,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
     finally:
         if tray is not None and not tray_stopped:
             tray.stop()
+        stop_hotkeys()
         if not instance_closed:
             instance.close()
         if ui is not None:
