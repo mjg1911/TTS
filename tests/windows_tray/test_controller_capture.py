@@ -100,6 +100,26 @@ def test_capture_worker_logs_access_error_without_detail(caplog):
     assert "SendInput failed" not in caplog.text
 
 
+def test_capture_worker_logs_safe_diagnostics_for_unexpected_exception(caplog):
+    jobs = []
+    secret = "SELECTED-TEXT-MUST-NOT-LOG"
+
+    def capture():
+        raise RuntimeError(secret)
+
+    controller = Controller(capture=capture, capture_submit=jobs.append)
+
+    with caplog.at_level(logging.ERROR):
+        controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+        jobs[0]()
+
+    assert "capture failed" in caplog.text
+    assert "stage=capture_worker" in caplog.text
+    assert "exception_type=RuntimeError" in caplog.text
+    assert "test_capture_worker_logs_safe_diagnostics_for_unexpected_exception" in caplog.text
+    assert secret not in caplog.text
+
+
 def test_show_last_text_uses_main_thread_ui_callback():
     shown = []
     controller = Controller()

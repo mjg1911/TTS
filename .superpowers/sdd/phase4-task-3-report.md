@@ -57,3 +57,24 @@ Implemented in the current `Phase-4` branch.
 - `SpeechEvent` three-argument construction remains valid.
 - No hotkey, single-instance, or core API files were modified.
 - Runtime test and compile evidence remain pending until a Python 3.12/pytest environment is restored.
+
+## Review follow-up: generic capture exception diagnostics
+
+- Updated `src/piper/windows_tray/controller.py` so the generic capture-worker
+  exception fallback calls `log_exception_safe()` with the fixed
+  `stage=capture_worker` value before retaining the existing `CaptureResult.detail`
+  for application flow.
+- Added `test_capture_worker_logs_safe_diagnostics_for_unexpected_exception` to
+  verify exception type and traceback frame locations are logged, the fixed stage
+  is present, and the exception message is omitted.
+- RED attempt:
+  `pytest tests/windows_tray/test_controller_capture.py::test_capture_worker_logs_safe_diagnostics_for_unexpected_exception -q`
+  was blocked because PowerShell reported that `pytest` is not recognized.
+- Covering tests:
+  `pytest tests/windows_tray/test_controller_capture.py tests/windows_tray/test_log_redaction.py -q`
+  was blocked for the same reason.
+- Compile attempts:
+  `python -m compileall -q src/piper/windows_tray` and
+  `py -3.12 -m compileall -q src/piper/windows_tray` were blocked because
+  neither `python` nor `py` is available on PATH.
+- `git diff --check`: passed.

@@ -10,7 +10,7 @@ from typing import Callable, Optional, Tuple
 from .capture import CaptureResult, CaptureStatus
 from .commands import Command, CommandKind
 from .hotkey import parse_hotkey
-from .logging_setup import log_capture_result
+from .logging_setup import log_capture_result, log_exception_safe
 from .settings import TraySettings
 from .speech import SpeechEvent, SpeechEventKind, SpeechRequest
 from .voice_manager import VoiceManager, VoiceSwitchEvent
@@ -294,6 +294,12 @@ class Controller:
             try:
                 result = self._capture()
             except Exception as error:
+                log_exception_safe(
+                    _LOGGER,
+                    "capture failed",
+                    error,
+                    stage="capture_worker",
+                )
                 result = CaptureResult(CaptureStatus.ACCESS_ERROR, detail=str(error))
             log_capture_result(
                 _LOGGER,
