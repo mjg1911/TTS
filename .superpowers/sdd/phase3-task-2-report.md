@@ -105,3 +105,60 @@ Result: compilation passed and `git diff --check` passed. The only output was Gi
 - The regression tests force cancellation at the player-entry check and terminal-selection check, and verify no player entry or stale `FINISHED` event occurs.
 - The later-yield test verifies that one already-played chunk does not change a subsequent synthesis exception into a playback failure.
 - No unrelated production files were changed.
+
+## Second fix wave: atomic cancellation boundaries
+
+### Reviewer findings addressed
+
+The worker now uses one reentrant decision boundary for both the final cancellation check plus `player.play()` entry and for terminal event selection plus emission. `cancel_active()` stops the active player before waiting on that boundary, which preserves the existing `AudioPlayer.stop()` behavior for blocked playback without holding a lock across the stop call. It then commits cancellation under the same boundary. Consequently, a cancellation either wins before playback/terminal selection or linearizes after that operation; it cannot be inserted into either gap.
+
+Shutdown follows the same stop-before-boundary ordering, keeps condition notification intact, skips self-join, and remains safe if invoked from an event callback.
+
+### Deterministic TDD evidence
+
+Two regression tests were added before the production change:
+
+- `test_cancel_coordinates_with_blocked_play_boundary_without_deadlock` holds `player.play()` in progress, verifies `stop()` is reached while playback is blocked, verifies cancellation waits on the shared boundary, then releases playback and checks that one terminal event is produced.
+- `test_cancel_coordinates_with_terminal_event_emission` blocks terminal event emission, starts cancellation, verifies cancellation waits for the shared boundary, then releases emission and checks the already-selected `FINISHED` result remains the sole terminal event.
+
+Pre-fix focused command:
+
+```text
+$env:PYTHONPATH = 'src'; & 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m pytest tests/windows_tray/test_speech_worker.py -v
+```
+
+Result: `9 passed, 2 failed`; both failures were the new boundary-coordination regressions.
+
+### Fix verification
+
+Focused worker command:
+
+```text
+$env:PYTHONPATH = 'src'; & 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m pytest tests/windows_tray/test_speech_worker.py -v
+```
+
+Result: `11 passed`.
+
+Required covering worker/audio command:
+
+```text
+$env:PYTHONPATH = 'src'; & 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m pytest tests/windows_tray/test_speech_worker.py tests/windows_tray/test_audio_playback_cancel.py -q
+```
+
+Result after correcting the test’s expected linearization outcome: `14 passed`.
+
+Additional verification:
+
+```text
+& 'C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m compileall -q src\piper\windows_tray\speech.py tests\windows_tray\test_speech_worker.py
+git diff --check
+```
+
+Result: compilation passed and `git diff --check` passed. Git emitted only its existing LF-to-CRLF working-copy warnings.
+
+### Second-wave self-review
+
+- `cancel_active()` and `shutdown()` stop players before acquiring the shared decision boundary, preventing lock inversion with blocked `AudioPlayer.play()` I/O.
+- Playback entry and terminal event emission each hold the same boundary through their externally visible operation.
+- Cancellation may lose only when the worker has already atomically entered playback or terminal emission; that ordering is covered by the deterministic tests.
+- Existing synthesis/playback failure classification, stale-chunk suppression, latest-pending replacement, and five-second shutdown behavior remain covered by the full worker suite.

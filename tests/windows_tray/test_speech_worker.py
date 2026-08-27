@@ -75,6 +75,21 @@ def wait_for_event(events: list, kind: SpeechEventKind, generation: int):
     pytest.fail(f"missing {kind.name} event for generation {generation}")
 
 
+def wait_for_terminal_event(events: list, generation: int):
+    deadline = time.monotonic() + 2
+    terminal_kinds = {
+        SpeechEventKind.FINISHED,
+        SpeechEventKind.CANCELLED,
+        SpeechEventKind.FAILED,
+    }
+    while time.monotonic() < deadline:
+        for event in events:
+            if event.generation == generation and event.kind in terminal_kinds:
+                return event
+        time.sleep(0.01)
+    pytest.fail(f"missing terminal event for generation {generation}")
+
+
 def make_worker(voice, events, played, entered):
     return SpeechWorker(
         lambda: voice,
@@ -315,4 +330,97 @@ def test_failure_after_played_chunk_is_reported_as_synthesis_failure():
         assert event.error == "Speech synthesis failed."
         assert played == [b"first"]
     finally:
+        worker.shutdown()
+
+
+def test_cancel_coordinates_with_blocked_play_boundary_without_deadlock():
+    events = []
+    entered = threading.Event()
+    release_play = threading.Event()
+    stop_called = threading.Event()
+    cancel_done = threading.Event()
+
+    class BlockingPlayer(FakePlayer):
+        def play(self, _data: bytes) -> None:
+            self.play_calls += 1
+            entered.set()
+            release_play.wait(timeout=2)
+
+        def stop(self) -> None:
+            stop_called.set()
+            self.stopped.set()
+
+    player = BlockingPlayer([], entered)
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: player,
+    )
+
+    try:
+        worker.submit(SpeechRequest(12, "hello"))
+        assert entered.wait(timeout=1)
+        cancel_thread = threading.Thread(
+            target=lambda: (worker.cancel_active(12), cancel_done.set())
+        )
+        cancel_thread.start()
+        assert stop_called.wait(timeout=1)
+        assert not cancel_done.wait(timeout=0.1)
+        release_play.set()
+        cancel_thread.join(timeout=1)
+        assert cancel_done.is_set()
+        terminal = wait_for_terminal_event(events, 12)
+        assert terminal.kind in (
+            SpeechEventKind.CANCELLED,
+            SpeechEventKind.FINISHED,
+        )
+    finally:
+        release_play.set()
+        worker.shutdown()
+
+
+def test_cancel_coordinates_with_terminal_event_emission():
+    events = []
+    entered = threading.Event()
+    release_terminal = threading.Event()
+    terminal_started = threading.Event()
+    cancel_done = threading.Event()
+
+    def on_event(event):
+        events.append(event)
+        if event.kind is SpeechEventKind.FINISHED:
+            terminal_started.set()
+            release_terminal.wait(timeout=2)
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+    worker = SpeechWorker(
+        lambda: voice,
+        on_event,
+        player_factory=lambda _sample_rate: FakePlayer([], entered),
+    )
+
+    try:
+        worker.submit(SpeechRequest(13, "hello"))
+        assert terminal_started.wait(timeout=1)
+        cancel_thread = threading.Thread(
+            target=lambda: (worker.cancel_active(13), cancel_done.set())
+        )
+        cancel_thread.start()
+        assert not cancel_done.wait(timeout=0.1)
+        release_terminal.set()
+        cancel_thread.join(timeout=1)
+        assert cancel_done.is_set()
+        assert [event.kind for event in events] == [
+            SpeechEventKind.STARTED,
+            SpeechEventKind.FINISHED,
+        ]
+    finally:
+        release_terminal.set()
         worker.shutdown()

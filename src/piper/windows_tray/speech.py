@@ -46,7 +46,7 @@ class SpeechWorker:
         self._active_generation: Optional[int] = None
         self._cancel_event = threading.Event()
         self._active_player: Optional[AudioPlayer] = None
-        self._play_boundary = threading.Lock()
+        self._decision_boundary = threading.RLock()
         self._shutdown = False
         self._thread = threading.Thread(
             target=self._run, name="piper-speech", daemon=True
@@ -66,21 +66,23 @@ class SpeechWorker:
         with self._condition:
             if self._active_generation != generation:
                 return
-            self._cancel_event.set()
             player = self._active_player
         if player is not None:
             player.stop()
+        with self._decision_boundary:
+            self._cancel_event.set()
 
     def shutdown(self) -> None:
         """Stop active speech and wait briefly for the worker to finish."""
         with self._condition:
             self._shutdown = True
             self._pending = None
-            self._cancel_event.set()
             player = self._active_player
             self._condition.notify_all()
         if player is not None:
             player.stop()
+        with self._decision_boundary:
+            self._cancel_event.set()
         if threading.current_thread() is not self._thread:
             self._thread.join(timeout=5)
 
@@ -133,7 +135,7 @@ class SpeechWorker:
                     if self._cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
-                    with self._play_boundary:
+                    with self._decision_boundary:
                         if self._cancel_event.is_set():
                             terminal_kind = SpeechEventKind.CANCELLED
                             break
@@ -153,8 +155,8 @@ class SpeechWorker:
                     else "Speech synthesis failed."
                 )
 
-        if self._cancel_event.is_set():
-            terminal_kind = SpeechEventKind.CANCELLED
-            error = None
-
-        self._on_event(SpeechEvent(terminal_kind, request.generation, error))
+        with self._decision_boundary:
+            if self._cancel_event.is_set():
+                terminal_kind = SpeechEventKind.CANCELLED
+                error = None
+            self._on_event(SpeechEvent(terminal_kind, request.generation, error))
