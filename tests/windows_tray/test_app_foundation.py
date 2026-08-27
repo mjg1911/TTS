@@ -282,6 +282,37 @@ def test_hotkey_stop_failure_does_not_skip_other_shutdown_cleanup(monkeypatch):
     assert "destroy" in events
 
 
+def test_tray_stop_failure_does_not_skip_hotkeys_instance_or_ui_cleanup(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+
+    class FailingTray(FakeTray):
+        def stop(self):
+            self.events.append("stop")
+            raise OSError("tray stop failed")
+
+    tray = FailingTray(Path("icon.png"), lambda _command: None)
+    monkeypatch.setattr(app, "TrayIcon", lambda _path, _enqueue: tray)
+
+    class RecordingHotkeys:
+        def set_failure_callback(self, _callback):
+            pass
+
+        def start(self, _spec, **_callbacks):
+            pass
+
+        def stop(self):
+            events.append("hotkeys.stop")
+
+    monkeypatch.setattr(app, "HotkeyManager", RecordingHotkeys)
+    ui.root.mainloop = lambda: None
+
+    assert app.run_app([]) == 0
+    assert events.index("hotkeys.stop") < events.index("instance.close")
+    assert "destroy" in events
+    assert tray.events == ["start", "stop"]
+
+
 def test_hotkey_start_conflict_reports_failure_without_aborting_cleanup(monkeypatch):
     events = []
     app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)

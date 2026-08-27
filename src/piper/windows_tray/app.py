@@ -78,8 +78,13 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         nonlocal instance_closed
         stop_hotkeys()
         if not instance_closed:
-            instance.close()
-            instance_closed = True
+            try:
+                instance.close()
+            except Exception as error:
+                if logger is not None:
+                    logger.error("Piper instance could not be closed cleanly: %s", error)
+            finally:
+                instance_closed = True
 
     try:
         if instance.acquire() is InstanceRole.SECONDARY:
@@ -138,8 +143,13 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         def stop_tray() -> None:
             nonlocal tray_stopped
             if not tray_stopped:
-                tray.stop()
-                tray_stopped = True
+                try:
+                    tray.stop()
+                except Exception as error:
+                    if logger is not None:
+                        logger.error("Piper tray could not be stopped cleanly: %s", error)
+                finally:
+                    tray_stopped = True
 
         def pump() -> None:
             command = controller.drain_once()
@@ -199,10 +209,9 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         raise
     finally:
         if tray is not None and not tray_stopped:
-            tray.stop()
+            stop_tray()
         stop_hotkeys()
-        if not instance_closed:
-            instance.close()
+        close_instance()
         if ui is not None:
             try:
                 ui.root.destroy()

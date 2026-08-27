@@ -190,9 +190,11 @@ class Controller:
                 "Piper hotkeys stopped unexpectedly; hotkeys are unavailable."
             )
         elif command.kind is CommandKind.EXIT:
-            self._stop_tray()
-            self._close_instance()
-            self._quit_root()
+            for cleanup in (self._stop_tray, self._close_instance, self._quit_root):
+                try:
+                    cleanup()
+                except Exception as error:
+                    self._log_error("Piper cleanup step failed: %s" % error)
 
     def _request_capture(self) -> None:
         if self.state.capture_in_progress:

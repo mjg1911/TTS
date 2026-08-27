@@ -39,6 +39,25 @@ def test_hotkey_failure_command_reports_that_hotkeys_are_unavailable() -> None:
     assert errors == ["Piper hotkey message loop stopped: GetMessageW returned -1"]
 
 
+def test_exit_cleanup_continues_when_tray_stop_fails() -> None:
+    events = []
+    controller = Controller()
+    controller.configure_runtime(
+        stop_tray=lambda: (_ for _ in ()).throw(OSError("tray stop failed")),
+        close_instance=lambda: events.append("instance.close"),
+        quit_root=lambda: events.append("quit"),
+        log_error=lambda message: events.append(message),
+    )
+
+    controller.handle(Command(CommandKind.EXIT))
+
+    assert events == [
+        "Piper cleanup step failed: tray stop failed",
+        "instance.close",
+        "quit",
+    ]
+
+
 def test_controller_owns_settings_and_active_voice() -> None:
     from piper.windows_tray.settings import TraySettings
 

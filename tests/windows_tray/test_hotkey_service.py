@@ -78,7 +78,7 @@ def test_message_loop_unregisters_owned_ids_when_get_message_fails():
     ]
 
 
-@pytest.mark.parametrize("result", [0, -1])
+@pytest.mark.parametrize("result", [-1])
 def test_message_loop_failure_notifies_registered_callback_after_startup(result):
     api = ErrorMessageApi(result)
     manager = HotkeyManager(api)
@@ -94,7 +94,7 @@ def test_message_loop_failure_notifies_registered_callback_after_startup(result)
 
 
 def test_expected_quit_does_not_notify_failure_callback():
-    api = ErrorMessageApi(1, WM_QUIT)
+    api = ErrorMessageApi(0, WM_QUIT)
     manager = HotkeyManager(api)
     failures = []
     manager.set_failure_callback(failures.append)
@@ -106,7 +106,7 @@ def test_expected_quit_does_not_notify_failure_callback():
 
 
 def test_stop_after_message_thread_exit_is_safe_and_has_no_leaked_registrations():
-    api = ErrorMessageApi(0)
+    api = ErrorMessageApi(0, WM_QUIT)
     manager = HotkeyManager(api)
 
     manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)
@@ -117,7 +117,7 @@ def test_stop_after_message_thread_exit_is_safe_and_has_no_leaked_registrations(
 
 
 def test_message_loop_unregisters_owned_ids_when_wm_quit_exits_loop():
-    api = ErrorMessageApi(1, WM_QUIT)
+    api = ErrorMessageApi(0, WM_QUIT)
     manager = HotkeyManager(api)
 
     manager.start(parse_hotkey("alt+backtick"), lambda: None, lambda: None)

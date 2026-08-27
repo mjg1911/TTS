@@ -270,7 +270,9 @@ class HotkeyManager:
             self._ready.set()
             while True:
                 result, message, hotkey_id = self._api.get_message()
-                if result <= 0:
+                if result == 0:
+                    return
+                if result < 0:
                     self._notify_failure(
                         OSError("GetMessageW returned %d" % result)
                     )
