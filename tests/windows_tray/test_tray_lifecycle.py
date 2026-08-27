@@ -77,6 +77,38 @@ def test_stop_then_ensure_visible_builds_a_fresh_icon(
     ]
 
 
+def test_ensure_visible_refreshes_menu_when_running(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    install_fake_pystray(monkeypatch, calls)
+
+    tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
+    tray.start()
+
+    tray.ensure_visible()
+
+    assert calls == ["build", "start", "update"]
+
+
+def test_ensure_visible_recovers_when_icon_is_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    install_fake_pystray(monkeypatch, calls)
+
+    tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
+    tray.start()
+    tray._icon = None
+
+    tray.ensure_visible()
+
+    assert tray.running is True
+    assert calls == ["build", "start", "build", "start"]
+
+
 def test_stop_is_idempotent(monkeypatch, tmp_path: Path) -> None:
     calls = []
     install_fake_pystray(monkeypatch, calls)

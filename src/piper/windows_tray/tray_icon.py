@@ -94,8 +94,10 @@ class TrayIcon:
         self._running = True
 
     def ensure_visible(self) -> None:
-        if not self._running:
+        if not self._running or self._icon is None:
             self.start()
+        else:
+            self.update_menu()
 
     def stop(self) -> None:
         icon = self._icon

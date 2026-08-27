@@ -48,3 +48,26 @@ Changed only the Task 2 production module and lifecycle test, plus this report. 
 ## Concerns
 
 Runtime test and compile verification remain pending until a Python/pytest runtime is restored.
+
+## Review-fix evidence
+
+Addressed the two requested Important findings:
+
+- `TrayIcon.ensure_visible()` now starts when stopped or when `_icon` is missing, and refreshes the menu when already running with an icon.
+- Added focused lifecycle tests for running menu refresh and missing-icon recovery.
+
+Verification after the fix:
+
+```text
+pytest tests/windows_tray/test_tray_lifecycle.py -v
+```
+
+Blocked before test collection: PowerShell reported `pytest: The term 'pytest' is not recognized as a name of a cmdlet, function, script file, or executable program.`
+
+```text
+python -m compileall -q src/piper/windows_tray
+py -m compileall -q src/piper/windows_tray
+python3 -m compileall -q src/piper/windows_tray
+```
+
+All three compile attempts were blocked because the corresponding executable is not recognized on PATH. `git diff --check` passed with exit code 0.
