@@ -30,25 +30,39 @@ class _AppVersionFilter(logging.Filter):
         return True
 
 
-def configure_logging(level: str, path: Optional[Path] = None) -> Logger:
+def configure_logging(
+    level: str,
+    path: Optional[Path] = None,
+    console: bool = False,
+) -> Logger:
     path = path or log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(
-        path, maxBytes=1_048_576, backupCount=3, encoding="utf-8"
-    )
-    handler.addFilter(_AppVersionFilter(app_version()))
-    handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s %(levelname)s %(name)s "
-            "version=%(app_version)s %(message)s"
-        )
-    )
+
     logger = getLogger("piper.windows_tray")
     logger.setLevel(getattr(logging, level))
     for existing_handler in logger.handlers:
         existing_handler.close()
     logger.handlers.clear()
-    logger.addHandler(handler)
+
+    version_filter = _AppVersionFilter(app_version())
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s "
+        "version=%(app_version)s %(message)s"
+    )
+
+    file_handler = RotatingFileHandler(
+        path, maxBytes=1_048_576, backupCount=3, encoding="utf-8"
+    )
+    file_handler.addFilter(version_filter)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    if console:
+        console_handler = logging.StreamHandler()
+        console_handler.addFilter(version_filter)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
     logger.propagate = False
     return logger
 

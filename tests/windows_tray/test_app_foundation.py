@@ -310,6 +310,55 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
     ]
     assert events[-2:] == ["quit", "destroy"]
     assert tray.events == ["start", "stop"]
+    assert ("after", 0) in events
+
+
+def test_run_app_debug_forces_debug_logging_and_console(monkeypatch) -> None:
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    logging_calls = []
+
+    monkeypatch.setattr(
+        app,
+        "configure_logging",
+        lambda level, *args, **kwargs: logging_calls.append(
+            (level, args, kwargs)
+        )
+        or SimpleNamespace(
+            warning=lambda *_args: None,
+            error=lambda *_args: None,
+            exception=lambda *_args: None,
+            info=lambda *_args: None,
+        ),
+    )
+    ui.root.mainloop = lambda: None
+
+    assert app.run_app(debug=True) == 0
+    assert logging_calls == [("DEBUG", (), {"console": True})]
+
+
+def test_run_app_without_debug_preserves_settings_logging(monkeypatch) -> None:
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    logging_calls = []
+
+    monkeypatch.setattr(
+        app,
+        "configure_logging",
+        lambda level, *args, **kwargs: logging_calls.append(
+            (level, args, kwargs)
+        )
+        or SimpleNamespace(
+            warning=lambda *_args: None,
+            error=lambda *_args: None,
+            exception=lambda *_args: None,
+            info=lambda *_args: None,
+        ),
+    )
+    ui.root.mainloop = lambda: None
+
+    assert app.run_app() == 0
+    assert logging_calls == [("INFO", (), {})]
 
 
 def test_invalid_persisted_hotkey_recovers_to_default_and_reports_status(monkeypatch):

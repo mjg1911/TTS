@@ -25,3 +25,39 @@ def test_app_module_import_does_not_load_tk_or_tray_dependencies(monkeypatch) ->
     monkeypatch.setattr("builtins.__import__", guarded_import)
     module = importlib.import_module("piper.windows_tray.app")
     importlib.reload(module)
+
+
+def test_windows_entrypoint_passes_debug_to_run_app(monkeypatch) -> None:
+    module = importlib.import_module("piper.windows_tray.__main__")
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    calls = []
+
+    class FakeApp:
+        @staticmethod
+        def run_app(*, debug=False):
+            calls.append(debug)
+            return 17
+
+    monkeypatch.setitem(sys.modules, "piper.windows_tray.app", FakeApp)
+
+    assert module.main(["--debug"]) == 17
+    assert calls == [True]
+
+
+def test_windows_entrypoint_defaults_debug_off(monkeypatch) -> None:
+    module = importlib.import_module("piper.windows_tray.__main__")
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    calls = []
+
+    class FakeApp:
+        @staticmethod
+        def run_app(*, debug=False):
+            calls.append(debug)
+            return 0
+
+    monkeypatch.setitem(sys.modules, "piper.windows_tray.app", FakeApp)
+
+    assert module.main([]) == 0
+    assert calls == [False]

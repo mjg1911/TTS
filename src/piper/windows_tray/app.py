@@ -70,7 +70,11 @@ def _build_speech_worker(controller: Controller, voice_manager: VoiceManager) ->
     )
 
 
-def run_app(argv: Optional[Sequence[str]] = None) -> int:
+def run_app(
+    argv: Optional[Sequence[str]] = None,
+    *,
+    debug: bool = False,
+) -> int:
     del argv
 
     instance = SingleInstance()
@@ -184,7 +188,11 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             return 0
 
         settings_result = load_settings()
-        logger = configure_logging(settings_result.settings.log_level)
+        effective_level = "DEBUG" if debug else settings_result.settings.log_level
+        if debug:
+            logger = configure_logging(effective_level, console=True)
+        else:
+            logger = configure_logging(effective_level)
         ui = TkUi()
         data_dirs = tuple(_voice_data_dirs())
         settings = settings_result.settings
@@ -305,6 +313,13 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                 Command(CommandKind.SYSTEM_RESUME)
             )
         )
+
+        def mark_runtime_ready() -> None:
+            getattr(logger, "info", lambda *_args: None)(
+                "Piper tray runtime ready"
+            )
+
+        ui.root.after(0, mark_runtime_ready)
         ui.root.after(25, pump)
         ui.root.mainloop()
         return 0
