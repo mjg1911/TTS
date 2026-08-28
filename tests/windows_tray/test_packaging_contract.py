@@ -106,3 +106,13 @@ def test_frozen_smoke_script_uses_clean_environment() -> None:
     assert "PYTHONPATH" in text
     assert "Start-Process" in text
     assert "HasExited" in text
+
+
+def test_frozen_smoke_script_cleans_temporary_root_in_finally() -> None:
+    text = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(
+        encoding="utf-8"
+    )
+    finally_block = text.split("finally {", 1)[1]
+
+    assert "Test-Path $SmokeRoot" in finally_block
+    assert "Remove-Item -Recurse -Force $SmokeRoot" in finally_block

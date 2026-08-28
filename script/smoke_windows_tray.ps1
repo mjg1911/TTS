@@ -53,18 +53,24 @@ try {
     Write-Host "Frozen-runtime smoke passed: process remained alive from a clean environment."
 }
 finally {
-    if ($null -ne $Process) {
-        $Process.Refresh()
-        if (-not $Process.HasExited) {
-            Stop-Process -Id $Process.Id -Force
+    try {
+        if ($null -ne $Process) {
+            $Process.Refresh()
+            if (-not $Process.HasExited) {
+                Stop-Process -Id $Process.Id -Force
+            }
         }
-    }
+    } finally {
+        $env:APPDATA = $OldAppData
+        $env:LOCALAPPDATA = $OldLocalAppData
+        if ($null -eq $OldPythonPath) {
+            Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+        } else {
+            $env:PYTHONPATH = $OldPythonPath
+        }
 
-    $env:APPDATA = $OldAppData
-    $env:LOCALAPPDATA = $OldLocalAppData
-    if ($null -eq $OldPythonPath) {
-        Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
-    } else {
-        $env:PYTHONPATH = $OldPythonPath
+        if (Test-Path $SmokeRoot) {
+            Remove-Item -Recurse -Force $SmokeRoot
+        }
     }
 }
