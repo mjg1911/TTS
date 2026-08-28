@@ -39,3 +39,12 @@ Python/Windows packaged executable or Windows CI result.
 - The acceptance record cannot be treated as a release sign-off until a real
   `PiperTray.exe` is tested on Windows, its SHA-256 is recorded, the manual
   matrix is executed, and the Windows tray CI artifact is verified.
+
+## Review fix evidence
+
+- Corrected `docs/WINDOWS_TRAY.md` so the voice-model picker is documented as
+  opening whenever the configured voice cannot be found or loaded, rather than
+  only on first launch.
+- Verification: `rg -n -C 2 "configured voice cannot be found or loaded|first launch" docs/WINDOWS_TRAY.md`
+  confirms the corrected wording and no longer finds the inaccurate phrase.
+- Verification: `git diff --check` completed without whitespace errors.

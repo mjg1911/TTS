@@ -25,9 +25,9 @@ For the default voice, the pair is:
 - `en_GB-alba-medium.onnx`
 - `en_GB-alba-medium.onnx.json`
 
-If the configured voice cannot be found on first launch, Piper opens the
-existing voice-model picker. You may select another `.onnx` file, but its
-matching `.onnx.json` must be beside it.
+If the configured voice cannot be found or loaded, Piper opens the existing
+voice-model picker. You may select another `.onnx` file, but its matching
+`.onnx.json` must be beside it.
 
 ## Packaged launch
 
