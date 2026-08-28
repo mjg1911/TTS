@@ -1,7 +1,33 @@
+import ast
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _setup_call() -> ast.Call:
+    tree = ast.parse((ROOT / "setup.py").read_text(encoding="utf-8"))
+    return next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "setup"
+    )
+
+
+def _extras_require() -> dict[str, list[str]]:
+    setup_call = _setup_call()
+    extras = next(keyword.value for keyword in setup_call.keywords if keyword.arg == "extras_require")
+    return ast.literal_eval(extras)
+
+
+def _install_requires() -> list[str]:
+    setup_call = _setup_call()
+    install_requires = next(
+        keyword.value for keyword in setup_call.keywords if keyword.arg == "install_requires"
+    )
+    return ast.literal_eval(install_requires)
 
 
 def test_packaging_launcher_delegates_to_real_tray_entrypoint() -> None:
@@ -11,12 +37,19 @@ def test_packaging_launcher_delegates_to_real_tray_entrypoint() -> None:
 
 
 def test_build_extra_contains_pyinstaller_without_changing_tray_runtime_extra() -> None:
-    text = (ROOT / "setup.py").read_text(encoding="utf-8")
-    assert '"windows-tray-build"' in text
-    assert '"pyinstaller>=6,<7"' in text.lower()
-    assert '"windows-tray"' in text
-    assert '"pystray>=0.19.5,<1"' in text
-    assert '"Pillow>=10,<12"' in text
+    extras = _extras_require()
+
+    assert extras["windows-tray-build"] == ["pyinstaller>=6,<7"]
+    assert extras["windows-tray"] == ["pystray>=0.19.5,<1", "Pillow>=10,<12"]
+    assert not any(
+        dependency.lower().startswith("pyinstaller")
+        for dependency in _install_requires()
+    )
+    for extra_name in ("dev", "windows-tray", "http"):
+        assert not any(
+            dependency.lower().startswith("pyinstaller")
+            for dependency in extras[extra_name]
+        )
 
 
 def test_core_entrypoints_and_http_extra_are_preserved() -> None:

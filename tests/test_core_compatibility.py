@@ -1,19 +1,35 @@
-import importlib
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 
-def test_core_python_api_imports_without_loading_tray_ui_dependencies(
-    monkeypatch,
-) -> None:
-    real_import = __import__
+ROOT = Path(__file__).resolve().parents[1]
 
-    def guarded_import(name, *args, **kwargs):
-        if name in {"pystray", "PIL", "PIL.Image"}:
-            raise AssertionError(f"tray dependency imported by core API: {name}")
-        return real_import(name, *args, **kwargs)
 
-    monkeypatch.setattr("builtins.__import__", guarded_import)
-    module = importlib.import_module("piper")
-    importlib.reload(module)
+def test_core_python_api_imports_without_loading_tray_ui_dependencies() -> None:
+    script = """
+import sys
 
-    assert hasattr(module, "PiperVoice")
-    assert hasattr(module, "SynthesisConfig")
+import piper
+
+assert hasattr(piper, "PiperVoice")
+assert hasattr(piper, "SynthesisConfig")
+assert not any(
+    name == "pystray" or name.startswith("pystray.")
+    or name == "PIL" or name.startswith("PIL.")
+    for name in sys.modules
+), sorted(name for name in sys.modules if name == "pystray" or name.startswith("pystray.") or name == "PIL" or name.startswith("PIL."))
+"""
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(ROOT / "src")
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
