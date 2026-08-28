@@ -90,6 +90,52 @@ def test_clipboard_access_failure_has_specific_recoverable_message():
     assert controller.state.shutting_down is False
 
 
+def test_no_text_capture_uses_native_notification_without_visual_status():
+    notifications = []
+    statuses = []
+    controller = Controller(capture_submit=lambda _job: None)
+    controller.configure_runtime(
+        show_notification=notifications.append,
+        show_status=statuses.append,
+    )
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_FAILED,
+            CaptureCompletion(generation, CaptureResult(CaptureStatus.EMPTY)),
+        )
+    )
+
+    assert notifications == ["No text selected"]
+    assert statuses == []
+
+
+def test_native_notification_failure_is_logged_without_fallback(caplog):
+    statuses = []
+    controller = Controller(capture_submit=lambda _job: None)
+    controller.configure_runtime(
+        show_notification=lambda _message: (_ for _ in ()).throw(
+            OSError("native notification failed")
+        ),
+        show_status=statuses.append,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+        generation = controller.state.capture_generation
+        controller.handle(
+            Command(
+                CommandKind.CAPTURE_FAILED,
+                CaptureCompletion(generation, CaptureResult(CaptureStatus.EMPTY)),
+            )
+        )
+
+    assert "Piper tray notification could not be shown: native notification failed" in caplog.text
+    assert statuses == []
+
+
 def test_cancel_request_is_noop_without_speech():
     controller = Controller()
     before = controller.state.capture_generation

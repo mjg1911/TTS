@@ -209,6 +209,9 @@ class FakeTray:
     def ensure_visible(self):
         self.events.append("ensure")
 
+    def show_notification(self, message):
+        self.events.append(("notification", message))
+
 
 class FakePowerListener:
     last = None

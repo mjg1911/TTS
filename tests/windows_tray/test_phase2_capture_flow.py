@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from piper.windows_tray.capture import CaptureResult, CaptureStatus
 from piper.windows_tray.commands import CommandKind
-from piper.windows_tray.controller import Controller
+from piper.windows_tray.controller import CaptureCompletion, Controller
 
 
 class FakeRoot:
@@ -72,6 +72,9 @@ class FakeTray:
     def ensure_visible(self):
         self.events.append("ensure")
 
+    def show_notification(self, message):
+        self.events.append(("notification", message))
+
 
 class FakePowerListener:
     def start(self, _callback):
@@ -136,6 +139,7 @@ def test_controller_delivers_only_fresh_success_to_last_text():
 
 
 def test_controller_notifies_when_capture_fails_without_replacing_last_text():
+    notifications = []
     statuses = []
     jobs = []
     controller = Controller(
@@ -143,14 +147,47 @@ def test_controller_notifies_when_capture_fails_without_replacing_last_text():
         capture_submit=jobs.append,
     )
     controller.state.last_text = "previous"
-    controller.configure_runtime(show_status=statuses.append)
+    controller.configure_runtime(
+        show_notification=notifications.append,
+        show_status=statuses.append,
+    )
 
     controller.handle(SimpleNamespace(kind=CommandKind.CAPTURE_REQUEST))
     jobs[0]()
     controller.handle(controller.drain_once())
 
-    assert statuses == ["No text selected or the application did not provide it"]
+    assert notifications == ["No text selected"]
+    assert statuses == []
     assert controller.state.last_text == "previous"
+
+
+def test_no_text_capture_does_not_invoke_tk_messagebox(monkeypatch):
+    import piper.windows_tray.ui as ui
+
+    calls = []
+    monkeypatch.setattr(
+        ui.messagebox,
+        "showinfo",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    notifications = []
+    controller = Controller(capture_submit=lambda _job: None)
+    controller.configure_runtime(show_notification=notifications.append)
+
+    controller.handle(SimpleNamespace(kind=CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+    controller.handle(
+        SimpleNamespace(
+            kind=CommandKind.CAPTURE_FAILED,
+            value=CaptureCompletion(
+                generation,
+                CaptureResult(CaptureStatus.EMPTY),
+            ),
+        )
+    )
+
+    assert notifications == ["No text selected"]
+    assert calls == []
 
 
 def test_app_starts_hotkeys_after_voice_setup_and_stops_before_mutex_release(monkeypatch):
@@ -209,6 +246,7 @@ def test_app_starts_hotkeys_after_voice_setup_and_stops_before_mutex_release(mon
     assert events.index("voice") < events.index(("hotkeys.start", "alt+backtick"))
     assert events.index("hotkeys.stop") < events.index("instance.close")
     assert controllers[0]._log_info == logger.info
+    assert controllers[0]._show_notification == tray.show_notification
     assert ui.statuses == [
         "Piper hotkeys stopped unexpectedly; hotkeys are unavailable."
     ]

@@ -90,6 +90,7 @@ class Controller:
             )
         )
         self._show_status: Callable[[str], None] = lambda _message: None
+        self._show_notification: Callable[[str], None] = lambda _message: None
         self._log_error: Callable[[str], None] = lambda _message: None
         self._open_log: Callable[[], None] = lambda: None
         self._ensure_tray_visible: Callable[[], None] = lambda: None
@@ -114,6 +115,7 @@ class Controller:
         choose_voice: Optional[Callable[[], Optional[Path]]] = None,
         load_voice: Optional[Callable[[str], Tuple[Path, object]]] = None,
         show_status: Optional[Callable[[str], None]] = None,
+        show_notification: Optional[Callable[[str], None]] = None,
         log_error: Optional[Callable[[str], None]] = None,
         open_log: Optional[Callable[[], None]] = None,
         ensure_tray_visible: Optional[Callable[[], None]] = None,
@@ -133,6 +135,8 @@ class Controller:
             self._load_voice = load_voice
         if show_status is not None:
             self._show_status = show_status
+        if show_notification is not None:
+            self._show_notification = show_notification
         if log_error is not None:
             self._log_error = log_error
         if open_log is not None:
@@ -413,7 +417,12 @@ class Controller:
             if result.status is CaptureStatus.ACCESS_ERROR:
                 self._show_status(user_message(UserError.CLIPBOARD))
             else:
-                self._show_status(user_message(UserError.NO_TEXT))
+                try:
+                    self._show_notification("No text selected")
+                except Exception as error:
+                    _LOGGER.error(
+                        "Piper tray notification could not be shown: %s", error
+                    )
 
     def _stop_speech(self) -> None:
         if self.state.playback is not PlaybackState.SPEAKING:
