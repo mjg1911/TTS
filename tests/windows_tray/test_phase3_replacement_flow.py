@@ -25,7 +25,11 @@ def test_no_text_replacement_notifies_without_submitting_speech():
     jobs = []
     notifications = []
     worker = FakeSpeechWorker()
-    controller = Controller(speech_worker=worker, capture_submit=jobs.append)
+    controller = Controller(
+        speech_worker=worker,
+        capture=lambda: CaptureResult(CaptureStatus.EMPTY),
+        capture_submit=jobs.append,
+    )
     controller.configure_runtime(show_notification=notifications.append)
     controller.state.playback = PlaybackState.SPEAKING
 
