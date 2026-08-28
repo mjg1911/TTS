@@ -62,6 +62,7 @@ class TraySnapshot:
     can_stop: bool
     can_replay: bool
     has_last_text: bool
+    error_sounds_enabled: bool
 
 
 def _start_daemon_job(job: Callable[[], None]) -> None:
@@ -196,6 +197,11 @@ class Controller:
                     and not self.state.capture_in_progress
                 ),
                 has_last_text=self.state.last_text is not None,
+                error_sounds_enabled=(
+                    self.state.settings.error_sounds
+                    if self.state.settings is not None
+                    else False
+                ),
             )
 
     def enqueue_worker_event(self, event: SpeechEvent) -> None:
@@ -216,6 +222,8 @@ class Controller:
     def _handle(self, command: Command) -> None:
         if command.kind is CommandKind.ACTIVATE:
             self._show_status("Piper is already running.")
+        elif command.kind is CommandKind.TOGGLE_ERROR_SOUNDS:
+            self._toggle_error_sounds()
         elif command.kind is CommandKind.OPEN_LOG:
             self._open_log()
         elif command.kind is CommandKind.CONFIGURE_VOICE:
@@ -268,6 +276,23 @@ class Controller:
                 return
             self._begin_shutdown()
             self._request_teardown()
+
+    def _toggle_error_sounds(self) -> bool:
+        current = self.state.settings
+        if current is None or self._save_settings is None:
+            return False
+        next_settings = replace(
+            current,
+            error_sounds=not current.error_sounds,
+        )
+        try:
+            self._save_settings(next_settings)
+        except (OSError, ValueError) as error:
+            self._log_error("Could not save Piper error sound settings: %s" % error)
+            self._show_status("Piper error sound settings could not be saved.")
+            return False
+        self.state.settings = next_settings
+        return True
 
     def _recover_from_resume(self) -> None:
         if self.state.shutting_down:
