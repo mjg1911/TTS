@@ -45,7 +45,7 @@ class _Win32PowerApi:
                 ("cbWndExtra", ctypes.c_int),
                 ("hInstance", wintypes.HINSTANCE),
                 ("hIcon", wintypes.HICON),
-                ("hCursor", wintypes.HCURSOR),
+                ("hCursor", getattr(wintypes, "HCURSOR", wintypes.HANDLE)),
                 ("hbrBackground", wintypes.HBRUSH),
                 ("lpszMenuName", wintypes.LPCWSTR),
                 ("lpszClassName", wintypes.LPCWSTR),
