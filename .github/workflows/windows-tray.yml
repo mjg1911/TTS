@@ -29,6 +29,16 @@ jobs:
       - name: Compile Windows tray package
         run: python -m compileall -q src/piper/windows_tray
 
+      - name: Download frozen smoke voice
+        shell: pwsh
+        run: |
+          $voiceDir = Join-Path $env:RUNNER_TEMP "piper-tray-smoke-voice"
+          New-Item -ItemType Directory -Force $voiceDir | Out-Null
+          $baseUri = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/alba/medium"
+          Invoke-WebRequest "$baseUri/en_GB-alba-medium.onnx" -OutFile (Join-Path $voiceDir "en_GB-alba-medium.onnx")
+          Invoke-WebRequest "$baseUri/en_GB-alba-medium.onnx.json" -OutFile (Join-Path $voiceDir "en_GB-alba-medium.onnx.json")
+          "PIPER_SMOKE_VOICE_DIR=$voiceDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build tray executable
         shell: pwsh
         run: ./script/build_windows_tray.ps1

@@ -313,6 +313,13 @@ def run_app(
                 Command(CommandKind.SYSTEM_RESUME)
             )
         )
+
+        def mark_runtime_ready() -> None:
+            getattr(logger, "info", lambda *_args: None)(
+                "Piper tray runtime ready"
+            )
+
+        ui.root.after(0, mark_runtime_ready)
         ui.root.after(25, pump)
         ui.root.mainloop()
         return 0

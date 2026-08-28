@@ -310,6 +310,7 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
     ]
     assert events[-2:] == ["quit", "destroy"]
     assert tray.events == ["start", "stop"]
+    assert ("after", 0) in events
 
 
 def test_run_app_debug_forces_debug_logging_and_console(monkeypatch) -> None:

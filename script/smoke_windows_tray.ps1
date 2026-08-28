@@ -1,3 +1,7 @@
+param(
+    [string]$VoiceDirectory = $env:PIPER_SMOKE_VOICE_DIR
+)
+
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -15,11 +19,32 @@ $SmokeRoot = Join-Path $BaseTemp "piper-tray-frozen-smoke-$([System.Guid]::NewGu
 $SmokeAppData = Join-Path $SmokeRoot "AppData"
 $SmokeLocalAppData = Join-Path $SmokeRoot "LocalAppData"
 $SmokeWorking = Join-Path $SmokeRoot "Working"
+$SmokeVoice = Join-Path $SmokeLocalAppData "Piper"
+
+if (-not $VoiceDirectory) {
+    $VoiceDirectory = $Root
+}
+
+$VoiceModel = Join-Path $VoiceDirectory "en_GB-alba-medium.onnx"
+$VoiceConfig = Join-Path $VoiceDirectory "en_GB-alba-medium.onnx.json"
+if (-not (Test-Path $VoiceModel) -or -not (Test-Path $VoiceConfig)) {
+    throw "Frozen smoke requires en_GB-alba-medium.onnx and its matching JSON in $VoiceDirectory"
+}
 
 New-Item -ItemType Directory -Force $SmokeRoot | Out-Null
 New-Item -ItemType Directory -Force $SmokeAppData | Out-Null
 New-Item -ItemType Directory -Force $SmokeLocalAppData | Out-Null
 New-Item -ItemType Directory -Force $SmokeWorking | Out-Null
+New-Item -ItemType Directory -Force $SmokeVoice | Out-Null
+New-Item -ItemType Directory -Force (Join-Path $SmokeAppData "Piper") | Out-Null
+Copy-Item $VoiceModel $SmokeVoice
+Copy-Item $VoiceConfig $SmokeVoice
+@{
+    schema_version = 1
+    voice = "en_GB-alba-medium"
+    hotkey = "alt+backtick"
+    log_level = "INFO"
+} | ConvertTo-Json | Set-Content (Join-Path (Join-Path $SmokeAppData "Piper") "settings.json")
 
 $OldAppData = $env:APPDATA
 $OldLocalAppData = $env:LOCALAPPDATA
@@ -36,19 +61,34 @@ try {
         -WorkingDirectory $SmokeWorking `
         -PassThru
 
-    Start-Sleep -Seconds 5
-    $Process.Refresh()
+    $Log = Join-Path $SmokeLocalAppData "Piper\piper-tray.log"
+    $Ready = $false
+    $Deadline = [DateTime]::UtcNow.AddSeconds(60)
+    while ([DateTime]::UtcNow -lt $Deadline) {
+        $Process.Refresh()
+        if ($Process.HasExited) {
+            throw "PiperTray.exe exited during frozen-runtime startup with code $($Process.ExitCode)"
+        }
 
-    if ($Process.HasExited) {
-        throw "PiperTray.exe exited during frozen-runtime bootstrap with code $($Process.ExitCode)"
+        if (Test-Path $Log) {
+            $LogText = Get-Content -Raw $Log
+            if ($LogText -match "Piper tray runtime ready") {
+                $Ready = $true
+                break
+            }
+        }
+
+        Start-Sleep -Seconds 1
     }
 
-    $Log = Join-Path $SmokeLocalAppData "Piper\piper-tray.log"
     if (-not (Test-Path $Log)) {
         throw "Frozen runtime did not create its expected log: $Log"
     }
+    if (-not $Ready) {
+        throw "Frozen runtime did not report tray readiness within 60 seconds"
+    }
 
-    Write-Host "Frozen-runtime smoke passed: process remained alive from a clean environment."
+    Write-Host "Frozen-runtime smoke passed: tray runtime reached its event loop from an isolated environment."
 }
 finally {
     try {

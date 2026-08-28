@@ -108,6 +108,21 @@ def test_frozen_smoke_script_uses_clean_environment() -> None:
     assert "HasExited" in text
 
 
+def test_frozen_smoke_script_provisions_voice_and_waits_for_runtime_readiness() -> None:
+    text = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "PIPER_SMOKE_VOICE_DIR" in text
+    assert "en_GB-alba-medium.onnx" in text
+    assert "en_GB-alba-medium.onnx.json" in text
+    assert "Copy-Item $VoiceModel $SmokeVoice" in text
+    assert 'voice = "en_GB-alba-medium"' in text
+    assert 'Piper tray runtime ready' in text
+    assert "$Deadline = [DateTime]::UtcNow.AddSeconds(60)" in text
+    assert "Frozen runtime did not report tray readiness" in text
+
+
 def test_frozen_smoke_script_cleans_temporary_root_in_finally() -> None:
     text = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(
         encoding="utf-8"
@@ -140,3 +155,13 @@ def test_windows_workflow_tests_builds_smokes_and_uploads() -> None:
     assert "actions/setup-python@v7" in text
     assert "actions/upload-artifact@v7" in text
     assert "if-no-files-found: error" in text
+
+
+def test_windows_workflow_provisions_pinned_smoke_voice() -> None:
+    text = (ROOT / ".github" / "workflows" / "windows-tray.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Download frozen smoke voice" in text
+    assert "piper-voices/resolve/v1.0.0" in text
+    assert "PIPER_SMOKE_VOICE_DIR" in text

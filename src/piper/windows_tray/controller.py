@@ -98,6 +98,7 @@ class Controller:
         )
         self._capture_submit = capture_submit or _start_daemon_job
         self._capture_pending = False
+        self._capture_invalidated_on_resume = False
         self._log_info: Callable[[str], None] = lambda _message: None
         self._show_last_text: Callable[[Optional[str]], None] = lambda _text: None
         self._hotkeys = hotkeys
@@ -272,9 +273,12 @@ class Controller:
         if self.state.shutting_down:
             return
 
-        if self.state.capture_in_progress:
+        capture_invalidated = self.state.capture_in_progress
+        if capture_invalidated:
             self.state.capture_generation += 1
+            self.state.capture_in_progress = False
             self._capture_pending = False
+            self._capture_invalidated_on_resume = True
 
         if self.state.playback is PlaybackState.SPEAKING:
             active = self.state.speech_generation
@@ -293,6 +297,9 @@ class Controller:
 
         if not restored:
             self._show_status(user_message(UserError.HOTKEY_CONFLICT))
+
+        if capture_invalidated:
+            self.state.capture_in_progress = True
 
         hotkey = "unavailable"
         if self._hotkeys is not None:
@@ -313,6 +320,7 @@ class Controller:
         generation = self.state.capture_generation
         if self.state.capture_in_progress:
             self._capture_pending = True
+            self._capture_invalidated_on_resume = False
             return
         self._start_capture(generation)
 
@@ -352,10 +360,13 @@ class Controller:
         if not isinstance(result, CaptureResult):
             return
         if generation != self.state.capture_generation:
-            self.state.capture_in_progress = False
             if self._capture_pending:
+                self.state.capture_in_progress = False
                 self._capture_pending = False
                 self._start_capture(self.state.capture_generation)
+            elif self._capture_invalidated_on_resume:
+                self.state.capture_in_progress = False
+                self._capture_invalidated_on_resume = False
             return
         self.state.capture_in_progress = False
         if (
