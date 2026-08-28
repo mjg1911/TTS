@@ -1,0 +1,54 @@
+# .github/workflows/windows-tray.yml
+name: Windows tray
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  windows-tray:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install test and tray build dependencies
+        run: python -m pip install -e ".[dev,windows-tray,windows-tray-build]"
+
+      - name: Run tray and core compatibility tests
+        run: pytest tests/windows_tray tests/test_core_compatibility.py -q
+
+      - name: Verify core CLI entry point
+        run: python -m piper --help
+
+      - name: Compile Windows tray package
+        run: python -m compileall -q src/piper/windows_tray
+
+      - name: Build tray executable
+        shell: pwsh
+        run: ./script/build_windows_tray.ps1
+
+      - name: Smoke frozen executable
+        shell: pwsh
+        run: ./script/smoke_windows_tray.ps1
+
+      - name: Verify executable artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/PiperTray.exe")) {
+            throw "dist/PiperTray.exe was not produced"
+          }
+          if ((Get-Item "dist/PiperTray.exe").Length -le 0) {
+            throw "dist/PiperTray.exe is empty"
+          }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: PiperTray-windows
+          path: dist/PiperTray.exe
+          if-no-files-found: error

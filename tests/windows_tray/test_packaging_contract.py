@@ -116,3 +116,18 @@ def test_frozen_smoke_script_cleans_temporary_root_in_finally() -> None:
 
     assert "Test-Path $SmokeRoot" in finally_block
     assert "Remove-Item -Recurse -Force $SmokeRoot" in finally_block
+
+
+def test_windows_workflow_tests_builds_smokes_and_uploads() -> None:
+    text = (ROOT / ".github" / "workflows" / "windows-tray.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "windows-latest" in text
+    assert "pytest tests/windows_tray tests/test_core_compatibility.py" in text
+    assert "python -m piper --help" in text
+    assert "build_windows_tray.ps1" in text
+    assert "smoke_windows_tray.ps1" in text
+    assert "actions/checkout@v7" in text
+    assert "actions/setup-python@v7" in text
+    assert "actions/upload-artifact@v7" in text
+    assert "if-no-files-found: error" in text
