@@ -58,3 +58,29 @@ def test_core_entrypoints_and_http_extra_are_preserved() -> None:
     assert '"piper-tray = piper.windows_tray.__main__:main"' in text
     assert '"http"' in text
     assert '"flask>=3,<4"' in text
+
+
+def test_spec_is_no_console_and_collects_required_runtime_content() -> None:
+    text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
+    assert "console=False" in text
+    assert 'collect_data_files("piper")' in text
+    assert 'collect_dynamic_libs("piper")' in text
+    assert 'collect_submodules("pystray")' in text
+    assert '"piper.espeakbridge"' in text
+    assert 'name="PiperTray"' in text
+
+
+def test_spec_builds_one_file_executable() -> None:
+    text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
+    assert "COLLECT(" not in text
+    assert "a.binaries" in text
+    assert "a.datas" in text
+
+
+def test_icon_generator_uses_repository_logo_and_expected_target() -> None:
+    text = (ROOT / "script" / "make_piper_tray_icon.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"etc" / "logo.png"' in text
+    assert '"piper-tray.ico"' in text
+    assert 'format="ICO"' in text
