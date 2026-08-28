@@ -11,14 +11,12 @@ $BaseTemp = if ($env:RUNNER_TEMP) {
 } else {
     [System.IO.Path]::GetTempPath()
 }
-$SmokeRoot = Join-Path $BaseTemp "piper-tray-frozen-smoke"
+$SmokeRoot = Join-Path $BaseTemp "piper-tray-frozen-smoke-$([System.Guid]::NewGuid().ToString('N'))"
 $SmokeAppData = Join-Path $SmokeRoot "AppData"
 $SmokeLocalAppData = Join-Path $SmokeRoot "LocalAppData"
 $SmokeWorking = Join-Path $SmokeRoot "Working"
 
-if (Test-Path $SmokeRoot) {
-    Remove-Item -Recurse -Force $SmokeRoot
-}
+New-Item -ItemType Directory -Force $SmokeRoot | Out-Null
 New-Item -ItemType Directory -Force $SmokeAppData | Out-Null
 New-Item -ItemType Directory -Force $SmokeLocalAppData | Out-Null
 New-Item -ItemType Directory -Force $SmokeWorking | Out-Null

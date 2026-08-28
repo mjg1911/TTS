@@ -47,3 +47,12 @@ Commit: `a40a52b` (`build: add reproducible windows tray build and smoke test`)
 - Static cleanup/restoration contract check: PASS.
 - `git diff --check`: PASS.
 - Focused regression test red-run attempt was blocked because the available fallback Python executable could not be launched (`Access is denied`). The Windows build and frozen-runtime smoke remain unexecuted in this environment.
+
+## Whole-branch review fix evidence
+
+- Changed `script/smoke_windows_tray.ps1` to allocate `piper-tray-frozen-smoke-<GUID>` beneath the selected temporary base for each run.
+- Removed the pre-run deletion of the shared `piper-tray-frozen-smoke` path; `finally` still cleans only the captured `$SmokeRoot`.
+- Preserved process termination and restoration of `APPDATA`, `LOCALAPPDATA`, and `PYTHONPATH`.
+- Extended `tests/windows_tray/test_packaging_contract.py` to require GUID-based allocation and reject the bare shared-root assignment.
+- Static PowerShell validation: PASS (parser, unique-root allocation, no bare shared root, creation ordering, `finally` cleanup, environment restoration, and contract assertions).
+- Python and pytest remain unavailable, so the Python contract test and executable smoke were not run locally.

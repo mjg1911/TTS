@@ -118,6 +118,15 @@ def test_frozen_smoke_script_cleans_temporary_root_in_finally() -> None:
     assert "Remove-Item -Recurse -Force $SmokeRoot" in finally_block
 
 
+def test_frozen_smoke_script_uses_a_unique_temporary_root() -> None:
+    text = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "[System.Guid]::NewGuid().ToString('N')" in text
+    assert '$SmokeRoot = Join-Path $BaseTemp "piper-tray-frozen-smoke"' not in text
+
+
 def test_windows_workflow_tests_builds_smokes_and_uploads() -> None:
     text = (ROOT / ".github" / "workflows" / "windows-tray.yml").read_text(
         encoding="utf-8"
