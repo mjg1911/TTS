@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from dataclasses import replace
 from enum import Enum, auto
+import logging
 from queue import Empty, Queue
 from pathlib import Path
 import threading
@@ -9,9 +10,14 @@ from typing import Callable, Optional, Tuple
 from .capture import CaptureResult, CaptureStatus
 from .commands import Command, CommandKind
 from .hotkey import parse_hotkey
+from .logging_setup import log_capture_result, log_exception_safe
+from .errors import UserError, user_message
 from .settings import TraySettings
 from .speech import SpeechEvent, SpeechEventKind, SpeechRequest
 from .voice_manager import VoiceManager, VoiceSwitchEvent
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 VOICE_SETUP_ERRORS = (
@@ -85,9 +91,8 @@ class Controller:
         self._show_status: Callable[[str], None] = lambda _message: None
         self._log_error: Callable[[str], None] = lambda _message: None
         self._open_log: Callable[[], None] = lambda: None
-        self._stop_tray: Callable[[], None] = lambda: None
-        self._close_instance: Callable[[], None] = lambda: None
-        self._quit_root: Callable[[], None] = lambda: None
+        self._ensure_tray_visible: Callable[[], None] = lambda: None
+        self._request_teardown: Callable[[], None] = lambda: None
         self._capture = capture or (
             lambda: CaptureResult(CaptureStatus.ACCESS_ERROR, detail="capture is not configured")
         )
@@ -109,9 +114,8 @@ class Controller:
         show_status: Optional[Callable[[str], None]] = None,
         log_error: Optional[Callable[[str], None]] = None,
         open_log: Optional[Callable[[], None]] = None,
-        stop_tray: Optional[Callable[[], None]] = None,
-        close_instance: Optional[Callable[[], None]] = None,
-        quit_root: Optional[Callable[[], None]] = None,
+        ensure_tray_visible: Optional[Callable[[], None]] = None,
+        request_teardown: Optional[Callable[[], None]] = None,
         capture: Optional[Callable[[], CaptureResult]] = None,
         capture_submit: Optional[Callable[[Callable[[], None]], None]] = None,
         log_info: Optional[Callable[[str], None]] = None,
@@ -131,12 +135,10 @@ class Controller:
             self._log_error = log_error
         if open_log is not None:
             self._open_log = open_log
-        if stop_tray is not None:
-            self._stop_tray = stop_tray
-        if close_instance is not None:
-            self._close_instance = close_instance
-        if quit_root is not None:
-            self._quit_root = quit_root
+        if ensure_tray_visible is not None:
+            self._ensure_tray_visible = ensure_tray_visible
+        if request_teardown is not None:
+            self._request_teardown = request_teardown
         if capture is not None:
             self._capture = capture
         if capture_submit is not None:
@@ -204,9 +206,6 @@ class Controller:
             command = self._commands.get_nowait()
         except Empty:
             return None
-        if command.kind is CommandKind.EXIT:
-            with self._state_lock:
-                self._begin_shutdown()
         return command
 
     def handle(self, command: Command) -> None:
@@ -226,7 +225,7 @@ class Controller:
                 candidate_path, candidate_voice = self._load_voice(str(selected))
             except VOICE_SETUP_ERRORS as error:
                 self._log_error("Selected Piper voice could not be loaded: %s" % error)
-                self._show_status("The selected Piper voice model could not be loaded.")
+                self._show_status(user_message(UserError.VOICE_LOAD_REPLACEMENT))
                 return
             self._stop_speech()
             self.install_voice(candidate_path, candidate_voice, persist=True)
@@ -261,15 +260,50 @@ class Controller:
             self._show_status(
                 "Piper hotkeys stopped unexpectedly; hotkeys are unavailable."
             )
+        elif command.kind is CommandKind.SYSTEM_RESUME:
+            self._recover_from_resume()
         elif command.kind is CommandKind.EXIT:
+            if self.state.shutting_down:
+                return
             self._begin_shutdown()
+            self._request_teardown()
+
+    def _recover_from_resume(self) -> None:
+        if self.state.shutting_down:
+            return
+
+        if self.state.capture_in_progress:
+            self.state.capture_generation += 1
+            self._capture_pending = False
+
+        if self.state.playback is PlaybackState.SPEAKING:
+            active = self.state.speech_generation
             if self._speech_worker is not None:
-                self._speech_worker.shutdown()
-            for cleanup in (self._stop_tray, self._close_instance, self._quit_root):
-                try:
-                    cleanup()
-                except Exception as error:
-                    self._log_error("Piper cleanup step failed: %s" % error)
+                self._speech_worker.cancel_active(active)
+
+            self.state.speech_generation += 1
+            self.state.playback = PlaybackState.STOPPED
+
+        self._ensure_tray_visible()
+
+        restored = (
+            self._hotkeys is not None
+            and bool(self._hotkeys.reregister())
+        )
+
+        if not restored:
+            self._show_status(user_message(UserError.HOTKEY_CONFLICT))
+
+        hotkey = "unavailable"
+        if self._hotkeys is not None:
+            spec = getattr(self._hotkeys, "capture_spec", None)
+            if spec is not None:
+                hotkey = getattr(spec, "canonical", "unavailable")
+
+        self._log_info(
+            "system resume playback=%s hotkey=%s"
+            % (self.state.playback.name, hotkey)
+        )
 
     def _request_capture(self) -> None:
         if self.state.playback is PlaybackState.SPEAKING:
@@ -289,14 +323,18 @@ class Controller:
             try:
                 result = self._capture()
             except Exception as error:
+                log_exception_safe(
+                    _LOGGER,
+                    "capture failed",
+                    error,
+                    stage="capture_worker",
+                )
                 result = CaptureResult(CaptureStatus.ACCESS_ERROR, detail=str(error))
-            message = "capture outcome=%s length=%d" % (
+            log_capture_result(
+                _LOGGER,
                 result.status.name,
                 len(result.text) if result.text is not None else 0,
             )
-            if result.detail:
-                message += " detail=%s" % result.detail
-            self._log_info(message)
             kind = (
                 CommandKind.CAPTURE_SUCCEEDED
                 if result.status is CaptureStatus.SUCCESS
@@ -314,7 +352,8 @@ class Controller:
         if not isinstance(result, CaptureResult):
             return
         if generation != self.state.capture_generation:
-            if self._capture_pending and self.state.capture_in_progress:
+            self.state.capture_in_progress = False
+            if self._capture_pending:
                 self._capture_pending = False
                 self._start_capture(self.state.capture_generation)
             return
@@ -335,9 +374,10 @@ class Controller:
         else:
             if self._capture_replaced_speech:
                 self.state.playback = PlaybackState.STOPPED
-            self._show_status(
-                "No text selected or the application did not provide it"
-            )
+            if result.status is CaptureStatus.ACCESS_ERROR:
+                self._show_status(user_message(UserError.CLIPBOARD))
+            else:
+                self._show_status(user_message(UserError.NO_TEXT))
 
     def _stop_speech(self) -> None:
         if self.state.playback is not PlaybackState.SPEAKING:
@@ -355,7 +395,7 @@ class Controller:
             return
         if not event.success:
             self._log_error("Selected Piper voice could not be loaded: %s" % event.error)
-            self._show_status("The selected Piper voice model could not be loaded.")
+            self._show_status(user_message(UserError.VOICE_LOAD_REPLACEMENT))
             return
         if event.model_path is None or event.voice is None or self._voice_manager is None:
             return
@@ -393,14 +433,25 @@ class Controller:
             self.state.playback = PlaybackState.STOPPED
         elif event.kind is SpeechEventKind.FAILED:
             self.state.playback = PlaybackState.STOPPED
-            if event.error:
-                self._log_error(event.error)
-            self._show_status("Speech playback failed.")
+            if event.failure_phase == "synthesis":
+                self._show_status(user_message(UserError.SYNTHESIS))
+            else:
+                self._show_status(user_message(UserError.PLAYBACK))
 
     def _begin_shutdown(self) -> None:
-        if not self.state.shutting_down:
-            self.state.shutting_down = True
-            self.state.speech_generation += 1
+        if self.state.shutting_down:
+            return
+
+        self.state.shutting_down = True
+        if self.state.capture_in_progress:
+            self.state.capture_generation += 1
+            self.state.capture_in_progress = False
+            self._capture_pending = False
+        if self.state.playback is PlaybackState.SPEAKING:
+            active = self.state.speech_generation
+            if self._speech_worker is not None:
+                self._speech_worker.cancel_active(active)
+        self.state.speech_generation += 1
         self.state.playback = PlaybackState.SHUTTING_DOWN
 
     def request_hotkey_change(self, requested: str) -> bool:
@@ -409,17 +460,15 @@ class Controller:
             return False
         try:
             candidate = parse_hotkey(requested)
-        except ValueError as error:
-            self._show_status(str(error))
+        except ValueError:
+            self._show_status(user_message(UserError.HOTKEY_INVALID))
             return False
         current = self.state.settings
         if current is None or self._save_settings is None:
             self._show_status("Hotkey settings could not be saved.")
             return False
         if not self._hotkeys.rebind(candidate):
-            self._show_status(
-                "That hotkey is already in use. Choose another combination."
-            )
+            self._show_status(user_message(UserError.HOTKEY_CONFLICT))
             return False
         next_settings = replace(current, hotkey=candidate.canonical)
         try:

@@ -1,4 +1,5 @@
 import threading
+import logging
 import time
 from types import SimpleNamespace
 
@@ -168,6 +169,7 @@ def test_synthesis_failure_emits_generic_failed_event():
         event = wait_for_event(events, SpeechEventKind.FAILED, 3)
         assert event.error == "Speech synthesis failed."
         assert "secret" not in event.error
+        assert event.failure_phase == "synthesis"
     finally:
         worker.shutdown()
 
@@ -195,6 +197,56 @@ def test_playback_failure_emits_generic_failed_event():
         event = wait_for_event(events, SpeechEventKind.FAILED, 4)
         assert event.error == "Speech playback failed."
         assert "device" not in event.error
+    finally:
+        worker.shutdown()
+
+
+def test_player_factory_failure_is_reported_as_playback_failure():
+    events = []
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+
+    def player_factory(_sample_rate):
+        raise RuntimeError("ffplay unavailable")
+
+    worker = SpeechWorker(lambda: voice, events.append, player_factory)
+
+    try:
+        worker.submit(SpeechRequest(41, "hello"))
+        event = wait_for_event(events, SpeechEventKind.FAILED, 41)
+        assert event.error == "Speech playback failed."
+        assert event.failure_phase == "playback"
+    finally:
+        worker.shutdown()
+
+
+def test_player_context_entry_failure_is_reported_as_playback_failure():
+    events = []
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+
+    class BrokenPlayerContext:
+        def __enter__(self):
+            raise OSError("audio backend unavailable")
+
+        def __exit__(self, *_args):
+            return None
+
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: BrokenPlayerContext(),
+    )
+
+    try:
+        worker.submit(SpeechRequest(42, "hello"))
+        event = wait_for_event(events, SpeechEventKind.FAILED, 42)
+        assert event.error == "Speech playback failed."
+        assert event.failure_phase == "playback"
     finally:
         worker.shutdown()
 
@@ -314,6 +366,37 @@ def test_shutdown_stops_active_work_and_joins_worker():
     worker.shutdown()
 
     assert not worker._thread.is_alive()
+
+
+def test_shutdown_logs_timeout_without_raising(caplog):
+    worker = make_worker(
+        SimpleNamespace(config=SimpleNamespace(sample_rate=22050), synthesize=lambda _text: []),
+        [],
+        [],
+        threading.Event(),
+    )
+
+    class StuckThread:
+        name = "piper-speech"
+
+        def join(self, timeout):
+            assert timeout == 5
+
+        def is_alive(self):
+            return True
+
+    worker._thread = StuckThread()
+    speech_logger = logging.getLogger("piper.windows_tray.speech")
+    speech_logger.addHandler(caplog.handler)
+    previous_level = speech_logger.level
+    speech_logger.setLevel(logging.ERROR)
+    try:
+        worker.shutdown()
+    finally:
+        speech_logger.removeHandler(caplog.handler)
+        speech_logger.setLevel(previous_level)
+
+    assert "speech shutdown timed_out=true thread=piper-speech" in caplog.text
 
 
 def test_cancellation_at_play_boundary_stops_player_before_chunk_is_played():

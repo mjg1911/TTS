@@ -5,12 +5,15 @@ from typing import Any, Iterable, Optional, Sequence, Tuple
 
 from .commands import Command, CommandKind
 from .controller import Controller, VOICE_SETUP_ERRORS
+from .errors import UserError, user_message
 from . import DEFAULT_HOTKEY
 from .capture import SelectionCapture
 from .clipboard import Win32Clipboard
 from .hotkey import parse_hotkey
 from .hotkey_service import HotkeyManager
-from .logging_setup import configure_logging, log_path
+from .logging_setup import configure_logging, log_exception_safe, log_path
+from .lifecycle import TeardownCoordinator
+from .power_events import PowerBroadcastListener
 from piper.audio_playback import AudioPlayer
 from .speech import SpeechWorker
 from .settings import TraySettings, load_settings, save_settings
@@ -78,6 +81,8 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
     hotkeys_stopped = False
     speech_worker = None
     speech_stopped = False
+    power_listener = None
+    power_stopped = False
     ui = None
     logger = None
 
@@ -94,7 +99,6 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
 
     def close_instance() -> None:
         nonlocal instance_closed
-        stop_hotkeys()
         if not instance_closed:
             try:
                 instance.close()
@@ -104,10 +108,79 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             finally:
                 instance_closed = True
 
+    def stop_power_listener() -> None:
+        nonlocal power_stopped
+        if power_listener is not None and not power_stopped:
+            try:
+                power_listener.stop()
+            except Exception as error:
+                if logger is not None:
+                    log_exception_safe(
+                        logger,
+                        "power listener stop failed",
+                        error,
+                        stage="shutdown",
+                    )
+            finally:
+                power_stopped = True
+
+    def stop_speech() -> None:
+        nonlocal speech_stopped
+        if speech_worker is not None and not speech_stopped:
+            try:
+                speech_worker.shutdown()
+            except Exception as error:
+                if logger is not None:
+                    log_exception_safe(
+                        logger,
+                        "speech worker stop failed",
+                        error,
+                        stage="shutdown",
+                    )
+            finally:
+                speech_stopped = True
+
+    def stop_tray() -> None:
+        nonlocal tray_stopped
+        if tray is not None and not tray_stopped:
+            try:
+                tray.stop()
+            except Exception as error:
+                if logger is not None:
+                    log_exception_safe(
+                        logger,
+                        "tray stop failed",
+                        error,
+                        stage="shutdown",
+                    )
+            finally:
+                tray_stopped = True
+
+    def quit_root() -> None:
+        if ui is not None:
+            ui.root.quit()
+
+    def teardown_failure(stage: str, error: BaseException) -> None:
+        if logger is not None:
+            log_exception_safe(logger, "shutdown cleanup failed", error, stage=stage)
+
+    def teardown_complete() -> None:
+        if logger is not None:
+            getattr(logger, "info", lambda *_args: None)("shutdown complete")
+
+    teardown = TeardownCoordinator(
+        stop_hotkeys=stop_hotkeys,
+        stop_power=stop_power_listener,
+        stop_speech=stop_speech,
+        stop_tray=stop_tray,
+        close_instance=close_instance,
+        quit_root=quit_root,
+        on_failure=teardown_failure,
+        on_complete=teardown_complete,
+    )
+
     try:
         if instance.acquire() is InstanceRole.SECONDARY:
-            instance.close()
-            instance_closed = True
             return 0
 
         settings_result = load_settings()
@@ -144,7 +217,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                 logger.error(
                     "Selected Piper voice could not be loaded: %s", candidate_error
                 )
-                ui.show_status("The selected Piper voice model could not be loaded.")
+                ui.show_status(user_message(UserError.VOICE_LOAD_STARTUP))
                 return 1
             if not controller.install_voice(selected_path, selected_voice, persist=True):
                 return 1
@@ -166,17 +239,6 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
         if hasattr(tray, "set_snapshot_provider"):
             tray.set_snapshot_provider(controller.tray_snapshot)
 
-        def stop_tray() -> None:
-            nonlocal tray_stopped
-            if not tray_stopped:
-                try:
-                    tray.stop()
-                except Exception as error:
-                    if logger is not None:
-                        logger.error("Piper tray could not be stopped cleanly: %s", error)
-                finally:
-                    tray_stopped = True
-
         def pump() -> None:
             command = controller.drain_once()
             if command is not None:
@@ -194,9 +256,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             show_status=ui.show_status,
             log_error=logger.error,
             open_log=lambda: os.startfile(log_path().parent),
-            stop_tray=stop_tray,
-            close_instance=close_instance,
-            quit_root=ui.root.quit,
+            ensure_tray_visible=tray.ensure_visible,
             capture=capture.capture,
             log_info=getattr(logger, "info", lambda *_args: None),
             hotkeys=hotkeys,
@@ -206,6 +266,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                 else settings.hotkey
             ),
             show_last_text=ui.show_last_text,
+            request_teardown=teardown.run,
         )
         hotkeys.set_failure_callback(
             lambda error: controller.enqueue(
@@ -236,9 +297,14 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
                 )
             else:
                 ui.show_status(
-                    "Piper hotkeys could not be started. Choose another "
-                    "combination in Hotkey settings."
+                    user_message(UserError.HOTKEY_CONFLICT)
                 )
+        power_listener = PowerBroadcastListener()
+        power_listener.start(
+            lambda: controller.enqueue(
+                Command(CommandKind.SYSTEM_RESUME)
+            )
+        )
         ui.root.after(25, pump)
         ui.root.mainloop()
         return 0
@@ -247,18 +313,7 @@ def run_app(argv: Optional[Sequence[str]] = None) -> int:
             logger.exception("Piper tray application stopped unexpectedly")
         raise
     finally:
-        if tray is not None and not tray_stopped:
-            stop_tray()
-        if speech_worker is not None and not speech_stopped:
-            try:
-                speech_worker.shutdown()
-            except Exception as error:
-                if logger is not None:
-                    logger.error("Piper speech worker could not be stopped cleanly: %s", error)
-            finally:
-                speech_stopped = True
-        stop_hotkeys()
-        close_instance()
+        teardown.run()
         if ui is not None:
             try:
                 ui.root.destroy()

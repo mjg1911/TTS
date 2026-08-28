@@ -20,6 +20,7 @@ class CommandKind(Enum):
     HOTKEY_FAILED = auto()
     VOICE_SWITCH_SUCCEEDED = auto()
     VOICE_SWITCH_FAILED = auto()
+    SYSTEM_RESUME = auto()
 
 
 CommandValue = Any

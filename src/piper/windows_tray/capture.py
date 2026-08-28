@@ -1,9 +1,15 @@
 """Fresh selected-text capture using simulated Ctrl+C and clipboard polling."""
 
+import logging
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Callable, Optional, Any
+
+from .logging_setup import log_exception_safe
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 HOTKEY_RELEASE_DELAY_S = 0.15
@@ -42,6 +48,12 @@ class SelectionCapture:
             self._sleep(HOTKEY_RELEASE_DELAY_S)
             self._send_copy()
         except OSError as error:
+            log_exception_safe(
+                _LOGGER,
+                "capture access failure",
+                error,
+                stage="initial_copy",
+            )
             return CaptureResult(CaptureStatus.ACCESS_ERROR, detail=str(error))
 
         deadline = self._monotonic() + timeout_s
@@ -53,6 +65,12 @@ class SelectionCapture:
             try:
                 current = self._clipboard.sequence_number()
             except OSError as error:
+                log_exception_safe(
+                    _LOGGER,
+                    "capture access failure",
+                    error,
+                    stage="sequence_poll",
+                )
                 last_error = error
                 saw_sequence_error = True
             else:
@@ -61,6 +79,12 @@ class SelectionCapture:
                     try:
                         text = self._clipboard.read_text()
                     except OSError as error:
+                        log_exception_safe(
+                            _LOGGER,
+                            "capture access failure",
+                            error,
+                            stage="clipboard_read",
+                        )
                         last_error = error
                     else:
                         text = text.rstrip("\x00")
