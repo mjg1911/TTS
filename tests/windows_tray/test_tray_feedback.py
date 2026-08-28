@@ -18,6 +18,9 @@ def install_fake_pystray(monkeypatch, icon):
         def run_detached(self):
             pass
 
+        def stop(self):
+            pass
+
         def notify(self, message, title):
             return icon.notify(message, title)
 
@@ -73,14 +76,34 @@ def test_error_sounds_callback_only_enqueues_toggle_command(monkeypatch, tmp_pat
 
 def test_show_notification_delegates_to_native_icon(monkeypatch, tmp_path: Path):
     notifications = []
-    icon = SimpleNamespace(notify=lambda message, title: notifications.append((message, title)))
+    icon = SimpleNamespace(notify=lambda *args, **kwargs: notifications.append((args, kwargs)))
     install_fake_pystray(monkeypatch, icon)
     tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
 
     tray.start()
     tray.show_notification("No text selected")
 
-    assert notifications == [("No text selected", "Piper")]
+    assert notifications == [(('No text selected', 'Piper'), {})]
+
+
+def test_fallback_snapshot_disables_error_sounds():
+    tray = tray_icon.TrayIcon(Path("icon.png"), lambda _command: None)
+
+    assert tray._snapshot_provider().error_sounds_enabled is False
+
+
+@pytest.mark.parametrize("action", ["before_start", "after_stop"])
+def test_show_notification_requires_running_tray(monkeypatch, tmp_path: Path, action: str):
+    icon = SimpleNamespace(notify=lambda *_args, **_kwargs: None)
+    install_fake_pystray(monkeypatch, icon)
+    tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
+
+    if action == "after_stop":
+        tray.start()
+        tray.stop()
+
+    with pytest.raises(RuntimeError, match="^tray icon is not running$"):
+        tray.show_notification("No text selected")
 
 
 def test_show_notification_propagates_native_failure(monkeypatch, tmp_path: Path):

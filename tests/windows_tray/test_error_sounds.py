@@ -41,6 +41,19 @@ def test_toggle_error_sounds_saves_before_committing_state() -> None:
     assert controller.tray_snapshot().error_sounds_enabled is True
 
 
+@pytest.mark.parametrize(
+    "controller",
+    [Controller(), Controller(settings=TraySettings(error_sounds=False))],
+)
+def test_toggle_error_sounds_reports_unavailable_persistence(controller) -> None:
+    statuses = []
+    controller.configure_runtime(show_status=statuses.append)
+
+    controller.handle(Command(CommandKind.TOGGLE_ERROR_SOUNDS))
+
+    assert statuses == ["Piper error sound settings could not be saved."]
+
+
 @pytest.mark.parametrize("failure", [OSError("disk"), ValueError("invalid")])
 def test_failed_toggle_error_sounds_save_retains_state_and_checkmark(failure) -> None:
     statuses = []

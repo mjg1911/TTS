@@ -284,6 +284,7 @@ class Controller:
     def _toggle_error_sounds(self) -> bool:
         current = self.state.settings
         if current is None or self._save_settings is None:
+            self._show_status("Piper error sound settings could not be saved.")
             return False
         next_settings = replace(
             current,
@@ -420,8 +421,8 @@ class Controller:
                 try:
                     self._show_notification("No text selected")
                 except Exception as error:
-                    _LOGGER.error(
-                        "Piper tray notification could not be shown: %s", error
+                    self._log_error(
+                        "Piper tray notification could not be shown: %s" % error
                     )
 
     def _stop_speech(self) -> None:

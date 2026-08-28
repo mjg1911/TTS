@@ -112,27 +112,30 @@ def test_no_text_capture_uses_native_notification_without_visual_status():
     assert statuses == []
 
 
-def test_native_notification_failure_is_logged_without_fallback(caplog):
+def test_native_notification_failure_uses_injected_logger():
     statuses = []
+    errors = []
     controller = Controller(capture_submit=lambda _job: None)
     controller.configure_runtime(
         show_notification=lambda _message: (_ for _ in ()).throw(
             OSError("native notification failed")
         ),
         show_status=statuses.append,
+        log_error=errors.append,
     )
 
-    with caplog.at_level(logging.ERROR):
-        controller.handle(Command(CommandKind.CAPTURE_REQUEST))
-        generation = controller.state.capture_generation
-        controller.handle(
-            Command(
-                CommandKind.CAPTURE_FAILED,
-                CaptureCompletion(generation, CaptureResult(CaptureStatus.EMPTY)),
-            )
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_FAILED,
+            CaptureCompletion(generation, CaptureResult(CaptureStatus.EMPTY)),
         )
+    )
 
-    assert "Piper tray notification could not be shown: native notification failed" in caplog.text
+    assert errors == [
+        "Piper tray notification could not be shown: native notification failed"
+    ]
     assert statuses == []
 
 
