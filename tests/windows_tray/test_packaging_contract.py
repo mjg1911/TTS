@@ -77,6 +77,15 @@ def test_spec_builds_one_file_executable() -> None:
     assert "a.datas" in text
 
 
+def test_spec_resolves_paths_from_repository_root() -> None:
+    text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
+
+    assert "SPEC_DIR = Path(SPECPATH)" in text
+    assert 'SPEC_DIR / "piper_tray_entry.py"' in text
+    assert 'ROOT / "src"' in text
+    assert 'ROOT / "build" / "piper-tray" / "piper-tray.ico"' in text
+
+
 def test_icon_generator_uses_repository_logo_and_expected_target() -> None:
     text = (ROOT / "script" / "make_piper_tray_icon.py").read_text(
         encoding="utf-8"
