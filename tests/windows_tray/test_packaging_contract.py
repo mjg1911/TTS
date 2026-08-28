@@ -84,3 +84,25 @@ def test_icon_generator_uses_repository_logo_and_expected_target() -> None:
     assert '"etc" / "logo.png"' in text
     assert '"piper-tray.ico"' in text
     assert 'format="ICO"' in text
+
+
+def test_windows_build_script_runs_icon_generation_and_pyinstaller() -> None:
+    text = (ROOT / "script" / "build_windows_tray.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert "make_piper_tray_icon.py" in text
+    assert "PyInstaller" in text
+    assert "PiperTray.exe" in text
+    assert "Get-FileHash" in text
+
+
+def test_frozen_smoke_script_uses_clean_environment() -> None:
+    text = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert "PiperTray.exe" in text
+    assert "APPDATA" in text
+    assert "LOCALAPPDATA" in text
+    assert "PYTHONPATH" in text
+    assert "Start-Process" in text
+    assert "HasExited" in text
