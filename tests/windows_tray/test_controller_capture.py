@@ -108,7 +108,7 @@ def test_no_text_capture_uses_native_notification_without_visual_status():
         )
     )
 
-    assert notifications == ["No text selected"]
+    assert notifications == ["No text selected or the application did not provide it"]
     assert statuses == []
 
 

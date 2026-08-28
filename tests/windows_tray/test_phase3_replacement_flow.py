@@ -39,7 +39,7 @@ def test_no_text_replacement_notifies_without_submitting_speech():
     assert completion is not None
     controller.handle(completion)
 
-    assert notifications == ["No text selected"]
+    assert notifications == ["No text selected or the application did not provide it"]
     assert worker.submitted == []
     assert controller.state.playback is PlaybackState.STOPPED
 

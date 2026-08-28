@@ -419,7 +419,7 @@ class Controller:
                 self._show_status(user_message(UserError.CLIPBOARD))
             else:
                 try:
-                    self._show_notification("No text selected")
+                    self._show_notification(user_message(UserError.NO_TEXT))
                 except Exception as error:
                     self._log_error(
                         "Piper tray notification could not be shown: %s" % error
