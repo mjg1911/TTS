@@ -24,7 +24,15 @@ def test_tray_snapshot_exposes_error_sounds_setting() -> None:
 def test_toggle_error_sounds_saves_before_committing_state() -> None:
     settings = TraySettings(error_sounds=False)
     saved = []
-    controller = Controller(settings=settings, save_settings=saved.append)
+    controller_ref = []
+
+    def save_settings(next_settings: TraySettings) -> None:
+        controller = controller_ref[0]
+        assert controller.state.settings.error_sounds is False
+        saved.append(next_settings)
+
+    controller = Controller(settings=settings, save_settings=save_settings)
+    controller_ref.append(controller)
 
     controller.handle(Command(CommandKind.TOGGLE_ERROR_SOUNDS))
 
