@@ -97,6 +97,7 @@ finally {
             if (-not $Process.HasExited) {
                 Stop-Process -Id $Process.Id -Force
             }
+            $Process.WaitForExit(10000) | Out-Null
         }
     } finally {
         $env:APPDATA = $OldAppData
@@ -108,7 +109,22 @@ finally {
         }
 
         if (Test-Path $SmokeRoot) {
-            Remove-Item -Recurse -Force $SmokeRoot
+            $CleanupError = $null
+            for ($Attempt = 1; $Attempt -le 10; $Attempt++) {
+                try {
+                    Remove-Item -Recurse -Force $SmokeRoot -ErrorAction Stop
+                    $CleanupError = $null
+                    break
+                } catch {
+                    $CleanupError = $_
+                    if ($Attempt -lt 10) {
+                        Start-Sleep -Seconds 1
+                    }
+                }
+            }
+            if ($null -ne $CleanupError) {
+                throw $CleanupError
+            }
         }
     }
 }

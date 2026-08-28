@@ -142,6 +142,22 @@ def test_frozen_smoke_script_cleans_temporary_root_in_finally() -> None:
     assert "Remove-Item -Recurse -Force $SmokeRoot" in finally_block
 
 
+def test_frozen_smoke_script_waits_for_process_and_retries_cleanup() -> None:
+    text = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(
+        encoding="utf-8"
+    )
+    finally_block = text.split("finally {", 1)[1]
+
+    assert "WaitForExit" in finally_block
+    assert "for ($Attempt = 1; $Attempt -le 10; $Attempt++)" in finally_block
+    assert "Start-Sleep -Seconds 1" in finally_block
+    assert (
+        "Remove-Item -Recurse -Force $SmokeRoot -ErrorAction Stop\n"
+        "                    $CleanupError = $null\n"
+        "                    break"
+    ) in finally_block
+
+
 def test_frozen_smoke_script_uses_a_unique_temporary_root() -> None:
     text = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(
         encoding="utf-8"
