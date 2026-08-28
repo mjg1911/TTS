@@ -23,10 +23,11 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
             return FakeImage()
 
     class FakeMenuItem:
-        def __init__(self, text, action, enabled=None):
+        def __init__(self, text, action, enabled=None, checked=None):
             self.text = text
             self.action = action
             self.enabled = enabled
+            self.checked = checked
 
     class FakeMenu:
         def __init__(self, *items):
@@ -60,6 +61,7 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
         CommandKind.SHOW_LAST_TEXT,
         CommandKind.STOP_REQUEST,
         CommandKind.REPLAY_REQUEST,
+        CommandKind.TOGGLE_ERROR_SOUNDS,
         CommandKind.CONFIGURE_HOTKEY,
         CommandKind.OPEN_LOG,
         CommandKind.EXIT,
@@ -89,8 +91,8 @@ def test_tray_start_and_stop_delegate_to_pystray(monkeypatch, tmp_path: Path) ->
     class FakePystray:
         Icon = FakeIcon
         Menu = lambda *items: SimpleNamespace(items=items)
-        MenuItem = lambda text, action, enabled=None: SimpleNamespace(
-            text=text, action=action, enabled=enabled
+        MenuItem = lambda text, action, enabled=None, checked=None: SimpleNamespace(
+            text=text, action=action, enabled=enabled, checked=checked
         )
 
     monkeypatch.setattr(tray_icon, "_load_dependencies", lambda: (FakePystray, FakeImageApi))
@@ -125,8 +127,8 @@ def test_tray_update_menu_delegates_to_pystray(monkeypatch, tmp_path: Path) -> N
     class FakePystray:
         Icon = FakeIcon
         Menu = lambda *items: SimpleNamespace(items=items)
-        MenuItem = lambda text, action, enabled=None: SimpleNamespace(
-            text=text, action=action, enabled=enabled
+        MenuItem = lambda text, action, enabled=None, checked=None: SimpleNamespace(
+            text=text, action=action, enabled=enabled, checked=checked
         )
 
     monkeypatch.setattr(tray_icon, "_load_dependencies", lambda: (FakePystray, FakeImageApi))

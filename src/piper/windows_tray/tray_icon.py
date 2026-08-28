@@ -57,6 +57,13 @@ class TrayIcon:
                     enabled=lambda _item: self._snapshot_provider().can_replay,
                 ),
                 pystray.MenuItem(
+                    "Error sounds",
+                    lambda _icon, _item: self._enqueue(
+                        Command(CommandKind.TOGGLE_ERROR_SOUNDS)
+                    ),
+                    checked=lambda _item: self._snapshot_provider().error_sounds_enabled,
+                ),
+                pystray.MenuItem(
                     "Hotkey settings",
                     lambda _icon, _item: self._enqueue(
                         Command(CommandKind.CONFIGURE_HOTKEY)
@@ -120,3 +127,6 @@ class TrayIcon:
     def update_menu(self) -> None:
         if self._icon is not None:
             self._icon.update_menu()
+
+    def show_notification(self, message: str) -> None:
+        self._icon.notify(message, title="Piper")
