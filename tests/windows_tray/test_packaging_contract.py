@@ -158,6 +158,15 @@ def test_frozen_smoke_script_waits_for_process_and_retries_cleanup() -> None:
     ) in finally_block
 
 
+def test_frozen_smoke_script_terminates_the_full_process_tree() -> None:
+    text = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(
+        encoding="utf-8"
+    )
+    finally_block = text.split("finally {", 1)[1]
+
+    assert "taskkill.exe /PID $Process.Id /T /F" in finally_block
+
+
 def test_frozen_smoke_script_uses_a_unique_temporary_root() -> None:
     text = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(
         encoding="utf-8"

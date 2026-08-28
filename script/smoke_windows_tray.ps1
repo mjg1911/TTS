@@ -95,7 +95,7 @@ finally {
         if ($null -ne $Process) {
             $Process.Refresh()
             if (-not $Process.HasExited) {
-                Stop-Process -Id $Process.Id -Force
+                & taskkill.exe /PID $Process.Id /T /F | Out-Null
             }
             $Process.WaitForExit(10000) | Out-Null
         }
