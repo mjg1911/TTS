@@ -18,6 +18,13 @@ if (Test-Path $Exe) {
 }
 
 python -m pip install -e ".[windows-tray,windows-tray-build]"
+python setup.py build_ext --inplace
+
+$Bridge = Get-ChildItem (Join-Path $Root "src\piper") -Filter "espeakbridge*.pyd" -File
+if ($null -eq $Bridge) {
+    throw "espeakbridge.pyd was not built; the packaged executable would not be able to synthesize speech."
+}
+
 python script/make_piper_tray_icon.py
 python -m PyInstaller --clean --noconfirm script/piper_tray.spec
 

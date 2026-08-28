@@ -11,12 +11,21 @@ SPEC_DIR = Path(SPECPATH)
 ROOT = SPEC_DIR.parent
 piper_datas = collect_data_files("piper")
 piper_binaries = collect_dynamic_libs("piper")
+piper_extensions = [
+    (str(path), "piper")
+    for path in (ROOT / "src" / "piper").glob("*.pyd")
+]
+if not piper_extensions:
+    raise RuntimeError(
+        "The compiled piper.espeakbridge extension was not built. "
+        "Run the Windows build bootstrap again."
+    )
 hiddenimports = collect_submodules("pystray") + ["piper.espeakbridge"]
 
 a = Analysis(
     [str(SPEC_DIR / "piper_tray_entry.py")],
     pathex=[str(ROOT / "src")],
-    binaries=piper_binaries,
+    binaries=piper_binaries + piper_extensions,
     datas=piper_datas,
     hiddenimports=hiddenimports,
     noarchive=False,

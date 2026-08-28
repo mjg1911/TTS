@@ -70,6 +70,14 @@ def test_spec_is_no_console_and_collects_required_runtime_content() -> None:
     assert 'name="PiperTray"' in text
 
 
+def test_spec_includes_compiled_espeak_bridge_extension() -> None:
+    text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
+
+    assert "glob(\"*.pyd\")" in text
+    assert "piper_extensions" in text
+    assert "binaries=piper_binaries + piper_extensions" in text
+
+
 def test_spec_builds_one_file_executable() -> None:
     text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
     assert "COLLECT(" not in text
@@ -103,6 +111,30 @@ def test_windows_build_script_runs_icon_generation_and_pyinstaller() -> None:
     assert "PyInstaller" in text
     assert "PiperTray.exe" in text
     assert "Get-FileHash" in text
+
+
+def test_windows_build_script_fails_if_espeak_bridge_was_not_built() -> None:
+    text = (ROOT / "script" / "build_windows_tray.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "espeakbridge*.pyd" in text
+    assert "espeakbridge.pyd was not built" in text
+
+
+def test_windows_build_script_builds_python_extension_before_packaging() -> None:
+    text = (ROOT / "script" / "build_windows_tray.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "python setup.py build_ext --inplace" in text
+
+
+def test_python_extension_cmake_quotes_external_include_path() -> None:
+    text = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert 'CMAKE_C_FLAGS=-D_FILE_OFFSET_BITS=64 -I\\"${ESPEAKNG_BUILD_DIR}' in text
+    assert 'CMAKE_CXX_FLAGS=-D_FILE_OFFSET_BITS=64 -I\\"${ESPEAKNG_BUILD_DIR}' in text
 
 
 def test_frozen_smoke_script_uses_clean_environment() -> None:
