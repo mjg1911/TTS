@@ -1,6 +1,19 @@
+import logging
 from pathlib import Path
 
+import pytest
+
 from piper.windows_tray.logging_setup import configure_logging, log_path
+
+
+@pytest.fixture(autouse=True)
+def _clean_up_logging_handlers():
+    yield
+
+    logger = logging.getLogger("piper.windows_tray")
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
 
 
 def test_log_path_uses_local_appdata(tmp_path: Path) -> None:

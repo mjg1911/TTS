@@ -67,3 +67,45 @@ Result: clean. Git emitted only normal LF-to-CRLF working-copy warnings.
 - Python-based verification could not be performed in this environment because the local venv points to an unavailable Python 3.12 installation and no standalone Python or pytest executable is available.
 - Windows-only runtime behavior remains pending execution on a Windows host with Python 3.12 and the project environment installed.
 - Existing unrelated untracked files and directories were preserved and were not staged.
+
+## Review Fix Report
+
+Addressed the Task 3 review findings:
+
+- Added focused `run_app` coverage in `tests/windows_tray/test_app_foundation.py` proving debug mode forces `DEBUG` and passes `console=True`, while normal mode preserves the settings level and one-argument logging call shape.
+- Added an autouse logging cleanup fixture in `tests/windows_tray/test_logging_setup.py` that removes and closes every configured handler after each test, making resource isolation explicit.
+- No production implementation changes were needed; the reviewed debug behavior was already present.
+
+## Review Fix Test Evidence
+
+Focused command:
+
+```text
+pytest tests/windows_tray/test_entrypoint.py tests/windows_tray/test_logging_setup.py -v
+```
+
+Result: unavailable because `pytest` is not on PATH.
+
+Focused venv command:
+
+```text
+.venv\Scripts\pytest.exe tests/windows_tray/test_entrypoint.py tests/windows_tray/test_logging_setup.py -v
+```
+
+Result: unavailable because the launcher targets the missing Python 3.12 interpreter at `C:\Users\mhoem\AppData\Local\Programs\Python\Python312\python.exe`.
+
+Tray regression command:
+
+```text
+.venv\Scripts\pytest.exe tests/windows_tray -q
+```
+
+Result: the same unavailable Python 3.12 limitation; tests did not start.
+
+Static validation:
+
+```text
+git diff --check
+```
+
+Result: clean; Git emitted only normal LF-to-CRLF working-copy warnings.
