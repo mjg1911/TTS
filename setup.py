@@ -113,6 +113,9 @@ setup(
             "pystray>=0.19.5,<1",
             "Pillow>=10,<12",
         ],
+        "windows-tray-build": [
+            "pyinstaller>=6,<7",
+        ],
     },
     packages=[
         "piper",
