@@ -141,10 +141,11 @@ def test_tray_stop_and_replay_actions_use_dynamic_enablement(monkeypatch, tmp_pa
     import piper.windows_tray.tray_icon as tray_icon
 
     class FakeItem:
-        def __init__(self, text, action, enabled=None):
+        def __init__(self, text, action, enabled=None, checked=None):
             self.text = text
             self.action = action
             self.enabled = enabled
+            self.checked = checked
 
     class FakePystray:
         MenuItem = FakeItem

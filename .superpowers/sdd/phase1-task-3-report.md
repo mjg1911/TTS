@@ -42,3 +42,14 @@ Planned commit subject: `feat: add tray error sounds toggle`
   available.
 - Native notification behavior is covered by focused tests but was not runtime
   exercised in this environment.
+
+## Review Fix
+
+The Task 3 review blocker was fixed by updating
+`tests/windows_tray/test_phase3_replacement_flow.py` so its `FakeItem`
+constructor accepts `checked=` and stores the callback, matching pystray's
+tray regression contract.
+
+Validation was attempted again, but Python and pytest remain unavailable, so
+the focused and tray regression tests could not run and no runtime test result
+is claimed. The fix was committed separately after scope review.
