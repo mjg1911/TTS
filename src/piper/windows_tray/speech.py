@@ -1,5 +1,6 @@
 """Background speech synthesis and playback coordination for the tray app."""
 
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -23,10 +24,17 @@ class SpeechEventKind(Enum):
     FAILED = auto()
 
 
+class SpeechPurpose(Enum):
+    FOREGROUND = auto()
+    ERROR = auto()
+    WELCOME = auto()
+
+
 @dataclass(frozen=True)
 class SpeechRequest:
     generation: int
     text: str
+    purpose: SpeechPurpose = SpeechPurpose.FOREGROUND
 
 
 @dataclass(frozen=True)
@@ -35,6 +43,7 @@ class SpeechEvent:
     generation: int
     error: str | None = None
     failure_phase: str | None = None
+    purpose: SpeechPurpose = SpeechPurpose.FOREGROUND
 
 
 class SpeechWorker:
@@ -50,8 +59,10 @@ class SpeechWorker:
         self._on_event = on_event
         self._player_factory = player_factory
         self._condition = threading.Condition()
-        self._pending: Optional[SpeechRequest] = None
-        self._active_generation: Optional[int] = None
+        self._pending_foreground: Optional[SpeechRequest] = None
+        self._pending_errors = deque()  # type: deque[SpeechRequest]
+        self._pending_welcome: Optional[SpeechRequest] = None
+        self._active_request: Optional[SpeechRequest] = None
         self._cancel_event = threading.Event()
         self._active_player: Optional[AudioPlayer] = None
         self._decision_boundary = threading.RLock()
@@ -62,21 +73,73 @@ class SpeechWorker:
         self._thread.start()
 
     def submit(self, request: SpeechRequest) -> None:
-        """Queue a request, replacing any request not yet started."""
+        """Queue a request according to its speech purpose."""
+        cancel_auxiliary = False
+        player = None
+
         with self._condition:
             if self._shutdown:
                 return
-            self._pending = request
+
+            if request.purpose is SpeechPurpose.FOREGROUND:
+                self._pending_foreground = request
+                self._pending_errors.clear()
+                self._pending_welcome = None
+                cancel_auxiliary = (
+                    self._active_request is not None
+                    and self._active_request.purpose
+                    is not SpeechPurpose.FOREGROUND
+                )
+                if cancel_auxiliary:
+                    player = self._active_player
+            elif request.purpose is SpeechPurpose.ERROR:
+                self._pending_errors.append(request)
+            else:
+                self._pending_welcome = request
+
             self._condition.notify()
+
+        if cancel_auxiliary:
+            if player is not None:
+                player.stop()
+            with self._decision_boundary:
+                self._cancel_event.set()
 
     def cancel_active(self, generation: int) -> None:
         """Cancel matching active work and discard a matching pending request."""
         with self._condition:
-            if self._pending is not None and self._pending.generation == generation:
-                self._pending = None
-            if self._active_generation != generation:
+            if (
+                self._pending_foreground is not None
+                and self._pending_foreground.generation == generation
+            ):
+                self._pending_foreground = None
+
+            if (
+                self._active_request is None
+                or self._active_request.purpose
+                is not SpeechPurpose.FOREGROUND
+                or self._active_request.generation != generation
+            ):
                 return
             player = self._active_player
+        if player is not None:
+            player.stop()
+        with self._decision_boundary:
+            self._cancel_event.set()
+
+    def cancel_auxiliary(self) -> None:
+        """Cancel active and pending error or welcome speech."""
+        with self._condition:
+            self._pending_errors.clear()
+            self._pending_welcome = None
+            active = self._active_request
+            if (
+                active is None
+                or active.purpose is SpeechPurpose.FOREGROUND
+            ):
+                return
+            player = self._active_player
+
         if player is not None:
             player.stop()
         with self._decision_boundary:
@@ -86,7 +149,9 @@ class SpeechWorker:
         """Stop active speech and wait briefly for the worker to finish."""
         with self._condition:
             self._shutdown = True
-            self._pending = None
+            self._pending_foreground = None
+            self._pending_errors.clear()
+            self._pending_welcome = None
             player = self._active_player
             self._condition.notify_all()
         if player is not None:
@@ -104,23 +169,58 @@ class SpeechWorker:
     def _run(self) -> None:
         while True:
             with self._condition:
-                while self._pending is None and not self._shutdown:
+                while (
+                    not self._has_pending_locked()
+                    and not self._shutdown
+                ):
                     self._condition.wait()
-                if self._shutdown and self._pending is None:
+                if (
+                    self._shutdown
+                    and not self._has_pending_locked()
+                ):
                     return
-                request = self._pending
-                self._pending = None
-                self._active_generation = request.generation
+                request = self._take_next_locked()
+                self._active_request = request
                 self._cancel_event.clear()
 
             self._speak(request)
 
             with self._condition:
-                self._active_generation = None
+                self._active_request = None
                 self._active_player = None
 
+    def _has_pending_locked(self) -> bool:
+        return (
+            self._pending_foreground is not None
+            or bool(self._pending_errors)
+            or self._pending_welcome is not None
+        )
+
+    def _take_next_locked(self) -> SpeechRequest:
+        if self._pending_foreground is not None:
+            request = self._pending_foreground
+            self._pending_foreground = None
+            return request
+
+        if self._pending_errors:
+            return self._pending_errors.popleft()
+
+        request = self._pending_welcome
+        self._pending_welcome = None
+        if request is None:
+            raise RuntimeError(
+                "speech scheduler woke without pending work"
+            )
+        return request
+
     def _speak(self, request: SpeechRequest) -> None:
-        self._on_event(SpeechEvent(SpeechEventKind.STARTED, request.generation))
+        self._on_event(
+            SpeechEvent(
+                SpeechEventKind.STARTED,
+                request.generation,
+                purpose=request.purpose,
+            )
+        )
         terminal_kind = SpeechEventKind.FINISHED
         error: str | None = None
         failure_phase: str | None = None
@@ -211,5 +311,6 @@ class SpeechWorker:
                     request.generation,
                     error,
                     failure_phase,
+                    request.purpose,
                 )
             )
