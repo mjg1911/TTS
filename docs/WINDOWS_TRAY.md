@@ -41,14 +41,39 @@ enable Windows logon startup. It must not open a terminal or playback window.
 - Speak selected text: `Alt` + `backtick`.
 - Stop current speech: `F8`.
 - Tray actions: Voice settings, Show last text, Stop speaking, Replay,
-  Hotkey settings, Open log, Exit.
+  Hotkey settings, Error sounds, Open log, Exit.
+
+## Error sounds
+
+`Error sounds` is disabled by default. Its enabled state is shown by the
+native checkmark in the tray menu and persists across launches.
+
+When Error sounds is disabled, a successful launch speaks `Piper is ready.`
+and the approved runtime errors remain visual only.
+
+When Error sounds is enabled, the launch welcome is suppressed and Piper
+speaks these runtime errors with the currently selected voice:
+
+- `That hotkey is already in use. Choose another combination.`
+- `That hotkey is not valid. Choose another combination.`
+- `No text selected or the application did not provide it`
+- `The selected text could not be read from the clipboard.`
+
+Other status messages are not spoken merely because Error sounds is enabled.
+Feedback speech does not replace the last captured text and does not become
+available through Replay or Show last text.
+
+F8 and the tray's Stop speaking action can stop currently audible Piper
+speech, including error or launch feedback.
 
 ## Selection behavior
 
 Piper sends `Ctrl+C` to the foreground application and waits up to one second
 for fresh clipboard data. It does not restore the previous clipboard
-contents. If the clipboard sequence does not change or fresh non-whitespace
-text cannot be read, Piper does not speak the old clipboard contents.
+contents. If no fresh selected text is available, Piper shows a native tray
+notification with `No text selected`. It does not open a message box for this
+case and does not speak stale clipboard contents. The longer full no-text
+message is spoken only when Error sounds is enabled.
 
 ## Files
 
@@ -98,8 +123,10 @@ Choose another capture hotkey. `F8` is reserved for cancellation.
 
 ### No text selected or the application did not provide it
 
-The foreground application did not produce fresh clipboard text after
-`Ctrl+C`. Piper intentionally refuses to speak stale clipboard contents.
+If no fresh selected text is available after `Ctrl+C`, Piper shows the native
+tray notification `No text selected`, does not open a message box, and does
+not speak stale clipboard contents. The longer no-text message is spoken only
+when Error sounds is enabled.
 
 ### No audio
 
