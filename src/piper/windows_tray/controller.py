@@ -19,6 +19,15 @@ from .voice_manager import VoiceManager, VoiceSwitchEvent
 
 _LOGGER = logging.getLogger(__name__)
 _LAUNCH_WELCOME = "Piper is ready."
+_APPROVED_SPOKEN_ERRORS = frozenset(
+    {
+        UserError.HOTKEY_CONFLICT,
+        UserError.HOTKEY_INVALID,
+        UserError.NO_TEXT,
+        UserError.CLIPBOARD,
+    }
+)
+_NO_TEXT_NOTIFICATION = "No text selected"
 
 
 VOICE_SETUP_ERRORS = (
@@ -238,6 +247,29 @@ class Controller:
             _LAUNCH_WELCOME,
             SpeechPurpose.WELCOME,
         )
+
+    def _report_runtime_error(self, error: UserError) -> None:
+        if error not in _APPROVED_SPOKEN_ERRORS:
+            raise ValueError("runtime error is not approved for tray reporting")
+
+        message = user_message(error)
+        if error is UserError.NO_TEXT:
+            try:
+                self._show_notification(_NO_TEXT_NOTIFICATION)
+            except Exception as notification_error:
+                self._log_error(
+                    "Piper tray notification could not be shown: %s"
+                    % notification_error
+                )
+        else:
+            self._show_status(message)
+
+        settings = self.state.settings
+        if settings is not None and settings.error_sounds:
+            try:
+                self._submit_auxiliary(message, SpeechPurpose.ERROR)
+            except Exception:
+                pass
 
     def drain_once(self) -> Optional[Command]:
         try:
