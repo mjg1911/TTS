@@ -389,7 +389,7 @@ class Controller:
         )
 
         if not restored:
-            self._show_status(user_message(UserError.HOTKEY_CONFLICT))
+            self._report_runtime_error(UserError.HOTKEY_CONFLICT)
 
         if capture_invalidated:
             self.state.capture_in_progress = True
@@ -604,14 +604,14 @@ class Controller:
         try:
             candidate = parse_hotkey(requested)
         except ValueError:
-            self._show_status(user_message(UserError.HOTKEY_INVALID))
+            self._report_runtime_error(UserError.HOTKEY_INVALID)
             return False
         current = self.state.settings
         if current is None or self._save_settings is None:
             self._show_status("Hotkey settings could not be saved.")
             return False
         if not self._hotkeys.rebind(candidate):
-            self._show_status(user_message(UserError.HOTKEY_CONFLICT))
+            self._report_runtime_error(UserError.HOTKEY_CONFLICT)
             return False
         next_settings = replace(current, hotkey=candidate.canonical)
         try:

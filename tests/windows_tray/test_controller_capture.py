@@ -230,15 +230,17 @@ def test_cancel_request_is_noop_without_speech():
 
 def test_invalid_hotkey_does_not_show_user_input_or_exception_text():
     statuses = []
+    worker = RecordingSpeechWorker()
 
     class FakeHotkeys:
         def rebind(self, _candidate):
             raise AssertionError("invalid hotkey must be rejected before rebind")
 
     controller = Controller(
-        settings=TraySettings(hotkey="alt+backtick"),
+        settings=TraySettings(hotkey="alt+backtick", error_sounds=True),
         save_settings=lambda _settings: None,
         hotkeys=FakeHotkeys(),
+        speech_worker=worker,
     )
     controller.configure_runtime(show_status=statuses.append)
     malicious_input = "unsupported key: <SCRIPT>selected text</SCRIPT>"
@@ -247,6 +249,11 @@ def test_invalid_hotkey_does_not_show_user_input_or_exception_text():
 
     assert statuses == ["That hotkey is not valid. Choose another combination."]
     assert malicious_input not in statuses
+    assert [request.text for request in worker.submitted] == [
+        user_message(UserError.HOTKEY_INVALID)
+    ]
+    assert all(malicious_input not in request.text for request in worker.submitted)
+    assert all(request.purpose is SpeechPurpose.ERROR for request in worker.submitted)
 
 
 def test_capture_worker_logs_outcome_and_length_without_text(caplog):
