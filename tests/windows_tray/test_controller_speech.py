@@ -12,6 +12,7 @@ class FakeSpeechWorker:
     def __init__(self):
         self.submitted = []
         self.cancelled = []
+        self.auxiliary_cancel_calls = 0
         self.shutdown_calls = 0
 
     def submit(self, request):
@@ -19,6 +20,9 @@ class FakeSpeechWorker:
 
     def cancel_active(self, generation):
         self.cancelled.append(generation)
+
+    def cancel_auxiliary(self):
+        self.auxiliary_cancel_calls += 1
 
     def shutdown(self):
         self.shutdown_calls += 1
@@ -99,6 +103,7 @@ def test_stop_and_cancel_are_noops_when_not_speaking():
     assert controller.state.speech_generation == before
     assert controller.state.playback is PlaybackState.IDLE
     assert worker.cancelled == []
+    assert worker.auxiliary_cancel_calls == 2
 
 
 def test_replay_resubmits_last_text_without_mutating_it():
