@@ -316,6 +316,10 @@ class Controller:
         if self.state.shutting_down:
             return
 
+        if self._speech_worker is not None:
+            self._speech_worker.cancel_auxiliary()
+        self.state.auxiliary_active = False
+
         capture_invalidated = self.state.capture_in_progress
         if capture_invalidated:
             self.state.capture_generation += 1
@@ -538,6 +542,9 @@ class Controller:
             return
 
         self.state.shutting_down = True
+        if self._speech_worker is not None:
+            self._speech_worker.cancel_auxiliary()
+        self.state.auxiliary_active = False
         if self.state.capture_in_progress:
             self.state.capture_generation += 1
             self.state.capture_in_progress = False
