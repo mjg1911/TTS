@@ -26,10 +26,11 @@ def install_fake_pystray(monkeypatch, calls):
     class FakePystray:
         Icon = FakeIcon
         Menu = lambda *items: SimpleNamespace(items=items)
-        MenuItem = lambda text, action, enabled=None: SimpleNamespace(
+        MenuItem = lambda text, action, enabled=None, checked=None: SimpleNamespace(
             text=text,
             action=action,
             enabled=enabled,
+            checked=checked,
         )
 
     monkeypatch.setattr(

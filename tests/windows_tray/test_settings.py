@@ -10,6 +10,17 @@ from piper.windows_tray.settings import (
 )
 
 
+def _write_v1_settings(path: Path, **overrides) -> None:
+    settings = {
+        "schema_version": 1,
+        "voice": "en_GB-alba-medium",
+        "hotkey": "alt+backtick",
+        "log_level": "INFO",
+    }
+    settings.update(overrides)
+    path.write_text(json.dumps(settings), encoding="utf-8")
+
+
 def test_missing_settings_use_safe_defaults(tmp_path: Path) -> None:
     result = load_settings(tmp_path / "settings.json")
     assert result.settings == TraySettings()
@@ -59,6 +70,42 @@ def test_save_settings_uses_replace_and_writes_schema_version(
 
     assert replacements and replacements[0][1] == path
     assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
+
+
+def test_old_settings_default_error_sounds_to_false(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path)
+
+    result = load_settings(path)
+
+    assert result.settings.error_sounds is False
+    assert result.source == "loaded"
+
+
+def test_error_sounds_round_trip_persistence(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+
+    save_settings(TraySettings(error_sounds=True), path)
+
+    result = load_settings(path)
+
+    assert result.settings.error_sounds is True
+    assert result.source == "loaded"
+
+
+@pytest.mark.parametrize("error_sounds", [1, 0, "true", "false", [], {}])
+def test_invalid_error_sounds_are_preserved_as_corrupt(
+    tmp_path: Path, error_sounds
+) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path, error_sounds=error_sounds)
+
+    result = load_settings(path)
+
+    assert result.settings == TraySettings()
+    assert result.source == "corrupt"
+    assert not path.exists()
+    assert list(tmp_path.glob("settings.json.corrupt*"))
 
 
 def test_non_integer_schema_version_is_preserved_as_corrupt(tmp_path: Path) -> None:

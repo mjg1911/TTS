@@ -14,6 +14,7 @@ class TraySettings:
     voice: str = DEFAULT_VOICE
     hotkey: str = DEFAULT_HOTKEY
     log_level: str = "INFO"
+    error_sounds: bool = False
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ def _validated(data: object) -> TraySettings:
     voice = data.get("voice")
     hotkey = data.get("hotkey")
     log_level = data.get("log_level", "INFO")
+    error_sounds = data.get("error_sounds", False)
     if not isinstance(voice, str) or not voice.strip():
         raise ValueError("voice must be a non-empty string")
     if not isinstance(hotkey, str) or not hotkey.strip():
@@ -50,7 +52,14 @@ def _validated(data: object) -> TraySettings:
         "ERROR",
     }:
         raise ValueError("invalid log level")
-    return TraySettings(voice=voice.strip(), hotkey=hotkey.strip(), log_level=log_level)
+    if type(error_sounds) is not bool:
+        raise ValueError("error_sounds must be a boolean")
+    return TraySettings(
+        voice=voice.strip(),
+        hotkey=hotkey.strip(),
+        log_level=log_level,
+        error_sounds=error_sounds,
+    )
 
 
 def _corrupt_path(path: Path) -> Path:

@@ -13,7 +13,15 @@ class TrayIcon:
         self._icon_path = icon_path
         self._enqueue = enqueue
         self._snapshot_provider = snapshot_provider or (
-            lambda: type("Snapshot", (), {"can_stop": True, "can_replay": True})()
+            lambda: type(
+                "Snapshot",
+                (),
+                {
+                    "can_stop": True,
+                    "can_replay": True,
+                    "error_sounds_enabled": False,
+                },
+            )()
         )
         self._icon = None
         self._running = False
@@ -61,6 +69,13 @@ class TrayIcon:
                     lambda _icon, _item: self._enqueue(
                         Command(CommandKind.CONFIGURE_HOTKEY)
                     ),
+                ),
+                pystray.MenuItem(
+                    "Error sounds",
+                    lambda _icon, _item: self._enqueue(
+                        Command(CommandKind.TOGGLE_ERROR_SOUNDS)
+                    ),
+                    checked=lambda _item: self._snapshot_provider().error_sounds_enabled,
                 ),
                 pystray.MenuItem(
                     "Open log",
@@ -120,3 +135,8 @@ class TrayIcon:
     def update_menu(self) -> None:
         if self._icon is not None:
             self._icon.update_menu()
+
+    def show_notification(self, message: str) -> None:
+        if self._icon is None or not self._running:
+            raise RuntimeError("tray icon is not running")
+        self._icon.notify(message, "Piper")

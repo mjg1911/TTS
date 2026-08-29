@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from piper.windows_tray.commands import Command, CommandKind
-from piper.windows_tray.controller import Controller, PlaybackState
+from piper.windows_tray.controller import CaptureCompletion, Controller, PlaybackState
 from piper.windows_tray.speech import SpeechEvent, SpeechEventKind
 from piper.windows_tray.voice_manager import VoiceManager
 from piper.windows_tray.settings import TraySettings
@@ -17,6 +17,31 @@ class FakeSpeechWorker:
 
     def cancel_active(self, generation):
         self.cancelled.append(generation)
+
+
+def test_no_text_replacement_notifies_without_submitting_speech():
+    from piper.windows_tray.capture import CaptureResult, CaptureStatus
+
+    jobs = []
+    notifications = []
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        speech_worker=worker,
+        capture=lambda: CaptureResult(CaptureStatus.EMPTY),
+        capture_submit=jobs.append,
+    )
+    controller.configure_runtime(show_notification=notifications.append)
+    controller.state.playback = PlaybackState.SPEAKING
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    jobs[0]()
+    completion = controller.drain_once()
+    assert completion is not None
+    controller.handle(completion)
+
+    assert notifications == ["No text selected or the application did not provide it"]
+    assert worker.submitted == []
+    assert controller.state.playback is PlaybackState.STOPPED
 
 
 def test_second_hotkey_plays_only_new_selection_and_ignores_stale_worker_event():
@@ -141,10 +166,11 @@ def test_tray_stop_and_replay_actions_use_dynamic_enablement(monkeypatch, tmp_pa
     import piper.windows_tray.tray_icon as tray_icon
 
     class FakeItem:
-        def __init__(self, text, action, enabled=None):
+        def __init__(self, text, action, enabled=None, checked=None):
             self.text = text
             self.action = action
             self.enabled = enabled
+            self.checked = checked
 
     class FakePystray:
         MenuItem = FakeItem

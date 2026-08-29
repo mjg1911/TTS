@@ -262,6 +262,7 @@ def run_app(
             voice_manager=voice_manager,
             speech_worker=speech_worker,
             show_status=ui.show_status,
+            show_notification=tray.show_notification,
             log_error=logger.error,
             open_log=lambda: os.startfile(log_path().parent),
             ensure_tray_visible=tray.ensure_visible,
