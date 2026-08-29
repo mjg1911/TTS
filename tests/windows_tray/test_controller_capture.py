@@ -1,10 +1,30 @@
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from piper.windows_tray.capture import CaptureResult, CaptureStatus
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import CaptureCompletion, Controller
+from piper.windows_tray.errors import UserError, user_message
 from piper.windows_tray.settings import TraySettings
+from piper.windows_tray.speech import SpeechPurpose
+
+
+class RecordingSpeechWorker:
+    def __init__(self):
+        self.submitted = []
+        self.cancelled = []
+        self.cancelled_auxiliary = 0
+
+    def submit(self, request):
+        self.submitted.append(request)
+
+    def cancel_active(self, generation):
+        self.cancelled.append(generation)
+
+    def cancel_auxiliary(self):
+        self.cancelled_auxiliary += 1
 
 
 def test_capture_requests_collapse_to_newest_pending_request():
@@ -68,7 +88,12 @@ def test_failed_new_capture_does_not_replace_last_successful_text():
 
 def test_clipboard_access_failure_has_specific_recoverable_message():
     statuses = []
-    controller = Controller(capture_submit=lambda _job: None)
+    worker = RecordingSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=False),
+        capture_submit=lambda _job: None,
+        speech_worker=worker,
+    )
     controller.configure_runtime(show_status=statuses.append)
 
     controller.handle(Command(CommandKind.CAPTURE_REQUEST))
@@ -88,6 +113,36 @@ def test_clipboard_access_failure_has_specific_recoverable_message():
         "The selected text could not be read from the clipboard."
     ]
     assert controller.state.shutting_down is False
+    assert worker.submitted == []
+
+
+@pytest.mark.parametrize("error_sounds, expected_speech_count", [(False, 0), (True, 1)])
+def test_clipboard_access_failure_uses_feedback_policy(
+    error_sounds, expected_speech_count
+):
+    statuses = []
+    worker = RecordingSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=error_sounds),
+        capture_submit=lambda _job: None,
+        speech_worker=worker,
+    )
+    controller.configure_runtime(show_status=statuses.append)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_FAILED,
+            CaptureCompletion(generation, CaptureResult(CaptureStatus.ACCESS_ERROR)),
+        )
+    )
+
+    assert statuses == ["The selected text could not be read from the clipboard."]
+    assert len(worker.submitted) == expected_speech_count
+    if error_sounds:
+        assert worker.submitted[0].text == user_message(UserError.CLIPBOARD)
+        assert worker.submitted[0].purpose is SpeechPurpose.ERROR
 
 
 def test_no_text_capture_uses_native_notification_without_visual_status():
@@ -108,8 +163,33 @@ def test_no_text_capture_uses_native_notification_without_visual_status():
         )
     )
 
-    assert notifications == ["No text selected or the application did not provide it"]
+    assert notifications == ["No text selected"]
     assert statuses == []
+
+
+def test_no_text_capture_routes_notification_and_spoken_copy_through_policy():
+    notifications = []
+    worker = RecordingSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=True),
+        capture_submit=lambda _job: None,
+        speech_worker=worker,
+    )
+    controller.configure_runtime(show_notification=notifications.append)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_FAILED,
+            CaptureCompletion(generation, CaptureResult(CaptureStatus.TIMEOUT)),
+        )
+    )
+
+    assert notifications == ["No text selected"]
+    assert len(worker.submitted) == 1
+    assert worker.submitted[0].text == user_message(UserError.NO_TEXT)
+    assert worker.submitted[0].purpose is SpeechPurpose.ERROR
 
 
 def test_native_notification_failure_uses_injected_logger():

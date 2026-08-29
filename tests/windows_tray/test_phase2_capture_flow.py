@@ -156,7 +156,7 @@ def test_controller_notifies_when_capture_fails_without_replacing_last_text():
     jobs[0]()
     controller.handle(controller.drain_once())
 
-    assert notifications == ["No text selected or the application did not provide it"]
+    assert notifications == ["No text selected"]
     assert statuses == []
     assert controller.state.last_text == "previous"
 
@@ -186,7 +186,7 @@ def test_no_text_capture_does_not_invoke_tk_messagebox(monkeypatch):
         )
     )
 
-    assert notifications == ["No text selected or the application did not provide it"]
+    assert notifications == ["No text selected"]
     assert calls == []
 
 

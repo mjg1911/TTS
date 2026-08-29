@@ -479,14 +479,9 @@ class Controller:
             if self._capture_replaced_speech:
                 self.state.playback = PlaybackState.STOPPED
             if result.status is CaptureStatus.ACCESS_ERROR:
-                self._show_status(user_message(UserError.CLIPBOARD))
+                self._report_runtime_error(UserError.CLIPBOARD)
             else:
-                try:
-                    self._show_notification(user_message(UserError.NO_TEXT))
-                except Exception as error:
-                    self._log_error(
-                        "Piper tray notification could not be shown: %s" % error
-                    )
+                self._report_runtime_error(UserError.NO_TEXT)
 
     def _stop_speech(self) -> None:
         if self._speech_worker is not None:
