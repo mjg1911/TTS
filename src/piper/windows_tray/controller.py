@@ -18,6 +18,7 @@ from .voice_manager import VoiceManager, VoiceSwitchEvent
 
 
 _LOGGER = logging.getLogger(__name__)
+_LAUNCH_WELCOME = "Piper is ready."
 
 
 VOICE_SETUP_ERRORS = (
@@ -224,6 +225,19 @@ class Controller:
     def enqueue_worker_event(self, event: SpeechEvent) -> None:
         """Queue worker output; worker callbacks must not touch controller state."""
         self.enqueue(Command(CommandKind.WORKER_EVENT, event))
+
+    def announce_ready(self) -> None:
+        if self.state.shutting_down:
+            return
+
+        settings = self.state.settings
+        if settings is None or settings.error_sounds:
+            return
+
+        self._submit_auxiliary(
+            _LAUNCH_WELCOME,
+            SpeechPurpose.WELCOME,
+        )
 
     def drain_once(self) -> Optional[Command]:
         try:
