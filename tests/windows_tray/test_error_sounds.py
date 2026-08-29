@@ -1,8 +1,30 @@
 import pytest
 
 from piper.windows_tray.commands import Command, CommandKind
-from piper.windows_tray.controller import Controller
+from piper.windows_tray.controller import Controller, PlaybackState
 from piper.windows_tray.settings import TraySettings
+from piper.windows_tray.speech import (
+    SpeechEvent,
+    SpeechEventKind,
+    SpeechPurpose,
+    SpeechRequest,
+)
+
+
+class FakeSpeechWorker:
+    def __init__(self):
+        self.submitted = []
+        self.cancelled = []
+        self.auxiliary_cancel_calls = 0
+
+    def submit(self, request):
+        self.submitted.append(request)
+
+    def cancel_active(self, generation):
+        self.cancelled.append(generation)
+
+    def cancel_auxiliary(self):
+        self.auxiliary_cancel_calls += 1
 
 
 def test_tray_snapshot_exposes_error_sounds_setting() -> None:
@@ -71,3 +93,192 @@ def test_failed_toggle_error_sounds_save_retains_state_and_checkmark(failure) ->
     assert controller.tray_snapshot().error_sounds_enabled is False
     assert errors == ["Could not save Piper error sound settings: %s" % failure]
     assert statuses == ["Piper error sound settings could not be saved."]
+
+
+def test_disabled_error_sounds_submits_welcome_as_auxiliary_only():
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=False),
+        speech_worker=worker,
+    )
+    controller.state.last_text = "selected text"
+    controller.state.playback = PlaybackState.IDLE
+
+    controller.announce_ready()
+
+    assert worker.submitted == [
+        SpeechRequest(
+            1,
+            "Piper is ready.",
+            SpeechPurpose.WELCOME,
+        )
+    ]
+    assert controller.state.last_text == "selected text"
+    assert controller.state.playback is PlaybackState.IDLE
+    assert controller.tray_snapshot().can_replay is True
+
+
+def test_enabled_error_sounds_suppresses_launch_welcome():
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=True),
+        speech_worker=worker,
+    )
+
+    controller.announce_ready()
+
+    assert worker.submitted == []
+
+
+def test_welcome_failure_is_best_effort_and_does_not_open_modal():
+    statuses = []
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=False),
+        speech_worker=worker,
+    )
+    controller.configure_runtime(show_status=statuses.append)
+
+    controller.announce_ready()
+    assert len(worker.submitted) == 1
+
+    controller.handle(
+        Command(
+            CommandKind.WORKER_EVENT,
+            SpeechEvent(
+                SpeechEventKind.FAILED,
+                1,
+                "Speech playback failed.",
+                "playback",
+                SpeechPurpose.WELCOME,
+            ),
+        )
+    )
+
+    assert len(worker.submitted) == 1
+    assert statuses == []
+    assert controller.state.playback is PlaybackState.IDLE
+
+
+def test_auxiliary_started_does_not_change_foreground_playback_or_last_text():
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=False),
+        speech_worker=worker,
+    )
+    controller.state.last_text = "selected text"
+    controller.state.playback = PlaybackState.IDLE
+
+    controller.handle(
+        Command(
+            CommandKind.WORKER_EVENT,
+            SpeechEvent(
+                SpeechEventKind.STARTED,
+                1,
+                purpose=SpeechPurpose.WELCOME,
+            ),
+        )
+    )
+
+    assert controller.state.auxiliary_active is True
+    assert controller.state.playback is PlaybackState.IDLE
+    assert controller.state.last_text == "selected text"
+    assert controller.tray_snapshot().can_replay is True
+
+
+def test_stale_auxiliary_terminal_event_does_not_clear_newer_request():
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=False),
+        speech_worker=worker,
+    )
+
+    controller.handle(
+        Command(
+            CommandKind.WORKER_EVENT,
+            SpeechEvent(
+                SpeechEventKind.STARTED,
+                10,
+                purpose=SpeechPurpose.ERROR,
+            ),
+        )
+    )
+    controller.handle(
+        Command(
+            CommandKind.WORKER_EVENT,
+            SpeechEvent(
+                SpeechEventKind.STARTED,
+                11,
+                purpose=SpeechPurpose.ERROR,
+            ),
+        )
+    )
+    controller.handle(
+        Command(
+            CommandKind.WORKER_EVENT,
+            SpeechEvent(
+                SpeechEventKind.CANCELLED,
+                10,
+                purpose=SpeechPurpose.ERROR,
+            ),
+        )
+    )
+
+    assert controller.state.auxiliary_active_generation == 11
+
+
+def test_auxiliary_failure_does_not_open_foreground_failure_modal():
+    statuses = []
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=False),
+        speech_worker=worker,
+    )
+    controller.configure_runtime(show_status=statuses.append)
+
+    controller.handle(
+        Command(
+            CommandKind.WORKER_EVENT,
+            SpeechEvent(
+                SpeechEventKind.FAILED,
+                1,
+                "Speech playback failed.",
+                "playback",
+                SpeechPurpose.WELCOME,
+            ),
+        )
+    )
+
+    assert statuses == []
+    assert controller.state.playback is PlaybackState.IDLE
+
+
+def test_stop_cancels_auxiliary_without_marking_idle_foreground_stopped():
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(),
+        speech_worker=worker,
+    )
+    controller.state.last_text = "selected text"
+    controller.state.playback = PlaybackState.IDLE
+    controller.state.auxiliary_active = True
+
+    controller.handle(Command(CommandKind.STOP_REQUEST))
+
+    assert worker.auxiliary_cancel_calls == 1
+    assert controller.state.playback is PlaybackState.IDLE
+    assert controller.state.last_text == "selected text"
+    assert controller.tray_snapshot().can_replay is True
+
+
+def test_cancel_request_discards_pending_auxiliary_while_foreground_idle():
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(),
+        speech_worker=worker,
+    )
+
+    controller.handle(Command(CommandKind.CANCEL_REQUEST))
+
+    assert worker.auxiliary_cancel_calls == 1
+    assert controller.state.playback is PlaybackState.IDLE

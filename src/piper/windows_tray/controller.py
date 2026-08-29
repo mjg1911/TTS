@@ -13,11 +13,12 @@ from .hotkey import parse_hotkey
 from .logging_setup import log_capture_result, log_exception_safe
 from .errors import UserError, user_message
 from .settings import TraySettings
-from .speech import SpeechEvent, SpeechEventKind, SpeechRequest
+from .speech import SpeechEvent, SpeechEventKind, SpeechPurpose, SpeechRequest
 from .voice_manager import VoiceManager, VoiceSwitchEvent
 
 
 _LOGGER = logging.getLogger(__name__)
+_LAUNCH_WELCOME = "Piper is ready."
 
 
 VOICE_SETUP_ERRORS = (
@@ -43,12 +44,22 @@ class AppState:
     capture_generation: int = 0
     capture_in_progress: bool = False
     speech_generation: int = 0
+    auxiliary_generation: int = 0
+    auxiliary_active_generation: Optional[int] = None
     voice_generation: int = 0
     playback: PlaybackState = PlaybackState.IDLE
     shutting_down: bool = False
     settings: Optional[TraySettings] = None
     voice_path: Optional[Path] = None
     voice: Optional[object] = None
+
+    @property
+    def auxiliary_active(self) -> bool:
+        return self.auxiliary_active_generation is not None
+
+    @auxiliary_active.setter
+    def auxiliary_active(self, active: bool) -> None:
+        self.auxiliary_active_generation = 0 if active else None
 
 
 @dataclass(frozen=True)
@@ -194,7 +205,10 @@ class Controller:
     def tray_snapshot(self) -> TraySnapshot:
         with self._state_lock:
             return TraySnapshot(
-                can_stop=self.state.playback is PlaybackState.SPEAKING,
+                can_stop=(
+                    self.state.playback is PlaybackState.SPEAKING
+                    or self.state.auxiliary_active_generation is not None
+                ),
                 can_replay=(
                     self.state.last_text is not None
                     and not self.state.shutting_down
@@ -211,6 +225,19 @@ class Controller:
     def enqueue_worker_event(self, event: SpeechEvent) -> None:
         """Queue worker output; worker callbacks must not touch controller state."""
         self.enqueue(Command(CommandKind.WORKER_EVENT, event))
+
+    def announce_ready(self) -> None:
+        if self.state.shutting_down:
+            return
+
+        settings = self.state.settings
+        if settings is None or settings.error_sounds:
+            return
+
+        self._submit_auxiliary(
+            _LAUNCH_WELCOME,
+            SpeechPurpose.WELCOME,
+        )
 
     def drain_once(self) -> Optional[Command]:
         try:
@@ -302,6 +329,10 @@ class Controller:
     def _recover_from_resume(self) -> None:
         if self.state.shutting_down:
             return
+
+        if self._speech_worker is not None:
+            self._speech_worker.cancel_auxiliary()
+        self.state.auxiliary_active = False
 
         capture_invalidated = self.state.capture_in_progress
         if capture_invalidated:
@@ -426,6 +457,9 @@ class Controller:
                     )
 
     def _stop_speech(self) -> None:
+        if self._speech_worker is not None:
+            self._speech_worker.cancel_auxiliary()
+            self.state.auxiliary_active_generation = None
         if self.state.playback is not PlaybackState.SPEAKING:
             return
         generation = self.state.speech_generation
@@ -433,6 +467,26 @@ class Controller:
             self._speech_worker.cancel_active(generation)
         self.state.speech_generation += 1
         self.state.playback = PlaybackState.STOPPED
+
+    def _submit_auxiliary(
+        self,
+        text: str,
+        purpose: SpeechPurpose,
+    ) -> None:
+        if (
+            self.state.shutting_down
+            or self._speech_worker is None
+        ):
+            return
+
+        self.state.auxiliary_generation += 1
+        self._speech_worker.submit(
+            SpeechRequest(
+                self.state.auxiliary_generation,
+                text,
+                purpose,
+            )
+        )
 
     def _handle_voice_switch(self, event: object) -> None:
         if not isinstance(event, VoiceSwitchEvent):
@@ -469,6 +523,19 @@ class Controller:
             return
         if self.state.shutting_down:
             return
+        if event.purpose is not SpeechPurpose.FOREGROUND:
+            if event.kind is SpeechEventKind.STARTED:
+                self.state.auxiliary_active_generation = event.generation
+            elif (
+                event.generation == self.state.auxiliary_active_generation
+                and event.kind in {
+                    SpeechEventKind.FINISHED,
+                    SpeechEventKind.CANCELLED,
+                    SpeechEventKind.FAILED,
+                }
+            ):
+                self.state.auxiliary_active_generation = None
+            return
         if event.generation != self.state.speech_generation:
             return
         if event.kind is SpeechEventKind.STARTED:
@@ -489,6 +556,9 @@ class Controller:
             return
 
         self.state.shutting_down = True
+        if self._speech_worker is not None:
+            self._speech_worker.cancel_auxiliary()
+        self.state.auxiliary_active = False
         if self.state.capture_in_progress:
             self.state.capture_generation += 1
             self.state.capture_in_progress = False

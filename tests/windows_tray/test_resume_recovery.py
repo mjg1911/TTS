@@ -5,15 +5,20 @@ from piper.windows_tray.controller import (
     Controller,
     PlaybackState,
 )
+from piper.windows_tray.settings import TraySettings
 
 
 class FakeSpeech:
     def __init__(self) -> None:
         self.cancelled = []
         self.submitted = []
+        self.auxiliary_cancel_calls = 0
 
     def cancel_active(self, generation: int) -> None:
         self.cancelled.append(generation)
+
+    def cancel_auxiliary(self) -> None:
+        self.auxiliary_cancel_calls += 1
 
     def submit(self, request) -> None:
         self.submitted.append(request)
@@ -118,6 +123,28 @@ def test_resume_while_idle_stays_idle() -> None:
     assert controller.state.playback is PlaybackState.IDLE
     assert tray_calls == ["ensure"]
     assert hotkeys.reregister_calls == 1
+
+
+def test_resume_cancels_stale_auxiliary_without_changing_idle_foreground():
+    speech = FakeSpeech()
+    hotkeys = FakeHotkeys(result=True)
+    controller = Controller(
+        settings=TraySettings(),
+        speech_worker=speech,
+        hotkeys=hotkeys,
+        capture_submit=lambda _job: None,
+    )
+    controller.configure_runtime(
+        ensure_tray_visible=lambda: None,
+    )
+    controller.state.playback = PlaybackState.IDLE
+    controller.state.auxiliary_active_generation = 1
+
+    controller.handle(Command(CommandKind.SYSTEM_RESUME))
+
+    assert speech.auxiliary_cancel_calls == 1
+    assert controller.state.auxiliary_active is False
+    assert controller.state.playback is PlaybackState.IDLE
 
 
 def test_resume_invalidates_capture_started_before_suspend() -> None:

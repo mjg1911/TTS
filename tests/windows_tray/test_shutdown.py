@@ -165,11 +165,38 @@ def test_concurrent_runs_execute_cleanup_once() -> None:
 
 
 class FakeSpeech:
-    def __init__(self) -> None:
+    def __init__(self, calls=None) -> None:
         self.cancelled = []
+        self.auxiliary_cancel_calls = 0
+        self.calls = calls
 
     def cancel_active(self, generation: int) -> None:
         self.cancelled.append(generation)
+
+    def cancel_auxiliary(self) -> None:
+        self.auxiliary_cancel_calls += 1
+        if self.calls is not None:
+            self.calls.append("cancel_auxiliary")
+
+
+def test_shutdown_discards_auxiliary_before_teardown() -> None:
+    calls = []
+    speech = FakeSpeech(calls)
+    controller = Controller(speech_worker=speech)
+    controller.configure_runtime(
+        request_teardown=lambda: calls.append("teardown")
+    )
+    controller.state.auxiliary_active = True
+
+    controller.handle(Command(CommandKind.EXIT))
+
+    assert speech.auxiliary_cancel_calls == 1
+    assert controller.state.auxiliary_active is False
+    assert (
+        controller.state.playback
+        is PlaybackState.SHUTTING_DOWN
+    )
+    assert calls == ["cancel_auxiliary", "teardown"]
 
 
 def test_controller_exit_cancels_before_requesting_teardown() -> None:

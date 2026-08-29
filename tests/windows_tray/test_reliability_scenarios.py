@@ -15,6 +15,9 @@ class FakeSpeech:
     def cancel_active(self, generation: int) -> None:
         self.cancelled.append(generation)
 
+    def cancel_auxiliary(self) -> None:
+        pass
+
     def submit(self, request) -> None:
         self.submitted.append(request)
 

@@ -319,6 +319,7 @@ def run_app(
             getattr(logger, "info", lambda *_args: None)(
                 "Piper tray runtime ready"
             )
+            controller.announce_ready()
 
         ui.root.after(0, mark_runtime_ready)
         ui.root.after(25, pump)
