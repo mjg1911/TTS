@@ -18,6 +18,9 @@ class FakeSpeechWorker:
     def cancel_active(self, generation):
         self.cancelled.append(generation)
 
+    def cancel_auxiliary(self):
+        pass
+
 
 def test_no_text_replacement_notifies_without_submitting_speech():
     from piper.windows_tray.capture import CaptureResult, CaptureStatus

@@ -213,6 +213,32 @@ class FakeTray:
         self.events.append(("notification", message))
 
 
+class RecordingSpeechWorker:
+    def __init__(self, events, tray):
+        self.events = events
+        self.tray = tray
+        self.submitted = []
+        self.tray_state_at_submit = []
+
+    def submit(self, request):
+        self.events.append(
+            ("speech.submit", request.text, request.purpose)
+        )
+        self.tray_state_at_submit.append(
+            list(self.tray.events)
+        )
+        self.submitted.append(request)
+
+    def cancel_active(self, _generation):
+        pass
+
+    def cancel_auxiliary(self):
+        pass
+
+    def shutdown(self):
+        self.events.append("speech.shutdown")
+
+
 class FakePowerListener:
     last = None
 
@@ -366,15 +392,84 @@ def test_run_app_without_debug_preserves_settings_logging(monkeypatch) -> None:
     assert logging_calls == [("INFO", (), {})]
 
 
-def test_invalid_persisted_hotkey_recovers_to_default_and_reports_status(monkeypatch):
+def test_successful_runtime_announces_ready_after_tray_start(monkeypatch):
+    from piper.windows_tray.speech import SpeechPurpose
+
     events = []
-    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    app, _instance, ui, tray = _patch_primary_app(
+        monkeypatch, events
+    )
+    worker = RecordingSpeechWorker(events, tray)
+    monkeypatch.setattr(
+        app,
+        "_build_speech_worker",
+        lambda _controller, _voice_manager: worker,
+    )
+
+    def mainloop():
+        ui.root.callbacks.pop(0)()
+
+    ui.root.mainloop = mainloop
+
+    assert app.run_app([]) == 0
+    assert worker.submitted[0].text == "Piper is ready."
+    assert (
+        worker.submitted[0].purpose
+        is SpeechPurpose.WELCOME
+    )
+    assert worker.tray_state_at_submit[0] == ["start"]
+    assert FakePowerListener.last.callback is not None
+
+
+def test_enabled_mode_suppresses_launch_welcome(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(
+        monkeypatch, events
+    )
     monkeypatch.setattr(
         app,
         "load_settings",
         lambda: SimpleNamespace(
-            settings=app.TraySettings(hotkey="not a hotkey"), source="loaded"
+            settings=app.TraySettings(error_sounds=True),
+            source="loaded",
         ),
+    )
+    worker = RecordingSpeechWorker(events, tray)
+    monkeypatch.setattr(
+        app,
+        "_build_speech_worker",
+        lambda _controller, _voice_manager: worker,
+    )
+
+    def mainloop():
+        ui.root.callbacks.pop(0)()
+
+    ui.root.mainloop = mainloop
+
+    assert app.run_app([]) == 0
+    assert worker.submitted == []
+
+
+def test_invalid_persisted_hotkey_recovers_to_default_and_reports_status(monkeypatch):
+    from piper.windows_tray.speech import SpeechPurpose
+
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+    monkeypatch.setattr(
+        app,
+        "load_settings",
+        lambda: SimpleNamespace(
+            settings=app.TraySettings(
+                hotkey="not a hotkey", error_sounds=True
+            ),
+            source="loaded",
+        ),
+    )
+    worker = RecordingSpeechWorker(events, tray)
+    monkeypatch.setattr(
+        app,
+        "_build_speech_worker",
+        lambda _controller, _voice_manager: worker,
     )
     class FakeHotkeys:
         def __init__(self):
@@ -398,6 +493,10 @@ def test_invalid_persisted_hotkey_recovers_to_default_and_reports_status(monkeyp
     assert ui.statuses == [
         "The saved Piper hotkey was invalid; the default hotkey is being used."
     ]
+    assert not any(
+        request.purpose is SpeechPurpose.ERROR
+        for request in worker.submitted
+    )
 
 
 def test_hotkey_stop_failure_does_not_skip_other_shutdown_cleanup(monkeypatch):
@@ -456,8 +555,24 @@ def test_tray_stop_failure_does_not_skip_hotkeys_instance_or_ui_cleanup(monkeypa
 
 
 def test_hotkey_start_conflict_keeps_tray_alive_for_recovery(monkeypatch):
+    from piper.windows_tray.speech import SpeechPurpose
+
     events = []
     app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+    monkeypatch.setattr(
+        app,
+        "load_settings",
+        lambda: SimpleNamespace(
+            settings=app.TraySettings(error_sounds=True),
+            source="loaded",
+        ),
+    )
+    worker = RecordingSpeechWorker(events, tray)
+    monkeypatch.setattr(
+        app,
+        "_build_speech_worker",
+        lambda _controller, _voice_manager: worker,
+    )
     monkeypatch.setattr(app, "save_settings", lambda _settings: None)
 
     class ConflictingHotkeys:
@@ -512,6 +627,10 @@ def test_hotkey_start_conflict_keeps_tray_alive_for_recovery(monkeypatch):
     ]
     assert tray.events == ["start", "stop"]
     assert "instance.close" in events
+    assert not any(
+        request.purpose is SpeechPurpose.ERROR
+        for request in worker.submitted
+    )
 
 
 def test_exception_before_existing_cleanup_still_closes_instance(monkeypatch) -> None:

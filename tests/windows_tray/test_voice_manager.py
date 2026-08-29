@@ -56,6 +56,9 @@ def test_controller_stops_active_speech_before_starting_voice_switch() -> None:
         def cancel_active(self, generation):
             self.cancelled.append(generation)
 
+        def cancel_auxiliary(self):
+            pass
+
     worker = FakeSpeechWorker()
     manager = VoiceManager(object(), FakeLoader())
     controller = Controller(

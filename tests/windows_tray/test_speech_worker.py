@@ -7,6 +7,7 @@ import pytest
 
 from piper.windows_tray.speech import (
     SpeechEventKind,
+    SpeechPurpose,
     SpeechRequest,
     SpeechWorker,
 )
@@ -119,6 +120,347 @@ def test_speech_worker_emits_started_and_finished_and_plays_audio():
         assert played == [b"audio"]
         assert entered.is_set()
     finally:
+        worker.shutdown()
+
+
+def test_worker_events_preserve_request_purpose():
+    events = []
+    played = []
+    entered = threading.Event()
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+    worker = make_worker(voice, events, played, entered)
+
+    try:
+        worker.submit(
+            SpeechRequest(100, "error", SpeechPurpose.ERROR)
+        )
+        terminal = wait_for_event(
+            events, SpeechEventKind.FINISHED, 100
+        )
+
+        assert events[0].purpose is SpeechPurpose.ERROR
+        assert terminal.purpose is SpeechPurpose.ERROR
+    finally:
+        worker.shutdown()
+
+
+def test_error_feedback_waits_for_foreground_to_finish():
+    events = []
+    played = []
+    entered = threading.Event()
+    release_foreground = threading.Event()
+
+    def synthesize(text):
+        if text == "foreground":
+            entered.set()
+            release_foreground.wait(timeout=2)
+        yield Chunk(text.encode())
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=synthesize,
+    )
+    worker = make_worker(voice, events, played, entered)
+
+    try:
+        worker.submit(
+            SpeechRequest(
+                101,
+                "foreground",
+                SpeechPurpose.FOREGROUND,
+            )
+        )
+        assert entered.wait(timeout=1)
+
+        worker.submit(
+            SpeechRequest(102, "error", SpeechPurpose.ERROR)
+        )
+        time.sleep(0.05)
+        assert not any(
+            event.generation == 102 for event in events
+        )
+
+        release_foreground.set()
+        wait_for_event(
+            events, SpeechEventKind.FINISHED, 102
+        )
+        assert played == [b"foreground", b"error"]
+    finally:
+        release_foreground.set()
+        worker.shutdown()
+
+
+def test_error_feedback_runs_before_pending_welcome():
+    events = []
+    played = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def synthesize(text):
+        if text == "foreground":
+            entered.set()
+            release.wait(timeout=2)
+        yield Chunk(text.encode())
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=synthesize,
+    )
+    worker = make_worker(voice, events, played, entered)
+
+    try:
+        worker.submit(
+            SpeechRequest(
+                103,
+                "foreground",
+                SpeechPurpose.FOREGROUND,
+            )
+        )
+        assert entered.wait(timeout=1)
+
+        worker.submit(
+            SpeechRequest(
+                104,
+                "welcome",
+                SpeechPurpose.WELCOME,
+            )
+        )
+        worker.submit(
+            SpeechRequest(105, "error", SpeechPurpose.ERROR)
+        )
+
+        release.set()
+        wait_for_event(
+            events, SpeechEventKind.FINISHED, 104
+        )
+        assert played == [
+            b"foreground",
+            b"error",
+            b"welcome",
+        ]
+    finally:
+        release.set()
+        worker.shutdown()
+
+
+def test_new_foreground_cancels_active_auxiliary_and_drops_pending_auxiliary():
+    events = []
+    played = []
+    entered = threading.Event()
+    release_aux = threading.Event()
+
+    def synthesize(text):
+        if text == "active error":
+            entered.set()
+            release_aux.wait(timeout=2)
+        yield Chunk(text.encode())
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=synthesize,
+    )
+    worker = make_worker(voice, events, played, entered)
+
+    try:
+        worker.submit(
+            SpeechRequest(
+                106,
+                "active error",
+                SpeechPurpose.ERROR,
+            )
+        )
+        assert entered.wait(timeout=1)
+
+        worker.submit(
+            SpeechRequest(
+                107,
+                "old welcome",
+                SpeechPurpose.WELCOME,
+            )
+        )
+        worker.submit(
+            SpeechRequest(
+                108,
+                "old error",
+                SpeechPurpose.ERROR,
+            )
+        )
+        worker.submit(
+            SpeechRequest(
+                109,
+                "fresh selection",
+                SpeechPurpose.FOREGROUND,
+            )
+        )
+
+        release_aux.set()
+        wait_for_event(
+            events, SpeechEventKind.FINISHED, 109
+        )
+
+        assert b"fresh selection" in played
+        assert b"old welcome" not in played
+        assert b"old error" not in played
+    finally:
+        release_aux.set()
+        worker.shutdown()
+
+
+def test_foreground_preemption_cancellation_does_not_leak_across_request_handoff():
+    events = []
+    played = []
+    auxiliary_synthesis_started = threading.Event()
+    release_auxiliary = threading.Event()
+    stop_entered = threading.Event()
+    allow_stop_to_return = threading.Event()
+    foreground_started = threading.Event()
+    submit_done = threading.Event()
+
+    class BlockingStopPlayer(FakePlayer):
+        def stop(self) -> None:
+            stop_entered.set()
+            if not allow_stop_to_return.wait(timeout=2):
+                raise RuntimeError("timed out waiting to release auxiliary stop")
+            self.stopped.set()
+
+    class WaitingForegroundPlayer(FakePlayer):
+        def __enter__(self):
+            if not submit_done.wait(timeout=2):
+                raise RuntimeError("foreground entered before submit completed")
+            return super().__enter__()
+
+    auxiliary_player = BlockingStopPlayer(played, threading.Event())
+    foreground_player = WaitingForegroundPlayer(played, threading.Event())
+    players = [auxiliary_player, foreground_player]
+
+    def player_factory(_sample_rate):
+        return players.pop(0)
+
+    def synthesize(text):
+        if text == "auxiliary":
+            auxiliary_synthesis_started.set()
+            if not release_auxiliary.wait(timeout=2):
+                raise RuntimeError("timed out waiting to release auxiliary synthesis")
+        yield Chunk(text.encode())
+
+    def on_event(event):
+        events.append(event)
+        if (
+            event.kind is SpeechEventKind.STARTED
+            and event.generation == 202
+        ):
+            foreground_started.set()
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=synthesize,
+    )
+    worker = SpeechWorker(
+        lambda: voice,
+        on_event,
+        player_factory=player_factory,
+    )
+
+    try:
+        worker.submit(
+            SpeechRequest(201, "auxiliary", SpeechPurpose.ERROR)
+        )
+        assert auxiliary_synthesis_started.wait(timeout=1)
+
+        def submit_foreground() -> None:
+            worker.submit(
+                SpeechRequest(
+                    202,
+                    "foreground",
+                    SpeechPurpose.FOREGROUND,
+                )
+            )
+            submit_done.set()
+
+        submit_thread = threading.Thread(target=submit_foreground)
+        submit_thread.start()
+
+        # Current buggy implementation is now blocked in player.stop(),
+        # after queuing foreground but before setting the shared cancel event.
+        assert stop_entered.wait(timeout=1)
+
+        # Let auxiliary speech finish. The worker can now take foreground,
+        # make it active, and clear the reusable cancel event.
+        release_auxiliary.set()
+        assert foreground_started.wait(timeout=1)
+
+        # Release the stale cancellation only after foreground is active.
+        allow_stop_to_return.set()
+        submit_thread.join(timeout=1)
+        assert not submit_thread.is_alive()
+        assert submit_done.is_set()
+
+        terminal = wait_for_terminal_event(events, 202)
+        assert terminal.kind is SpeechEventKind.FINISHED
+        assert b"foreground" in played
+    finally:
+        release_auxiliary.set()
+        allow_stop_to_return.set()
+        worker.shutdown()
+
+
+def test_cancel_auxiliary_stops_active_and_discards_pending_auxiliary():
+    events = []
+    played = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def synthesize(text):
+        if text == "active error":
+            entered.set()
+            release.wait(timeout=2)
+        yield Chunk(text.encode())
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=synthesize,
+    )
+    worker = make_worker(voice, events, played, entered)
+
+    try:
+        worker.submit(
+            SpeechRequest(
+                110,
+                "active error",
+                SpeechPurpose.ERROR,
+            )
+        )
+        assert entered.wait(timeout=1)
+        worker.submit(
+            SpeechRequest(
+                111,
+                "pending error",
+                SpeechPurpose.ERROR,
+            )
+        )
+        worker.submit(
+            SpeechRequest(
+                112,
+                "pending welcome",
+                SpeechPurpose.WELCOME,
+            )
+        )
+
+        worker.cancel_auxiliary()
+        release.set()
+
+        terminal = wait_for_terminal_event(events, 110)
+        assert terminal.kind is SpeechEventKind.CANCELLED
+        time.sleep(0.05)
+        assert not any(
+            event.generation in {111, 112}
+            for event in events
+        )
+    finally:
+        release.set()
         worker.shutdown()
 
 
@@ -409,7 +751,7 @@ def test_cancellation_at_play_boundary_stops_player_before_chunk_is_played():
         synthesize=lambda _text: [Chunk(b"stale")],
     )
     worker = make_worker(voice, events, played, entered)
-    worker._cancel_event = cancel_event
+    worker._cancel_event_factory = lambda: cancel_event
 
     player = worker._player_factory(22050)
     worker._player_factory = lambda _sample_rate: player
@@ -445,7 +787,7 @@ def test_cancellation_before_next_discards_chunk_without_advancing_synthesis():
         synthesize=lambda _text: Chunks(),
     )
     worker = make_worker(voice, events, played, entered)
-    worker._cancel_event = cancel_event
+    worker._cancel_event_factory = lambda: cancel_event
     cancel_event.trigger_call = 2
     cancel_event.callback = lambda: worker.cancel_active(9)
 
@@ -468,7 +810,7 @@ def test_cancellation_during_terminal_selection_emits_cancelled():
         synthesize=lambda _text: [Chunk(b"audio")],
     )
     worker = make_worker(voice, events, played, entered)
-    worker._cancel_event = cancel_event
+    worker._cancel_event_factory = lambda: cancel_event
 
     def cancel_at_terminal_check():
         worker.cancel_active(10)

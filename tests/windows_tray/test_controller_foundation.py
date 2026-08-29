@@ -141,3 +141,16 @@ def test_shutdown_invalidates_generation_and_ignores_queued_worker_events() -> N
 
     assert controller.state.playback is PlaybackState.SHUTTING_DOWN
     assert controller.state.speech_generation > generation
+
+
+def test_snapshot_can_stop_auxiliary_without_changing_foreground_playback():
+    from piper.windows_tray.settings import TraySettings
+
+    controller = Controller(settings=TraySettings())
+    controller.state.playback = PlaybackState.IDLE
+    controller.state.auxiliary_active_generation = 1
+
+    snapshot = controller.tray_snapshot()
+
+    assert snapshot.can_stop is True
+    assert controller.state.playback is PlaybackState.IDLE
