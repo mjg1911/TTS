@@ -118,8 +118,10 @@ def test_configure_voice_switches_synchronously_to_each_loaded_candidate():
 
 def test_configure_voice_failure_reports_previous_voice_still_active():
     statuses = []
+    worker = FakeSpeechWorker()
     controller = Controller(
-        settings=TraySettings(voice="old.onnx"),
+        settings=TraySettings(voice="old.onnx", error_sounds=True),
+        speech_worker=worker,
         save_settings=lambda _settings: None,
     )
     controller.set_voice(Path("old.onnx"), object())
@@ -134,6 +136,9 @@ def test_configure_voice_failure_reports_previous_voice_still_active():
     assert statuses == [
         "The selected voice could not be loaded. The previous voice is still active."
     ]
+    assert not any(
+        request.purpose is SpeechPurpose.ERROR for request in worker.submitted
+    )
 
 
 def test_app_speech_worker_reads_voice_manager_current_and_enqueues_events():

@@ -5,6 +5,7 @@ from piper.windows_tray.controller import (
     Controller,
     PlaybackState,
 )
+from piper.windows_tray.settings import TraySettings
 from piper.windows_tray.speech import SpeechEvent, SpeechEventKind, SpeechRequest
 
 
@@ -174,7 +175,11 @@ def test_matching_worker_terminal_events_update_state_and_report_failures():
 
 def test_synthesis_failure_uses_synthesis_message():
     statuses = []
-    controller = Controller()
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=True),
+        speech_worker=worker,
+    )
     controller.configure_runtime(show_status=statuses.append)
     controller.state.speech_generation = 3
     controller.state.playback = PlaybackState.SPEAKING
@@ -194,11 +199,16 @@ def test_synthesis_failure_uses_synthesis_message():
     assert statuses == [
         "Speech could not be generated. See the Piper log for details."
     ]
+    assert worker.submitted == []
 
 
 def test_playback_failure_uses_playback_message():
     statuses = []
-    controller = Controller()
+    worker = FakeSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=True),
+        speech_worker=worker,
+    )
     controller.configure_runtime(show_status=statuses.append)
     controller.state.speech_generation = 3
     controller.state.playback = PlaybackState.SPEAKING
@@ -218,6 +228,7 @@ def test_playback_failure_uses_playback_message():
     assert statuses == [
         "Audio playback failed. See the Piper log for details."
     ]
+    assert worker.submitted == []
 
 
 def test_worker_callback_only_enqueues_worker_event():

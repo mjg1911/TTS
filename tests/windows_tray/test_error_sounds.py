@@ -80,6 +80,18 @@ def test_no_text_uses_native_notification_and_speaks_full_message():
     ]
 
 
+def test_already_running_status_is_never_spoken():
+    controller, worker, statuses, notifications, _errors, _shown_last_text = configured_controller(
+        TraySettings(error_sounds=True)
+    )
+
+    controller.handle(Command(CommandKind.ACTIVATE))
+
+    assert statuses == ["Piper is already running."]
+    assert notifications == []
+    assert worker.submitted == []
+
+
 def test_runtime_error_preserves_foreground_state_and_show_last_text():
     controller, _worker, statuses, notifications, _errors, shown_last_text = configured_controller(
         TraySettings(error_sounds=True)
@@ -211,9 +223,11 @@ def test_toggle_error_sounds_reports_unavailable_persistence(controller) -> None
 def test_failed_toggle_error_sounds_save_retains_state_and_checkmark(failure) -> None:
     statuses = []
     errors = []
+    worker = FakeSpeechWorker()
     settings = TraySettings(error_sounds=False)
     controller = Controller(
         settings=settings,
+        speech_worker=worker,
         save_settings=lambda _settings: (_ for _ in ()).throw(failure),
     )
     controller.configure_runtime(show_status=statuses.append, log_error=errors.append)
@@ -224,6 +238,7 @@ def test_failed_toggle_error_sounds_save_retains_state_and_checkmark(failure) ->
     assert controller.tray_snapshot().error_sounds_enabled is False
     assert errors == ["Could not save Piper error sound settings: %s" % failure]
     assert statuses == ["Piper error sound settings could not be saved."]
+    assert worker.submitted == []
 
 
 def test_disabled_error_sounds_submits_welcome_as_auxiliary_only():
