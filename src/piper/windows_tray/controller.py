@@ -62,6 +62,7 @@ class TraySnapshot:
     can_stop: bool
     can_replay: bool
     has_last_text: bool
+    error_sounds_enabled: bool
 
 
 def _start_daemon_job(job: Callable[[], None]) -> None:
@@ -89,6 +90,7 @@ class Controller:
             )
         )
         self._show_status: Callable[[str], None] = lambda _message: None
+        self._show_notification: Callable[[str], None] = lambda _message: None
         self._log_error: Callable[[str], None] = lambda _message: None
         self._open_log: Callable[[], None] = lambda: None
         self._ensure_tray_visible: Callable[[], None] = lambda: None
@@ -113,6 +115,7 @@ class Controller:
         choose_voice: Optional[Callable[[], Optional[Path]]] = None,
         load_voice: Optional[Callable[[str], Tuple[Path, object]]] = None,
         show_status: Optional[Callable[[str], None]] = None,
+        show_notification: Optional[Callable[[str], None]] = None,
         log_error: Optional[Callable[[str], None]] = None,
         open_log: Optional[Callable[[], None]] = None,
         ensure_tray_visible: Optional[Callable[[], None]] = None,
@@ -132,6 +135,8 @@ class Controller:
             self._load_voice = load_voice
         if show_status is not None:
             self._show_status = show_status
+        if show_notification is not None:
+            self._show_notification = show_notification
         if log_error is not None:
             self._log_error = log_error
         if open_log is not None:
@@ -196,6 +201,11 @@ class Controller:
                     and not self.state.capture_in_progress
                 ),
                 has_last_text=self.state.last_text is not None,
+                error_sounds_enabled=(
+                    self.state.settings.error_sounds
+                    if self.state.settings is not None
+                    else False
+                ),
             )
 
     def enqueue_worker_event(self, event: SpeechEvent) -> None:
@@ -216,6 +226,8 @@ class Controller:
     def _handle(self, command: Command) -> None:
         if command.kind is CommandKind.ACTIVATE:
             self._show_status("Piper is already running.")
+        elif command.kind is CommandKind.TOGGLE_ERROR_SOUNDS:
+            self._toggle_error_sounds()
         elif command.kind is CommandKind.OPEN_LOG:
             self._open_log()
         elif command.kind is CommandKind.CONFIGURE_VOICE:
@@ -268,6 +280,24 @@ class Controller:
                 return
             self._begin_shutdown()
             self._request_teardown()
+
+    def _toggle_error_sounds(self) -> bool:
+        current = self.state.settings
+        if current is None or self._save_settings is None:
+            self._show_status("Piper error sound settings could not be saved.")
+            return False
+        next_settings = replace(
+            current,
+            error_sounds=not current.error_sounds,
+        )
+        try:
+            self._save_settings(next_settings)
+        except (OSError, ValueError) as error:
+            self._log_error("Could not save Piper error sound settings: %s" % error)
+            self._show_status("Piper error sound settings could not be saved.")
+            return False
+        self.state.settings = next_settings
+        return True
 
     def _recover_from_resume(self) -> None:
         if self.state.shutting_down:
@@ -388,7 +418,12 @@ class Controller:
             if result.status is CaptureStatus.ACCESS_ERROR:
                 self._show_status(user_message(UserError.CLIPBOARD))
             else:
-                self._show_status(user_message(UserError.NO_TEXT))
+                try:
+                    self._show_notification(user_message(UserError.NO_TEXT))
+                except Exception as error:
+                    self._log_error(
+                        "Piper tray notification could not be shown: %s" % error
+                    )
 
     def _stop_speech(self) -> None:
         if self.state.playback is not PlaybackState.SPEAKING:
