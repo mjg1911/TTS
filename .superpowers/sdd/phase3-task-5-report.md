@@ -44,3 +44,31 @@ disabled and enabled passes.
 - No packaged executable acceptance run was performed in this documentation
   task; the new checklists remain intentionally unchecked for the actual
   Windows acceptance pass.
+
+## Review fixes
+
+The original Task 5 documentation commit remains `c8f1f87` (`docs: document
+error sounds feedback`). This follow-up preserves that history and addresses
+the two review findings:
+
+- `docs/WINDOWS_TRAY.md` now explicitly states that the four listed messages
+  are the only approved runtime errors that Error sounds may speak.
+- Verification is recorded with exact commands and concrete results below;
+  no CI command or dependency was changed.
+
+Reproducible verification run from the repository root:
+
+1. Command: `python --version`
+   Output: command unavailable in this environment (PowerShell exit code `1`).
+2. Command: `py -3 --version`
+   Output: command unavailable in this environment (PowerShell exit code `1`).
+   Per the brief's validation preflight, Python-based automated documentation
+   assertions were therefore blocked.
+3. Command: `$tray = Get-Content -Raw 'docs/WINDOWS_TRAY.md'; $acceptance = Get-Content -Raw 'docs/superpowers/plans/2026-08-28-windows-tray-tts-acceptance.md'; $checks = @($tray.Contains('Tray actions: Voice settings, Show last text, Stop speaking, Replay,'),$tray.Contains('## Error sounds'),$tray.Contains('These four listed messages are the only approved runtime errors that Error'),$tray.Contains('sounds may speak.'),$tray.Contains('That hotkey is already in use. Choose another combination.'),$tray.Contains('That hotkey is not valid. Choose another combination.'),$tray.Contains('No text selected or the application did not provide it'),$tray.Contains('The selected text could not be read from the clipboard.'),$tray.Contains('notification with `No text selected`'),$tray.Contains('does not speak stale clipboard contents'),$acceptance.Contains('## Error sounds disabled pass'),$acceptance.Contains('## Error sounds enabled pass'),$acceptance.Contains('A no-copy application shows the native `No text selected` tray notification, never opens a modal for this case, and never speaks stale clipboard contents.')); if ($checks -contains $false) { throw 'Documentation assertion failed' }; Write-Output 'Documentation assertions: PASS (13 required strings/fragments)'`
+   Output: `Documentation assertions: PASS (13 required strings/fragments)`.
+4. Command: `git diff --check`
+   Output: no output; exit code `0`.
+5. Command: `git diff --name-only -- docs/WINDOWS_TRAY.md docs/superpowers/plans/2026-08-28-windows-tray-tts-acceptance.md .superpowers/sdd/phase3-task-5-report.md`
+   Output before commit: `docs/WINDOWS_TRAY.md` and
+   `.superpowers/sdd/phase3-task-5-report.md`; the acceptance plan was
+   unchanged by this follow-up because it was already included in `c8f1f87`.

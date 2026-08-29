@@ -59,6 +59,9 @@ speaks these runtime errors with the currently selected voice:
 - `No text selected or the application did not provide it`
 - `The selected text could not be read from the clipboard.`
 
+These four listed messages are the only approved runtime errors that Error
+sounds may speak.
+
 Other status messages are not spoken merely because Error sounds is enabled.
 Feedback speech does not replace the last captured text and does not become
 available through Replay or Show last text.
