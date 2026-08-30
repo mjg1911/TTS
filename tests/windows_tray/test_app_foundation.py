@@ -786,7 +786,7 @@ def test_tk_thread_dispatches_activation_and_exit(monkeypatch) -> None:
         def set_failure_callback(self, _callback):
             pass
 
-        def start(self, _capture_spec, _on_capture, _on_cancel):
+        def start(self, _capture_spec, on_capture, on_cancel):
             raise CancelHotkeyRegistrationError("F8 registration failed")
 
         def stop(self):
