@@ -779,6 +779,21 @@ def test_tk_thread_dispatches_activation_and_exit(monkeypatch) -> None:
     controller = Controller()
     monkeypatch.setattr(app, "Controller", lambda *args, **kwargs: controller)
 
+    class CancelHotkeyRegistrationError(OSError):
+        role = "cancel"
+
+    class FailingHotkeys:
+        def set_failure_callback(self, _callback):
+            pass
+
+        def start(self, _capture_spec, _on_capture, _on_cancel):
+            raise CancelHotkeyRegistrationError("F8 registration failed")
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(app, "HotkeyManager", FailingHotkeys)
+
     def mainloop():
         controller.enqueue(app.Command(app.CommandKind.ACTIVATE))
         ui.root.callbacks.pop(0)()
