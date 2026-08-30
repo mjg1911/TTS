@@ -12,7 +12,13 @@ from .commands import Command, CommandKind
 from .hotkey import parse_hotkey
 from .logging_setup import log_capture_result, log_exception_safe
 from .errors import UserError, user_message
-from .settings import TraySettings
+from .settings import (
+    DEFAULT_PITCH_PERCENT,
+    DEFAULT_SPEED_PERCENT,
+    TraySettings,
+    validate_pitch_percent,
+    validate_speed_percent,
+)
 from .speech import SpeechEvent, SpeechEventKind, SpeechPurpose, SpeechRequest
 from .voice_manager import VoiceManager, VoiceSwitchEvent
 
@@ -122,6 +128,8 @@ class Controller:
         self._show_last_text: Callable[[Optional[str]], None] = lambda _text: None
         self._hotkeys = hotkeys
         self._choose_hotkey: Callable[[], Optional[str]] = lambda: None
+        self._choose_pitch: Callable[[float], Optional[float]] = lambda _current: None
+        self._choose_speed: Callable[[float], Optional[float]] = lambda _current: None
         self._speech_worker = speech_worker
         self._capture_replaced_speech = False
         self._voice_manager = voice_manager
@@ -143,6 +151,8 @@ class Controller:
         show_last_text: Optional[Callable[[Optional[str]], None]] = None,
         hotkeys: Optional[object] = None,
         choose_hotkey: Optional[Callable[[], Optional[str]]] = None,
+        choose_pitch: Optional[Callable[[float], Optional[float]]] = None,
+        choose_speed: Optional[Callable[[float], Optional[float]]] = None,
         speech_worker: Optional[object] = None,
         voice_manager: Optional[VoiceManager] = None,
     ) -> None:
@@ -174,6 +184,10 @@ class Controller:
             self._hotkeys = hotkeys
         if choose_hotkey is not None:
             self._choose_hotkey = choose_hotkey
+        if choose_pitch is not None:
+            self._choose_pitch = choose_pitch
+        if choose_speed is not None:
+            self._choose_speed = choose_speed
         if speech_worker is not None:
             self._speech_worker = speech_worker
         if voice_manager is not None:
@@ -302,6 +316,18 @@ class Controller:
                 requested = self._choose_hotkey()
             if isinstance(requested, str):
                 self.request_hotkey_change(requested)
+        elif command.kind is CommandKind.CONFIGURE_PITCH:
+            requested = command.value
+            if requested is None:
+                requested = self._choose_pitch(self.current_pitch_percent())
+            if requested is not None:
+                self.request_pitch_change(requested)
+        elif command.kind is CommandKind.CONFIGURE_SPEED:
+            requested = command.value
+            if requested is None:
+                requested = self._choose_speed(self.current_speed_percent())
+            if requested is not None:
+                self.request_speed_change(requested)
         elif command.kind is CommandKind.CANCEL_REQUEST:
             self._stop_speech()
         elif command.kind is CommandKind.STOP_REQUEST:
@@ -625,3 +651,70 @@ class Controller:
             return False
         self.state.settings = next_settings
         return True
+
+    def current_pitch_percent(self) -> float:
+        with self._state_lock:
+            settings = self.state.settings
+            if settings is None:
+                return DEFAULT_PITCH_PERCENT
+            return settings.pitch_percent
+
+    def current_pitch_and_speed_percent(self) -> Tuple[float, float]:
+        with self._state_lock:
+            settings = self.state.settings
+            if settings is None:
+                return DEFAULT_PITCH_PERCENT, DEFAULT_SPEED_PERCENT
+            return settings.pitch_percent, settings.speed_percent
+
+    def request_pitch_change(self, value: object) -> bool:
+        with self._state_lock:
+            current = self.state.settings
+            if current is None or self._save_settings is None:
+                self._show_status("Piper pitch settings could not be saved.")
+                return False
+            try:
+                pitch_percent = validate_pitch_percent(value)
+            except ValueError:
+                self._show_status("Pitch must be between -50% and 100%.")
+                return False
+
+            next_settings = replace(current, pitch_percent=pitch_percent)
+            try:
+                self._save_settings(next_settings)
+            except (OSError, ValueError) as error:
+                self._log_error("Could not save Piper pitch settings: %s" % error)
+                self._show_status("Piper pitch settings could not be saved.")
+                return False
+
+            self.state.settings = next_settings
+            return True
+
+    def current_speed_percent(self) -> float:
+        with self._state_lock:
+            settings = self.state.settings
+            if settings is None:
+                return DEFAULT_SPEED_PERCENT
+            return settings.speed_percent
+
+    def request_speed_change(self, value: object) -> bool:
+        with self._state_lock:
+            current = self.state.settings
+            if current is None or self._save_settings is None:
+                self._show_status("Piper speed settings could not be saved.")
+                return False
+            try:
+                speed_percent = validate_speed_percent(value)
+            except ValueError:
+                self._show_status("Speed must be between -50% and 100%.")
+                return False
+
+            next_settings = replace(current, speed_percent=speed_percent)
+            try:
+                self._save_settings(next_settings)
+            except (OSError, ValueError) as error:
+                self._log_error("Could not save Piper speed settings: %s" % error)
+                self._show_status("Piper speed settings could not be saved.")
+                return False
+
+            self.state.settings = next_settings
+            return True

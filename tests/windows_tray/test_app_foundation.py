@@ -5,6 +5,7 @@ import pytest
 
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import Controller
+from piper.windows_tray.settings import TraySettings
 
 
 def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) -> None:
@@ -62,6 +63,8 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
         CommandKind.STOP_REQUEST,
         CommandKind.REPLAY_REQUEST,
         CommandKind.CONFIGURE_HOTKEY,
+        CommandKind.CONFIGURE_PITCH,
+        CommandKind.CONFIGURE_SPEED,
         CommandKind.TOGGLE_ERROR_SOUNDS,
         CommandKind.OPEN_LOG,
         CommandKind.EXIT,
@@ -175,8 +178,47 @@ class FakeUi:
     def show_last_text(self, _text):
         pass
 
+    def prompt_pitch(self, _current):
+        return None
+
+    def prompt_speed(self, _current):
+        return None
+
     def close(self):
         self.root.destroy()
+
+
+def test_speech_worker_snapshots_pitch_and_speed_for_each_new_request(monkeypatch):
+    import piper.windows_tray.app as app
+    from piper.windows_tray.voice_manager import VoiceManager
+
+    calls = []
+    monkeypatch.setattr(
+        app,
+        "create_playback_pipeline",
+        lambda *args: calls.append(args) or object(),
+    )
+    monkeypatch.setattr(app.AudioPlayer, "is_available", staticmethod(lambda: True))
+    controller = Controller(
+        settings=TraySettings(pitch_percent=26, speed_percent=50),
+    )
+    controller.current_pitch_percent = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must use the atomic pitch/speed snapshot")
+    )
+    controller.current_speed_percent = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must use the atomic pitch/speed snapshot")
+    )
+    voice_manager = VoiceManager(object(), lambda _reference: (Path("voice"), object()))
+    worker = app._build_speech_worker(controller, voice_manager)
+    try:
+        worker._player_factory(22050)
+        assert calls == [(22050, 26.0, 50.0)]
+
+        controller.state.settings = TraySettings(pitch_percent=-10, speed_percent=-20)
+        worker._player_factory(22050)
+        assert calls == [(22050, 26.0, 50.0), (22050, -10.0, -20.0)]
+    finally:
+        worker.shutdown()
 
 
 class FakeInstance:
@@ -737,6 +779,21 @@ def test_tk_thread_dispatches_activation_and_exit(monkeypatch) -> None:
     controller = Controller()
     monkeypatch.setattr(app, "Controller", lambda *args, **kwargs: controller)
 
+    class CancelHotkeyRegistrationError(OSError):
+        role = "cancel"
+
+    class FailingHotkeys:
+        def set_failure_callback(self, _callback):
+            pass
+
+        def start(self, _capture_spec, on_capture, on_cancel):
+            raise CancelHotkeyRegistrationError("F8 registration failed")
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(app, "HotkeyManager", FailingHotkeys)
+
     def mainloop():
         controller.enqueue(app.Command(app.CommandKind.ACTIVATE))
         ui.root.callbacks.pop(0)()
@@ -746,7 +803,11 @@ def test_tk_thread_dispatches_activation_and_exit(monkeypatch) -> None:
     ui.root.mainloop = mainloop
     assert app.run_app([]) == 0
 
-    assert ui.statuses == ["Piper is already running."]
+    assert ui.statuses == [
+        "Piper could not register F8 for cancellation; resolve the "
+        "Windows hotkey conflict.",
+        "Piper is already running.",
+    ]
     assert tray.events == ["start", "stop"]
     assert events.count("instance.close") == 1
     assert "quit" in events

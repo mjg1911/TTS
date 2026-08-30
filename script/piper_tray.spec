@@ -20,7 +20,16 @@ if not piper_extensions:
         "The compiled piper.espeakbridge extension was not built. "
         "Run the Windows build bootstrap again."
     )
-hiddenimports = collect_submodules("pystray") + ["piper.espeakbridge"]
+# TkUi is imported from inside run_app(), so keep the desktop modules in the
+# frozen bundle even though PyInstaller cannot reliably discover that import
+# through the lazy boundary.
+hiddenimports = collect_submodules("pystray") + [
+    "piper.espeakbridge",
+    "tkinter",
+    "tkinter.filedialog",
+    "tkinter.messagebox",
+    "tkinter.simpledialog",
+]
 
 a = Analysis(
     [str(SPEC_DIR / "piper_tray_entry.py")],

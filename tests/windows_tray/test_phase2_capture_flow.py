@@ -42,6 +42,12 @@ class FakeUi:
     def show_last_text(self, text):
         self.last_text_calls.append(text)
 
+    def prompt_pitch(self, _current):
+        return None
+
+    def prompt_speed(self, _current):
+        return None
+
 
 class FakeInstance:
     def __init__(self, events):

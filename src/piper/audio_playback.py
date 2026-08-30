@@ -84,19 +84,27 @@ class AudioPlayer:
                 self._closing = False
 
     def play(self, audio_bytes: bytes) -> None:
-        """Plays raw audio using ffplay."""
+        """Play raw audio and report unexpected ffplay failures."""
         with self._lock:
             proc = self._proc
-            if (
-                self._stopped
-                or self._closing
-                or proc is None
-                or proc.poll() is not None
-                or proc.stdin is None
-            ):
+            if self._stopped or self._closing:
                 return
-        proc.stdin.write(audio_bytes)
-        proc.stdin.flush()
+            if proc is None or proc.stdin is None:
+                raise RuntimeError("ffplay is not running")
+            returncode = proc.poll()
+            if returncode is not None:
+                raise RuntimeError(
+                    f"ffplay exited unexpectedly with code {returncode}"
+                )
+
+        try:
+            proc.stdin.write(audio_bytes)
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            with self._lock:
+                if self._stopped or self._closing:
+                    return
+            raise
 
     @staticmethod
     def is_available() -> bool:

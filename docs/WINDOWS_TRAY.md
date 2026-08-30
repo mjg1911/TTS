@@ -5,10 +5,14 @@
 - Windows 10 or Windows 11.
 - A Piper `.onnx` voice model and its matching `.onnx.json` file.
 - `ffplay.exe` available on `PATH` for audio playback.
+- `ffmpeg.exe` available on `PATH` when either Pitch settings or Speed
+  settings is non-neutral.
 
-`ffplay` is not bundled into `PiperTray.exe`. If it is missing, Piper remains
-running in the tray, but speaking fails with the normal audio-playback error
-and details are written to the Piper log.
+Neither `ffplay` nor `ffmpeg` is bundled into `PiperTray.exe`. Only when both
+Pitch settings and Speed settings are `0%` does Piper use the direct `ffplay`
+PCM path without requiring `ffmpeg`. With either control non-neutral, a
+missing `ffmpeg` is reported through the normal recoverable speech-playback
+error and the tray application stays running.
 
 ## Voice setup
 
@@ -41,7 +45,26 @@ enable Windows logon startup. It must not open a terminal or playback window.
 - Speak selected text: `Alt` + `backtick`.
 - Stop current speech: `F8`.
 - Tray actions: Voice settings, Show last text, Stop speaking, Replay,
-  Hotkey settings, Error sounds, Open log, Exit.
+  Hotkey settings, Pitch settings, Speed settings, Error sounds, Open log,
+  Exit.
+
+## Pitch settings
+
+Pitch defaults to `+26%`. The accepted range is `-50%` through `100%`.
+Positive values raise the synthetic voice pitch, negative values lower it,
+and `0%` disables FFmpeg pitch processing. The FFmpeg filter compensates tempo
+so the overall speech duration remains approximately unchanged.
+
+The setting applies to foreground speech, spoken errors, and the launch welcome
+because all three use the shared speech worker. A changed value applies to the
+next speech request and persists in `%APPDATA%\Piper\settings.json`.
+
+## Speed settings
+
+Speed defaults to `0%`. The accepted range is `-50%` through `100%`: `-50%`
+means half speed, `0%` means normal speed, and `100%` means double speed.
+Speed changes duration without changing pitch. The setting applies to the
+next speech request and persists in `%APPDATA%\Piper\settings.json`.
 
 ## Error sounds
 
@@ -135,7 +158,9 @@ no-text feedback.
 
 ### No audio
 
-Confirm that `ffplay.exe` is on `PATH`, then inspect
+Confirm that `ffplay.exe` is on `PATH`; if either Pitch settings or Speed
+settings is non-neutral, also confirm that `ffmpeg.exe` is on `PATH`. Only
+when both settings are `0%` is direct `ffplay` playback used. Then inspect
 `%LOCALAPPDATA%\Piper\piper-tray.log`.
 
 ### Voice failed to load

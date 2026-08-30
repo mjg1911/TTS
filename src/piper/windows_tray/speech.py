@@ -12,6 +12,7 @@ from typing import Optional
 from piper.audio_playback import AudioPlayer
 
 from .logging_setup import log_exception_safe, log_synthesis_result
+from .pitch_playback import PlaybackPipeline
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ class SpeechWorker:
         self,
         voice_provider: Callable[[], object],
         on_event: Callable[[SpeechEvent], None],
-        player_factory: Callable[[int], AudioPlayer] = AudioPlayer,
+        player_factory: Callable[[int], PlaybackPipeline] = AudioPlayer,
     ) -> None:
         self._voice_provider = voice_provider
         self._on_event = on_event
@@ -65,7 +66,7 @@ class SpeechWorker:
         self._active_request: Optional[SpeechRequest] = None
         self._active_cancel_event: Optional[threading.Event] = None
         self._cancel_event_factory = threading.Event
-        self._active_player: Optional[AudioPlayer] = None
+        self._active_player: Optional[PlaybackPipeline] = None
         self._decision_boundary = threading.RLock()
         self._shutdown = False
         self._thread = threading.Thread(
@@ -103,6 +104,8 @@ class SpeechWorker:
             self._condition.notify()
 
         if cancel_auxiliary:
+            if cancel_event is not None:
+                cancel_event.set()
             if player is not None:
                 player.stop()
             if cancel_event is not None:
@@ -129,6 +132,8 @@ class SpeechWorker:
                 return
             player = self._active_player
             cancel_event = self._active_cancel_event
+        if cancel_event is not None:
+            cancel_event.set()
         if player is not None:
             player.stop()
         if cancel_event is not None:
@@ -151,6 +156,8 @@ class SpeechWorker:
             player = self._active_player
             cancel_event = self._active_cancel_event
 
+        if cancel_event is not None:
+            cancel_event.set()
         if player is not None:
             player.stop()
         if cancel_event is not None:
@@ -293,6 +300,7 @@ class SpeechWorker:
 
                 if cancel_event.is_set():
                     terminal_kind = SpeechEventKind.CANCELLED
+                phase = "playback"
         except Exception as caught:
             if cancel_event.is_set():
                 terminal_kind = SpeechEventKind.CANCELLED

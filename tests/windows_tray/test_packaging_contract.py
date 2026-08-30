@@ -78,11 +78,27 @@ def test_spec_includes_compiled_espeak_bridge_extension() -> None:
     assert "binaries=piper_binaries + piper_extensions" in text
 
 
+def test_spec_includes_tkinter_for_lazy_tray_ui_import() -> None:
+    text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
+
+    assert '"tkinter"' in text
+    assert '"tkinter.filedialog"' in text
+    assert '"tkinter.messagebox"' in text
+    assert '"tkinter.simpledialog"' in text
+
+
 def test_spec_builds_one_file_executable() -> None:
     text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
     assert "COLLECT(" not in text
     assert "a.binaries" in text
     assert "a.datas" in text
+
+
+def test_ffmpeg_and_ffplay_remain_external_to_frozen_bundle() -> None:
+    text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8").lower()
+
+    assert "ffmpeg" not in text
+    assert "ffplay" not in text
 
 
 def test_spec_resolves_paths_from_repository_root() -> None:
