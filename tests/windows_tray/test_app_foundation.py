@@ -750,7 +750,11 @@ def test_tk_thread_dispatches_activation_and_exit(monkeypatch) -> None:
     ui.root.mainloop = mainloop
     assert app.run_app([]) == 0
 
-    assert ui.statuses == ["Piper is already running."]
+    assert ui.statuses == [
+        "Piper could not register F8 for cancellation; resolve the "
+        "Windows hotkey conflict.",
+        "Piper is already running.",
+    ]
     assert tray.events == ["start", "stop"]
     assert events.count("instance.close") == 1
     assert "quit" in events
