@@ -77,6 +77,13 @@ class FakeProcess:
         self.returncode = -9
 
 
+class HangingProcess(FakeProcess):
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired("ffmpeg", timeout)
+        return super().wait(timeout)
+
+
 class FakePlayer:
     def __init__(self) -> None:
         self.played = []
@@ -95,6 +102,17 @@ class FakePlayer:
 
     def stop(self) -> None:
         self.stopped = True
+
+
+class FailingPlayer(FakePlayer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = threading.Event()
+
+    def play(self, data: bytes) -> None:
+        del data
+        self.failed.set()
+        raise RuntimeError("speaker failed")
 
 
 def test_pipeline_starts_one_ffmpeg_process_and_streams_all_chunks() -> None:
@@ -121,6 +139,21 @@ def test_pipeline_starts_one_ffmpeg_process_and_streams_all_chunks() -> None:
     assert popen_calls[0][1]["stderr"] is subprocess.DEVNULL
     assert popen_calls[0][1]["shell"] is False
     assert player.exited is True
+
+
+def test_reader_failure_terminates_ffmpeg_and_preserves_playback_error() -> None:
+    process = HangingProcess(output=b"\x01\x00")
+    player = FailingPlayer()
+    pipeline = pitch_playback.FfmpegPitchPipeline(
+        22050, 26, player_factory=lambda _sample_rate: player,
+        popen_factory=lambda *_args, **_kwargs: process,
+    )
+
+    with pytest.raises(RuntimeError, match="speaker failed"):
+        with pipeline:
+            assert player.failed.wait(timeout=1)
+
+    assert process.terminated is True
 
 
 def test_stop_terminates_ffmpeg_and_stops_forwarding_to_ffplay() -> None:

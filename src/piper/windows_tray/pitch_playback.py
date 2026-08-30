@@ -141,9 +141,16 @@ class FfmpegPitchPipeline:
             if pending:
                 raise RuntimeError("ffmpeg produced malformed s16le output")
         except BaseException as error:
+            should_terminate = False
             with self._lock:
                 if not self._stopped:
                     self._reader_error = error
+                    should_terminate = True
+            if should_terminate and proc.poll() is None:
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
 
     def _raise_reader_error(self) -> None:
         error = self._reader_error
