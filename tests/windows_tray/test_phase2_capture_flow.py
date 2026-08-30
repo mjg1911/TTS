@@ -45,6 +45,9 @@ class FakeUi:
     def prompt_pitch(self, _current):
         return None
 
+    def prompt_speed(self, _current):
+        return None
+
 
 class FakeInstance:
     def __init__(self, events):
