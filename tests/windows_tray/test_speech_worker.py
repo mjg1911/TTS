@@ -100,6 +100,99 @@ def make_worker(voice, events, played, entered):
     )
 
 
+def test_multi_chunk_request_creates_one_playback_pipeline() -> None:
+    events = []
+    played = []
+    entered = threading.Event()
+    factory_calls = []
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"one"), Chunk(b"two")],
+    )
+
+    def player_factory(sample_rate):
+        factory_calls.append(sample_rate)
+        return FakePlayer(played, entered)
+
+    worker = SpeechWorker(lambda: voice, events.append, player_factory)
+    try:
+        worker.submit(SpeechRequest(301, "hello"))
+        wait_for_event(events, SpeechEventKind.FINISHED, 301)
+        assert factory_calls == [22050]
+        assert played == [b"one", b"two"]
+    finally:
+        worker.shutdown()
+
+
+def test_pipeline_exit_failure_is_classified_as_playback_failure() -> None:
+    events = []
+
+    class ExitFailingPlayer(FakePlayer):
+        def __exit__(self, *_args) -> None:
+            raise RuntimeError("ffmpeg exited unexpectedly")
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: ExitFailingPlayer([], threading.Event()),
+    )
+    try:
+        worker.submit(SpeechRequest(302, "hello"))
+        event = wait_for_event(events, SpeechEventKind.FAILED, 302)
+        assert event.error == "Speech playback failed."
+        assert event.failure_phase == "playback"
+    finally:
+        worker.shutdown()
+
+
+def test_stop_induced_broken_pipe_does_not_emit_failed_event() -> None:
+    events = []
+    write_started = threading.Event()
+    release_write = threading.Event()
+
+    class StopBrokenPipePlayer(FakePlayer):
+        def play(self, _data: bytes) -> None:
+            write_started.set()
+            release_write.wait(timeout=2)
+            try:
+                raise BrokenPipeError("ffplay pipe closed during stop")
+            except BrokenPipeError:
+                if self.stopped.is_set():
+                    return
+                raise
+
+        def stop(self) -> None:
+            super().stop()
+            release_write.set()
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda _text: [Chunk(b"audio")],
+    )
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: StopBrokenPipePlayer([], threading.Event()),
+    )
+    try:
+        worker.submit(SpeechRequest(303, "hello"))
+        assert write_started.wait(timeout=1)
+        worker.cancel_active(303)
+        terminal = wait_for_terminal_event(events, 303)
+        assert terminal.kind is SpeechEventKind.CANCELLED
+        assert not any(
+            event.generation == 303 and event.kind is SpeechEventKind.FAILED
+            for event in events
+        )
+    finally:
+        release_write.set()
+        worker.shutdown()
+
+
 def test_speech_worker_emits_started_and_finished_and_plays_audio():
     events = []
     played = []
