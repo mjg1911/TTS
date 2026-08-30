@@ -65,6 +65,7 @@ def _build_speech_worker(controller: Controller, voice_manager: VoiceManager) ->
         return create_playback_pipeline(
             sample_rate,
             controller.current_pitch_percent(),
+            controller.current_speed_percent(),
         )
 
     return SpeechWorker(
@@ -279,6 +280,7 @@ def run_app(
                 else settings.hotkey
             ),
             choose_pitch=ui.prompt_pitch,
+            choose_speed=ui.prompt_speed,
             show_last_text=ui.show_last_text,
             request_teardown=teardown.run,
         )

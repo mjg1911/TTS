@@ -5,6 +5,7 @@ import pytest
 
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import Controller
+from piper.windows_tray.settings import TraySettings
 
 
 def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) -> None:
@@ -63,6 +64,7 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
         CommandKind.REPLAY_REQUEST,
         CommandKind.CONFIGURE_HOTKEY,
         CommandKind.CONFIGURE_PITCH,
+        CommandKind.CONFIGURE_SPEED,
         CommandKind.TOGGLE_ERROR_SOUNDS,
         CommandKind.OPEN_LOG,
         CommandKind.EXIT,
@@ -179,8 +181,38 @@ class FakeUi:
     def prompt_pitch(self, _current):
         return None
 
+    def prompt_speed(self, _current):
+        return None
+
     def close(self):
         self.root.destroy()
+
+
+def test_speech_worker_snapshots_pitch_and_speed_for_each_new_request(monkeypatch):
+    import piper.windows_tray.app as app
+    from piper.windows_tray.voice_manager import VoiceManager
+
+    calls = []
+    monkeypatch.setattr(
+        app,
+        "create_playback_pipeline",
+        lambda *args: calls.append(args) or object(),
+    )
+    monkeypatch.setattr(app.AudioPlayer, "is_available", staticmethod(lambda: True))
+    controller = Controller(
+        settings=TraySettings(pitch_percent=26, speed_percent=50),
+    )
+    voice_manager = VoiceManager(object(), lambda _reference: (Path("voice"), object()))
+    worker = app._build_speech_worker(controller, voice_manager)
+    try:
+        worker._player_factory(22050)
+        assert calls == [(22050, 26.0, 50.0)]
+
+        controller.state.settings = TraySettings(pitch_percent=-10, speed_percent=-20)
+        worker._player_factory(22050)
+        assert calls == [(22050, 26.0, 50.0), (22050, -10.0, -20.0)]
+    finally:
+        worker.shutdown()
 
 
 class FakeInstance:

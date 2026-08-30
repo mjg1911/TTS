@@ -129,6 +129,7 @@ class Controller:
         self._hotkeys = hotkeys
         self._choose_hotkey: Callable[[], Optional[str]] = lambda: None
         self._choose_pitch: Callable[[float], Optional[float]] = lambda _current: None
+        self._choose_speed: Callable[[float], Optional[float]] = lambda _current: None
         self._speech_worker = speech_worker
         self._capture_replaced_speech = False
         self._voice_manager = voice_manager
@@ -151,6 +152,7 @@ class Controller:
         hotkeys: Optional[object] = None,
         choose_hotkey: Optional[Callable[[], Optional[str]]] = None,
         choose_pitch: Optional[Callable[[float], Optional[float]]] = None,
+        choose_speed: Optional[Callable[[float], Optional[float]]] = None,
         speech_worker: Optional[object] = None,
         voice_manager: Optional[VoiceManager] = None,
     ) -> None:
@@ -184,6 +186,8 @@ class Controller:
             self._choose_hotkey = choose_hotkey
         if choose_pitch is not None:
             self._choose_pitch = choose_pitch
+        if choose_speed is not None:
+            self._choose_speed = choose_speed
         if speech_worker is not None:
             self._speech_worker = speech_worker
         if voice_manager is not None:
@@ -318,6 +322,12 @@ class Controller:
                 requested = self._choose_pitch(self.current_pitch_percent())
             if requested is not None:
                 self.request_pitch_change(requested)
+        elif command.kind is CommandKind.CONFIGURE_SPEED:
+            requested = command.value
+            if requested is None:
+                requested = self._choose_speed(self.current_speed_percent())
+            if requested is not None:
+                self.request_speed_change(requested)
         elif command.kind is CommandKind.CANCEL_REQUEST:
             self._stop_speech()
         elif command.kind is CommandKind.STOP_REQUEST:

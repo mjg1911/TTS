@@ -77,6 +77,12 @@ class TrayIcon:
                     ),
                 ),
                 pystray.MenuItem(
+                    "Speed settings",
+                    lambda _icon, _item: self._enqueue(
+                        Command(CommandKind.CONFIGURE_SPEED)
+                    ),
+                ),
+                pystray.MenuItem(
                     "Error sounds",
                     lambda _icon, _item: self._enqueue(
                         Command(CommandKind.TOGGLE_ERROR_SOUNDS)

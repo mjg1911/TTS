@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from typing import Optional
 
-from .settings import validate_pitch_percent
+from .settings import validate_pitch_percent, validate_speed_percent
 
 
 class TkUi:
@@ -65,6 +65,26 @@ class TkUi:
             messagebox.showerror(
                 "Piper",
                 "Pitch must be between -50% and 100%.",
+                parent=self.root,
+            )
+            return None
+
+    def prompt_speed(self, current: float) -> Optional[float]:
+        self._assert_main_thread()
+        value = simpledialog.askstring(
+            "Speed settings",
+            "Enter speed from -50% to 100%. Speed does not change pitch.",
+            initialvalue=f"{current:g}",
+            parent=self.root,
+        )
+        if value is None:
+            return None
+        try:
+            return validate_speed_percent(float(value.strip()))
+        except (ValueError, OverflowError):
+            messagebox.showerror(
+                "Piper",
+                "Speed must be between -50% and 100%.",
                 parent=self.root,
             )
             return None
