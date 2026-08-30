@@ -78,6 +78,15 @@ def test_spec_includes_compiled_espeak_bridge_extension() -> None:
     assert "binaries=piper_binaries + piper_extensions" in text
 
 
+def test_spec_includes_tkinter_for_lazy_tray_ui_import() -> None:
+    text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
+
+    assert '"tkinter"' in text
+    assert '"tkinter.filedialog"' in text
+    assert '"tkinter.messagebox"' in text
+    assert '"tkinter.simpledialog"' in text
+
+
 def test_spec_builds_one_file_executable() -> None:
     text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
     assert "COLLECT(" not in text
