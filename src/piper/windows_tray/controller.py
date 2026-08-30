@@ -659,6 +659,13 @@ class Controller:
                 return DEFAULT_PITCH_PERCENT
             return settings.pitch_percent
 
+    def current_pitch_and_speed_percent(self) -> Tuple[float, float]:
+        with self._state_lock:
+            settings = self.state.settings
+            if settings is None:
+                return DEFAULT_PITCH_PERCENT, DEFAULT_SPEED_PERCENT
+            return settings.pitch_percent, settings.speed_percent
+
     def request_pitch_change(self, value: object) -> bool:
         with self._state_lock:
             current = self.state.settings

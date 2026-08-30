@@ -62,11 +62,8 @@ def _build_speech_worker(controller: Controller, voice_manager: VoiceManager) ->
     def player_factory(sample_rate: int):
         if not AudioPlayer.is_available():
             raise RuntimeError("ffplay is not available")
-        return create_playback_pipeline(
-            sample_rate,
-            controller.current_pitch_percent(),
-            controller.current_speed_percent(),
-        )
+        pitch_percent, speed_percent = controller.current_pitch_and_speed_percent()
+        return create_playback_pipeline(sample_rate, pitch_percent, speed_percent)
 
     return SpeechWorker(
         voice_manager.current,

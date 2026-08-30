@@ -202,6 +202,12 @@ def test_speech_worker_snapshots_pitch_and_speed_for_each_new_request(monkeypatc
     controller = Controller(
         settings=TraySettings(pitch_percent=26, speed_percent=50),
     )
+    controller.current_pitch_percent = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must use the atomic pitch/speed snapshot")
+    )
+    controller.current_speed_percent = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must use the atomic pitch/speed snapshot")
+    )
     voice_manager = VoiceManager(object(), lambda _reference: (Path("voice"), object()))
     worker = app._build_speech_worker(controller, voice_manager)
     try:
