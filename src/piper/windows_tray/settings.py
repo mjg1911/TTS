@@ -12,6 +12,9 @@ from . import DEFAULT_HOTKEY, DEFAULT_VOICE, SETTINGS_SCHEMA_VERSION
 DEFAULT_PITCH_PERCENT: float = 26.0
 MIN_PITCH_PERCENT: float = -50.0
 MAX_PITCH_PERCENT: float = 100.0
+DEFAULT_SPEED_PERCENT: float = 0.0
+MIN_SPEED_PERCENT: float = -50.0
+MAX_SPEED_PERCENT: float = 100.0
 
 
 def validate_pitch_percent(value: object) -> float:
@@ -25,6 +28,17 @@ def validate_pitch_percent(value: object) -> float:
     return pitch_percent
 
 
+def validate_speed_percent(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ValueError("speed_percent must be a finite number")
+    speed_percent = float(value)
+    if not math.isfinite(speed_percent):
+        raise ValueError("speed_percent must be a finite number")
+    if not MIN_SPEED_PERCENT <= speed_percent <= MAX_SPEED_PERCENT:
+        raise ValueError("speed_percent is out of range")
+    return speed_percent
+
+
 @dataclass(frozen=True)
 class TraySettings:
     schema_version: int = SETTINGS_SCHEMA_VERSION
@@ -33,6 +47,7 @@ class TraySettings:
     log_level: str = "INFO"
     error_sounds: bool = False
     pitch_percent: float = DEFAULT_PITCH_PERCENT
+    speed_percent: float = DEFAULT_SPEED_PERCENT
 
 
 @dataclass(frozen=True)
@@ -62,6 +77,9 @@ def _validated(data: object) -> TraySettings:
     pitch_percent = validate_pitch_percent(
         data.get("pitch_percent", DEFAULT_PITCH_PERCENT)
     )
+    speed_percent = validate_speed_percent(
+        data.get("speed_percent", DEFAULT_SPEED_PERCENT)
+    )
     if not isinstance(voice, str) or not voice.strip():
         raise ValueError("voice must be a non-empty string")
     if not isinstance(hotkey, str) or not hotkey.strip():
@@ -81,6 +99,7 @@ def _validated(data: object) -> TraySettings:
         log_level=log_level,
         error_sounds=error_sounds,
         pitch_percent=pitch_percent,
+        speed_percent=speed_percent,
     )
 
 

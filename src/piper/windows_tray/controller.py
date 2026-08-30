@@ -12,7 +12,13 @@ from .commands import Command, CommandKind
 from .hotkey import parse_hotkey
 from .logging_setup import log_capture_result, log_exception_safe
 from .errors import UserError, user_message
-from .settings import DEFAULT_PITCH_PERCENT, TraySettings, validate_pitch_percent
+from .settings import (
+    DEFAULT_PITCH_PERCENT,
+    DEFAULT_SPEED_PERCENT,
+    TraySettings,
+    validate_pitch_percent,
+    validate_speed_percent,
+)
 from .speech import SpeechEvent, SpeechEventKind, SpeechPurpose, SpeechRequest
 from .voice_manager import VoiceManager, VoiceSwitchEvent
 
@@ -661,6 +667,36 @@ class Controller:
             except (OSError, ValueError) as error:
                 self._log_error("Could not save Piper pitch settings: %s" % error)
                 self._show_status("Piper pitch settings could not be saved.")
+                return False
+
+            self.state.settings = next_settings
+            return True
+
+    def current_speed_percent(self) -> float:
+        with self._state_lock:
+            settings = self.state.settings
+            if settings is None:
+                return DEFAULT_SPEED_PERCENT
+            return settings.speed_percent
+
+    def request_speed_change(self, value: object) -> bool:
+        with self._state_lock:
+            current = self.state.settings
+            if current is None or self._save_settings is None:
+                self._show_status("Piper speed settings could not be saved.")
+                return False
+            try:
+                speed_percent = validate_speed_percent(value)
+            except ValueError:
+                self._show_status("Speed must be between -50% and 100%.")
+                return False
+
+            next_settings = replace(current, speed_percent=speed_percent)
+            try:
+                self._save_settings(next_settings)
+            except (OSError, ValueError) as error:
+                self._log_error("Could not save Piper speed settings: %s" % error)
+                self._show_status("Piper speed settings could not be saved.")
                 return False
 
             self.state.settings = next_settings

@@ -111,3 +111,25 @@ def test_configure_pitch_command_uses_current_value_and_persists_choice() -> Non
     assert seen_current == [26.0]
     assert controller.current_pitch_percent() == -20.0
     assert saved[-1].pitch_percent == -20.0
+
+
+def test_controller_persists_valid_speed_and_updates_current_value() -> None:
+    saved = []
+    controller = Controller(settings=TraySettings(), save_settings=saved.append)
+
+    assert controller.request_speed_change(50) is True
+    assert controller.current_speed_percent() == 50.0
+    assert saved == [TraySettings(speed_percent=50)]
+
+
+@pytest.mark.parametrize("value", [101, -51, "50", True, float("nan")])
+def test_invalid_speed_does_not_replace_or_save_current_settings(value) -> None:
+    saved = []
+    statuses = []
+    controller = Controller(settings=TraySettings(speed_percent=20), save_settings=saved.append)
+    controller.configure_runtime(show_status=statuses.append)
+
+    assert controller.request_speed_change(value) is False
+    assert controller.current_speed_percent() == 20.0
+    assert saved == []
+    assert statuses == ["Speed must be between -50% and 100%."]

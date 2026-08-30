@@ -5,12 +5,16 @@ from pathlib import Path
 import pytest
 
 from piper.windows_tray.settings import (
+    DEFAULT_SPEED_PERCENT,
     DEFAULT_PITCH_PERCENT,
+    MAX_SPEED_PERCENT,
     MAX_PITCH_PERCENT,
+    MIN_SPEED_PERCENT,
     MIN_PITCH_PERCENT,
     TraySettings,
     load_settings,
     save_settings,
+    validate_speed_percent,
     validate_pitch_percent,
 )
 
@@ -265,5 +269,73 @@ def test_save_settings_rejects_non_v1_schema_version(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsupported settings schema"):
         save_settings(TraySettings(schema_version=2), path)
+
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("value", [-50, -12.5, 0, 50, 100])
+def test_validate_speed_percent_accepts_finite_values_inclusive(value) -> None:
+    assert validate_speed_percent(value) == float(value)
+
+
+@pytest.mark.parametrize(
+    "value", [-50.0001, 100.0001, "50", None, True, math.nan, math.inf, -math.inf]
+)
+def test_validate_speed_percent_rejects_invalid_values(value) -> None:
+    with pytest.raises(ValueError):
+        validate_speed_percent(value)
+
+
+def test_speed_constants_define_schema_range() -> None:
+    assert DEFAULT_SPEED_PERCENT == 0.0
+    assert MIN_SPEED_PERCENT == -50.0
+    assert MAX_SPEED_PERCENT == 100.0
+
+
+def test_schema_one_settings_missing_speed_use_default(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path)
+
+    result = load_settings(path)
+
+    assert result.settings.speed_percent == DEFAULT_SPEED_PERCENT
+    assert result.source == "loaded"
+
+
+def test_speed_settings_round_trip_for_schema_one(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+
+    save_settings(TraySettings(speed_percent=-12.5), path)
+
+    result = load_settings(path)
+
+    assert result.settings.speed_percent == -12.5
+    assert result.source == "loaded"
+
+
+def test_invalid_speed_settings_are_preserved_as_corrupt(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path, speed_percent=100.0001)
+
+    result = load_settings(path)
+
+    assert result.settings == TraySettings()
+    assert result.source == "corrupt"
+    assert not path.exists()
+    assert list(tmp_path.glob("settings.json.corrupt*"))
+
+
+def test_invalid_speed_save_does_not_create_temp_file(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "settings.json"
+
+    def unexpected_temp_file(*args, **kwargs):
+        raise AssertionError("temporary file must not be created")
+
+    monkeypatch.setattr(
+        "piper.windows_tray.settings.tempfile.NamedTemporaryFile", unexpected_temp_file
+    )
+
+    with pytest.raises(ValueError):
+        save_settings(TraySettings(speed_percent=100.0001), path)
 
     assert not path.exists()
