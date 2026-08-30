@@ -5,10 +5,12 @@
 - Windows 10 or Windows 11.
 - A Piper `.onnx` voice model and its matching `.onnx.json` file.
 - `ffplay.exe` available on `PATH` for audio playback.
+- `ffmpeg.exe` available on `PATH` when Pitch settings is non-zero.
 
-`ffplay` is not bundled into `PiperTray.exe`. If it is missing, Piper remains
-running in the tray, but speaking fails with the normal audio-playback error
-and details are written to the Piper log.
+Neither `ffplay` nor `ffmpeg` is bundled into `PiperTray.exe`. With pitch set
+to `0%`, Piper uses the direct `ffplay` PCM path and does not require `ffmpeg`.
+With a non-zero pitch, a missing `ffmpeg` is reported through the normal
+recoverable speech-playback error and the tray application stays running.
 
 ## Voice setup
 
@@ -41,7 +43,18 @@ enable Windows logon startup. It must not open a terminal or playback window.
 - Speak selected text: `Alt` + `backtick`.
 - Stop current speech: `F8`.
 - Tray actions: Voice settings, Show last text, Stop speaking, Replay,
-  Hotkey settings, Error sounds, Open log, Exit.
+  Hotkey settings, Pitch settings, Error sounds, Open log, Exit.
+
+## Pitch settings
+
+Pitch defaults to `+26%`. The accepted range is `-50%` through `100%`.
+Positive values raise the synthetic voice pitch, negative values lower it,
+and `0%` disables FFmpeg pitch processing. The FFmpeg filter compensates tempo
+so the overall speech duration remains approximately unchanged.
+
+The setting applies to foreground speech, spoken errors, and the launch welcome
+because all three use the shared speech worker. A changed value applies to the
+next speech request and persists in `%APPDATA%\Piper\settings.json`.
 
 ## Error sounds
 
@@ -135,7 +148,8 @@ no-text feedback.
 
 ### No audio
 
-Confirm that `ffplay.exe` is on `PATH`, then inspect
+Confirm that `ffplay.exe` is on `PATH`; if Pitch settings is non-zero, also
+confirm that `ffmpeg.exe` is on `PATH`. Then inspect
 `%LOCALAPPDATA%\Piper\piper-tray.log`.
 
 ### Voice failed to load

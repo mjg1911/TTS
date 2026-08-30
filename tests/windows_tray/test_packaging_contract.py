@@ -85,6 +85,13 @@ def test_spec_builds_one_file_executable() -> None:
     assert "a.datas" in text
 
 
+def test_ffmpeg_and_ffplay_remain_external_to_frozen_bundle() -> None:
+    text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8").lower()
+
+    assert "ffmpeg" not in text
+    assert "ffplay" not in text
+
+
 def test_spec_resolves_paths_from_repository_root() -> None:
     text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
 
