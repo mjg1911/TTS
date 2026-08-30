@@ -1,11 +1,28 @@
 from dataclasses import asdict, dataclass
 import json
+import math
+import numbers
 import os
 from pathlib import Path
 import tempfile
 from typing import Literal, Optional
 
 from . import DEFAULT_HOTKEY, DEFAULT_VOICE, SETTINGS_SCHEMA_VERSION
+
+DEFAULT_PITCH_PERCENT: float = 26.0
+MIN_PITCH_PERCENT: float = -50.0
+MAX_PITCH_PERCENT: float = 100.0
+
+
+def validate_pitch_percent(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ValueError("pitch_percent must be a finite number")
+    pitch_percent = float(value)
+    if not math.isfinite(pitch_percent):
+        raise ValueError("pitch_percent must be a finite number")
+    if not MIN_PITCH_PERCENT <= pitch_percent <= MAX_PITCH_PERCENT:
+        raise ValueError("pitch_percent is out of range")
+    return pitch_percent
 
 
 @dataclass(frozen=True)
@@ -15,6 +32,7 @@ class TraySettings:
     hotkey: str = DEFAULT_HOTKEY
     log_level: str = "INFO"
     error_sounds: bool = False
+    pitch_percent: float = DEFAULT_PITCH_PERCENT
 
 
 @dataclass(frozen=True)
@@ -41,6 +59,9 @@ def _validated(data: object) -> TraySettings:
     hotkey = data.get("hotkey")
     log_level = data.get("log_level", "INFO")
     error_sounds = data.get("error_sounds", False)
+    pitch_percent = validate_pitch_percent(
+        data.get("pitch_percent", DEFAULT_PITCH_PERCENT)
+    )
     if not isinstance(voice, str) or not voice.strip():
         raise ValueError("voice must be a non-empty string")
     if not isinstance(hotkey, str) or not hotkey.strip():
@@ -59,6 +80,7 @@ def _validated(data: object) -> TraySettings:
         hotkey=hotkey.strip(),
         log_level=log_level,
         error_sounds=error_sounds,
+        pitch_percent=pitch_percent,
     )
 
 
@@ -88,11 +110,7 @@ def load_settings(path: Optional[Path] = None) -> SettingsLoadResult:
 
 
 def save_settings(settings: TraySettings, path: Optional[Path] = None) -> None:
-    if (
-        type(settings.schema_version) is not int
-        or settings.schema_version != SETTINGS_SCHEMA_VERSION
-    ):
-        raise ValueError("unsupported settings schema")
+    settings = _validated(asdict(settings))
 
     path = path or settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)

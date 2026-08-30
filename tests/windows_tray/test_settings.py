@@ -1,12 +1,17 @@
 import json
+import math
 from pathlib import Path
 
 import pytest
 
 from piper.windows_tray.settings import (
+    DEFAULT_PITCH_PERCENT,
+    MAX_PITCH_PERCENT,
+    MIN_PITCH_PERCENT,
     TraySettings,
     load_settings,
     save_settings,
+    validate_pitch_percent,
 )
 
 
@@ -25,6 +30,64 @@ def test_missing_settings_use_safe_defaults(tmp_path: Path) -> None:
     result = load_settings(tmp_path / "settings.json")
     assert result.settings == TraySettings()
     assert result.source == "missing"
+
+
+@pytest.mark.parametrize("value", [-50, -12.5, 0, 26, 100])
+def test_validate_pitch_percent_accepts_finite_values_inclusive(value) -> None:
+    assert validate_pitch_percent(value) == float(value)
+
+
+@pytest.mark.parametrize(
+    "value", [-50.0001, 100.0001, "26", None, True, math.nan, math.inf, -math.inf]
+)
+def test_validate_pitch_percent_rejects_invalid_values(value) -> None:
+    with pytest.raises(ValueError):
+        validate_pitch_percent(value)
+
+
+def test_pitch_constants_define_schema_range() -> None:
+    assert DEFAULT_PITCH_PERCENT == 26.0
+    assert MIN_PITCH_PERCENT == -50.0
+    assert MAX_PITCH_PERCENT == 100.0
+
+
+def test_schema_one_settings_missing_pitch_use_default(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path)
+
+    result = load_settings(path)
+
+    assert result.settings.pitch_percent == DEFAULT_PITCH_PERCENT
+    assert result.source == "loaded"
+
+
+def test_pitch_settings_round_trip_for_schema_one(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+
+    save_settings(TraySettings(pitch_percent=-12.5), path)
+
+    result = load_settings(path)
+
+    assert result.settings.pitch_percent == -12.5
+    assert result.source == "loaded"
+
+
+def test_invalid_pitch_save_preserves_existing_file(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "settings.json"
+    original = '{"schema_version": 1, "pitch_percent": 26.0}\n'
+    path.write_text(original, encoding="utf-8")
+
+    def unexpected_temp_file(*args, **kwargs):
+        raise AssertionError("temporary file must not be created")
+
+    monkeypatch.setattr(
+        "piper.windows_tray.settings.tempfile.NamedTemporaryFile", unexpected_temp_file
+    )
+
+    with pytest.raises(ValueError):
+        save_settings(TraySettings(pitch_percent=100.0001), path)
+
+    assert path.read_text(encoding="utf-8") == original
 
 
 def test_unreadable_settings_use_safe_defaults(monkeypatch, tmp_path: Path) -> None:
