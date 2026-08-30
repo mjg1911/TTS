@@ -24,7 +24,7 @@ class FakeSpeechWorker:
         pass
 
 
-def test_no_text_replacement_reports_visual_and_spoken_feedback():
+def test_no_text_replacement_reports_spoken_feedback_without_native_notification():
     from piper.windows_tray.capture import CaptureResult, CaptureStatus
 
     jobs = []
@@ -45,7 +45,7 @@ def test_no_text_replacement_reports_visual_and_spoken_feedback():
     assert completion is not None
     controller.handle(completion)
 
-    assert notifications == ["No text selected"]
+    assert notifications == []
     assert len(worker.submitted) == 1
     assert worker.submitted[0].text == user_message(UserError.NO_TEXT)
     assert worker.submitted[0].purpose is SpeechPurpose.ERROR

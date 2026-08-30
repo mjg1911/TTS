@@ -145,7 +145,7 @@ def test_clipboard_access_failure_uses_feedback_policy(
         assert worker.submitted[0].purpose is SpeechPurpose.ERROR
 
 
-def test_no_text_capture_uses_native_notification_without_visual_status():
+def test_no_text_capture_has_no_native_notification_or_visual_status():
     notifications = []
     statuses = []
     controller = Controller(capture_submit=lambda _job: None)
@@ -163,11 +163,11 @@ def test_no_text_capture_uses_native_notification_without_visual_status():
         )
     )
 
-    assert notifications == ["No text selected"]
+    assert notifications == []
     assert statuses == []
 
 
-def test_no_text_capture_routes_notification_and_spoken_copy_through_policy():
+def test_no_text_capture_speaks_error_without_native_notification():
     notifications = []
     worker = RecordingSpeechWorker()
     controller = Controller(
@@ -186,37 +186,10 @@ def test_no_text_capture_routes_notification_and_spoken_copy_through_policy():
         )
     )
 
-    assert notifications == ["No text selected"]
+    assert notifications == []
     assert len(worker.submitted) == 1
     assert worker.submitted[0].text == user_message(UserError.NO_TEXT)
     assert worker.submitted[0].purpose is SpeechPurpose.ERROR
-
-
-def test_native_notification_failure_uses_injected_logger():
-    statuses = []
-    errors = []
-    controller = Controller(capture_submit=lambda _job: None)
-    controller.configure_runtime(
-        show_notification=lambda _message: (_ for _ in ()).throw(
-            OSError("native notification failed")
-        ),
-        show_status=statuses.append,
-        log_error=errors.append,
-    )
-
-    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
-    generation = controller.state.capture_generation
-    controller.handle(
-        Command(
-            CommandKind.CAPTURE_FAILED,
-            CaptureCompletion(generation, CaptureResult(CaptureStatus.EMPTY)),
-        )
-    )
-
-    assert errors == [
-        "Piper tray notification could not be shown: native notification failed"
-    ]
-    assert statuses == []
 
 
 def test_cancel_request_is_noop_without_speech():

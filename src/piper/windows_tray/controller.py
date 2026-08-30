@@ -27,9 +27,6 @@ _APPROVED_SPOKEN_ERRORS = frozenset(
         UserError.CLIPBOARD,
     }
 )
-_NO_TEXT_NOTIFICATION = "No text selected"
-
-
 VOICE_SETUP_ERRORS = (
     FileNotFoundError,
     OSError,
@@ -253,15 +250,7 @@ class Controller:
             raise ValueError("runtime error is not approved for tray reporting")
 
         message = user_message(error)
-        if error is UserError.NO_TEXT:
-            try:
-                self._show_notification(_NO_TEXT_NOTIFICATION)
-            except Exception as notification_error:
-                self._log_error(
-                    "Piper tray notification could not be shown: %s"
-                    % notification_error
-                )
-        else:
+        if error is not UserError.NO_TEXT:
             self._show_status(message)
 
         settings = self.state.settings

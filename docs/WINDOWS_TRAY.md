@@ -73,10 +73,11 @@ speech, including error or launch feedback.
 
 Piper sends `Ctrl+C` to the foreground application and waits up to one second
 for fresh clipboard data. It does not restore the previous clipboard
-contents. If no fresh selected text is available, Piper shows a native tray
-notification with `No text selected`. It does not open a message box for this
-case and does not speak stale clipboard contents. The longer full no-text
-message is spoken only when Error sounds is enabled.
+contents. If no fresh selected text is available, Piper shows no native tray
+notification. It does not open a message box for this case and does not speak
+stale clipboard contents. When Error sounds is enabled, Piper speaks `No text
+selected or the application did not provide it`; when disabled, there is no
+user-facing no-text feedback.
 
 ## Files
 
@@ -126,10 +127,11 @@ Choose another capture hotkey. `F8` is reserved for cancellation.
 
 ### No text selected or the application did not provide it
 
-If no fresh selected text is available after `Ctrl+C`, Piper shows the native
-tray notification `No text selected`, does not open a message box, and does
-not speak stale clipboard contents. The longer no-text message is spoken only
-when Error sounds is enabled.
+If no fresh selected text is available after `Ctrl+C`, Piper shows no native
+notification, does not open a message box, and does not speak stale clipboard
+contents. When Error sounds is enabled, Piper speaks `No text selected or the
+application did not provide it`; when disabled, there is no user-facing
+no-text feedback.
 
 ### No audio
 

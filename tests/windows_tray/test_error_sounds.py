@@ -66,18 +66,30 @@ def test_runtime_error_reports_status_and_conditionally_speaks(error, enabled):
     assert worker.submitted == expected
 
 
-def test_no_text_uses_native_notification_and_speaks_full_message():
+def test_no_text_speaks_full_message_without_native_notification():
     controller, worker, statuses, notifications, _errors, _shown_last_text = configured_controller(
         TraySettings(error_sounds=True)
     )
 
     controller._report_runtime_error(UserError.NO_TEXT)
 
-    assert notifications == ["No text selected"]
+    assert notifications == []
     assert statuses == []
     assert worker.submitted == [
         SpeechRequest(1, user_message(UserError.NO_TEXT), SpeechPurpose.ERROR)
     ]
+
+
+def test_no_text_does_not_speak_when_error_sounds_are_disabled():
+    controller, worker, statuses, notifications, _errors, _shown_last_text = configured_controller(
+        TraySettings(error_sounds=False)
+    )
+
+    controller._report_runtime_error(UserError.NO_TEXT)
+
+    assert notifications == []
+    assert statuses == []
+    assert worker.submitted == []
 
 
 def test_already_running_status_is_never_spoken():
@@ -110,27 +122,6 @@ def test_runtime_error_preserves_foreground_state_and_show_last_text():
     assert controller.tray_snapshot().can_replay is before.can_replay
     assert controller.tray_snapshot().has_last_text is before.has_last_text
     assert shown_last_text == ["selected text"]
-
-
-def test_notification_failure_is_logged_without_modal_fallback_and_still_speaks():
-    controller, worker, statuses, _notifications, errors, _shown_last_text = configured_controller(
-        TraySettings(error_sounds=True)
-    )
-    controller.configure_runtime(
-        show_notification=lambda _message: (_ for _ in ()).throw(
-            RuntimeError("toast unavailable")
-        )
-    )
-
-    controller._report_runtime_error(UserError.NO_TEXT)
-
-    assert errors == [
-        "Piper tray notification could not be shown: toast unavailable"
-    ]
-    assert statuses == []
-    assert worker.submitted == [
-        SpeechRequest(1, user_message(UserError.NO_TEXT), SpeechPurpose.ERROR)
-    ]
 
 
 def test_auxiliary_error_speech_failure_is_best_effort_without_feedback():
