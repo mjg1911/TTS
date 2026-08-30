@@ -1,3 +1,5 @@
+import pytest
+
 from piper.windows_tray.capture import CaptureResult, CaptureStatus
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import (
@@ -5,7 +7,9 @@ from piper.windows_tray.controller import (
     Controller,
     PlaybackState,
 )
+from piper.windows_tray.errors import UserError, user_message
 from piper.windows_tray.settings import TraySettings
+from piper.windows_tray.speech import SpeechPurpose
 
 
 class FakeSpeech:
@@ -39,13 +43,14 @@ class FakeHotkeys:
         return self.result
 
 
-def make_controller(hotkey_result=True):
+def make_controller(hotkey_result=True, *, error_sounds=False):
     statuses = []
     tray_calls = []
     speech = FakeSpeech()
     hotkeys = FakeHotkeys(hotkey_result)
 
     controller = Controller(
+        settings=TraySettings(hotkey="alt+backtick", error_sounds=error_sounds),
         hotkeys=hotkeys,
         speech_worker=speech,
         capture_submit=lambda _job: None,
@@ -209,9 +214,12 @@ def test_resume_serializes_new_capture_until_stale_worker_finishes() -> None:
     assert controller.state.capture_in_progress is False
 
 
-def test_resume_hotkey_conflict_keeps_controller_alive() -> None:
-    controller, _speech, hotkeys, tray_calls, statuses = make_controller(
-        hotkey_result=False
+@pytest.mark.parametrize("error_sounds, expected_speech_count", [(False, 0), (True, 1)])
+def test_resume_hotkey_conflict_keeps_controller_alive(
+    error_sounds, expected_speech_count
+) -> None:
+    controller, speech, hotkeys, tray_calls, statuses = make_controller(
+        hotkey_result=False, error_sounds=error_sounds
     )
 
     controller.handle(Command(CommandKind.SYSTEM_RESUME))
@@ -219,6 +227,11 @@ def test_resume_hotkey_conflict_keeps_controller_alive() -> None:
     assert controller.state.shutting_down is False
     assert tray_calls == ["ensure"]
     assert hotkeys.reregister_calls == 1
+    assert speech.auxiliary_cancel_calls == 1
     assert statuses == [
         "That hotkey is already in use. Choose another combination."
     ]
+    assert len(speech.submitted) == expected_speech_count
+    if error_sounds:
+        assert speech.submitted[0].text == user_message(UserError.HOTKEY_CONFLICT)
+        assert speech.submitted[0].purpose is SpeechPurpose.ERROR

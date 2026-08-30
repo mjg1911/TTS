@@ -1,9 +1,13 @@
 from pathlib import Path
 
+import pytest
+
 from piper.windows_tray.capture import CaptureResult, CaptureStatus
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import CaptureCompletion, Controller
+from piper.windows_tray.errors import UserError, user_message
 from piper.windows_tray.settings import TraySettings
+from piper.windows_tray.speech import SpeechPurpose
 
 
 class FakeHotkeys:
@@ -17,6 +21,41 @@ class FakeHotkeys:
         if self.results is not None:
             return self.results.pop(0)
         return self.result
+
+
+class RecordingSpeechWorker:
+    def __init__(self):
+        self.submitted = []
+
+    def submit(self, request):
+        self.submitted.append(request)
+
+
+@pytest.mark.parametrize(
+    ("requested", "error"),
+    [
+        ("not-a-hotkey", UserError.HOTKEY_INVALID),
+        ("ctrl+q", UserError.HOTKEY_CONFLICT),
+    ],
+)
+def test_runtime_hotkey_errors_use_error_speech(requested, error):
+    statuses = []
+    worker = RecordingSpeechWorker()
+    hotkeys = FakeHotkeys(result=False)
+    controller = Controller(
+        settings=TraySettings(hotkey="alt+backtick", error_sounds=True),
+        save_settings=lambda _settings: None,
+        hotkeys=hotkeys,
+        speech_worker=worker,
+    )
+    controller.configure_runtime(show_status=statuses.append)
+
+    assert controller.request_hotkey_change(requested) is False
+
+    assert statuses == [user_message(error)]
+    assert len(worker.submitted) == 1
+    assert worker.submitted[0].text == user_message(error)
+    assert worker.submitted[0].purpose is SpeechPurpose.ERROR
 
 
 def test_settings_change_only_after_native_rebind_succeeds():

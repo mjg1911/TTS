@@ -2,7 +2,9 @@ from pathlib import Path
 
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import CaptureCompletion, Controller, PlaybackState
+from piper.windows_tray.errors import UserError, user_message
 from piper.windows_tray.speech import SpeechEvent, SpeechEventKind
+from piper.windows_tray.speech import SpeechPurpose
 from piper.windows_tray.voice_manager import VoiceManager
 from piper.windows_tray.settings import TraySettings
 
@@ -22,13 +24,14 @@ class FakeSpeechWorker:
         pass
 
 
-def test_no_text_replacement_notifies_without_submitting_speech():
+def test_no_text_replacement_reports_spoken_feedback_without_native_notification():
     from piper.windows_tray.capture import CaptureResult, CaptureStatus
 
     jobs = []
     notifications = []
     worker = FakeSpeechWorker()
     controller = Controller(
+        settings=TraySettings(error_sounds=True),
         speech_worker=worker,
         capture=lambda: CaptureResult(CaptureStatus.EMPTY),
         capture_submit=jobs.append,
@@ -42,8 +45,10 @@ def test_no_text_replacement_notifies_without_submitting_speech():
     assert completion is not None
     controller.handle(completion)
 
-    assert notifications == ["No text selected or the application did not provide it"]
-    assert worker.submitted == []
+    assert notifications == []
+    assert len(worker.submitted) == 1
+    assert worker.submitted[0].text == user_message(UserError.NO_TEXT)
+    assert worker.submitted[0].purpose is SpeechPurpose.ERROR
     assert controller.state.playback is PlaybackState.STOPPED
 
 
@@ -113,8 +118,10 @@ def test_configure_voice_switches_synchronously_to_each_loaded_candidate():
 
 def test_configure_voice_failure_reports_previous_voice_still_active():
     statuses = []
+    worker = FakeSpeechWorker()
     controller = Controller(
-        settings=TraySettings(voice="old.onnx"),
+        settings=TraySettings(voice="old.onnx", error_sounds=True),
+        speech_worker=worker,
         save_settings=lambda _settings: None,
     )
     controller.set_voice(Path("old.onnx"), object())
@@ -129,6 +136,9 @@ def test_configure_voice_failure_reports_previous_voice_still_active():
     assert statuses == [
         "The selected voice could not be loaded. The previous voice is still active."
     ]
+    assert not any(
+        request.purpose is SpeechPurpose.ERROR for request in worker.submitted
+    )
 
 
 def test_app_speech_worker_reads_voice_manager_current_and_enqueues_events():

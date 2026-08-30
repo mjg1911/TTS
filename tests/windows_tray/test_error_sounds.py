@@ -2,6 +2,7 @@ import pytest
 
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import Controller, PlaybackState
+from piper.windows_tray.errors import UserError, user_message
 from piper.windows_tray.settings import TraySettings
 from piper.windows_tray.speech import (
     SpeechEvent,
@@ -25,6 +26,139 @@ class FakeSpeechWorker:
 
     def cancel_auxiliary(self):
         self.auxiliary_cancel_calls += 1
+
+
+def configured_controller(settings):
+    worker = FakeSpeechWorker()
+    statuses = []
+    notifications = []
+    errors = []
+    shown_last_text = []
+    controller = Controller(settings=settings, speech_worker=worker)
+    controller.configure_runtime(
+        show_status=statuses.append,
+        show_notification=notifications.append,
+        log_error=errors.append,
+        show_last_text=shown_last_text.append,
+    )
+    return controller, worker, statuses, notifications, errors, shown_last_text
+
+
+@pytest.mark.parametrize(
+    "error",
+    [UserError.HOTKEY_CONFLICT, UserError.HOTKEY_INVALID, UserError.CLIPBOARD],
+)
+@pytest.mark.parametrize("enabled", [True, False])
+def test_runtime_error_reports_status_and_conditionally_speaks(error, enabled):
+    controller, worker, statuses, notifications, _errors, _shown_last_text = configured_controller(
+        TraySettings(error_sounds=enabled)
+    )
+
+    controller._report_runtime_error(error)
+
+    assert statuses == [user_message(error)]
+    assert notifications == []
+    expected = (
+        [SpeechRequest(1, user_message(error), SpeechPurpose.ERROR)]
+        if enabled
+        else []
+    )
+    assert worker.submitted == expected
+
+
+def test_no_text_speaks_full_message_without_native_notification():
+    controller, worker, statuses, notifications, _errors, _shown_last_text = configured_controller(
+        TraySettings(error_sounds=True)
+    )
+
+    controller._report_runtime_error(UserError.NO_TEXT)
+
+    assert notifications == []
+    assert statuses == []
+    assert worker.submitted == [
+        SpeechRequest(1, user_message(UserError.NO_TEXT), SpeechPurpose.ERROR)
+    ]
+
+
+def test_no_text_does_not_speak_when_error_sounds_are_disabled():
+    controller, worker, statuses, notifications, _errors, _shown_last_text = configured_controller(
+        TraySettings(error_sounds=False)
+    )
+
+    controller._report_runtime_error(UserError.NO_TEXT)
+
+    assert notifications == []
+    assert statuses == []
+    assert worker.submitted == []
+
+
+def test_already_running_status_is_never_spoken():
+    controller, worker, statuses, notifications, _errors, _shown_last_text = configured_controller(
+        TraySettings(error_sounds=True)
+    )
+
+    controller.handle(Command(CommandKind.ACTIVATE))
+
+    assert statuses == ["Piper is already running."]
+    assert notifications == []
+    assert worker.submitted == []
+
+
+def test_runtime_error_preserves_foreground_state_and_show_last_text():
+    controller, _worker, statuses, notifications, _errors, shown_last_text = configured_controller(
+        TraySettings(error_sounds=True)
+    )
+    controller.state.last_text = "selected text"
+    controller.state.playback = PlaybackState.SPEAKING
+    before = controller.tray_snapshot()
+
+    controller._report_runtime_error(UserError.CLIPBOARD)
+    controller.handle(Command(CommandKind.SHOW_LAST_TEXT))
+
+    assert statuses == [user_message(UserError.CLIPBOARD)]
+    assert notifications == []
+    assert controller.state.last_text == "selected text"
+    assert controller.state.playback is PlaybackState.SPEAKING
+    assert controller.tray_snapshot().can_replay is before.can_replay
+    assert controller.tray_snapshot().has_last_text is before.has_last_text
+    assert shown_last_text == ["selected text"]
+
+
+def test_auxiliary_error_speech_failure_is_best_effort_without_feedback():
+    controller, worker, statuses, notifications, _errors, _shown_last_text = configured_controller(
+        TraySettings(error_sounds=True)
+    )
+    controller._report_runtime_error(UserError.CLIPBOARD)
+
+    controller.handle(
+        Command(
+            CommandKind.WORKER_EVENT,
+            SpeechEvent(
+                SpeechEventKind.FAILED,
+                1,
+                "Speech synthesis failed.",
+                "synthesis",
+                SpeechPurpose.ERROR,
+            ),
+        )
+    )
+
+    assert len(worker.submitted) == 1
+    assert statuses == [user_message(UserError.CLIPBOARD)]
+    assert notifications == []
+
+
+def test_runtime_error_rejects_unapproved_errors():
+    controller, worker, statuses, notifications, _errors, _shown_last_text = configured_controller(
+        TraySettings(error_sounds=True)
+    )
+
+    with pytest.raises(ValueError):
+        controller._report_runtime_error(UserError.PLAYBACK)
+
+    assert worker.submitted == []
+    assert statuses == []
+    assert notifications == []
 
 
 def test_tray_snapshot_exposes_error_sounds_setting() -> None:
@@ -80,9 +214,11 @@ def test_toggle_error_sounds_reports_unavailable_persistence(controller) -> None
 def test_failed_toggle_error_sounds_save_retains_state_and_checkmark(failure) -> None:
     statuses = []
     errors = []
+    worker = FakeSpeechWorker()
     settings = TraySettings(error_sounds=False)
     controller = Controller(
         settings=settings,
+        speech_worker=worker,
         save_settings=lambda _settings: (_ for _ in ()).throw(failure),
     )
     controller.configure_runtime(show_status=statuses.append, log_error=errors.append)
@@ -93,6 +229,7 @@ def test_failed_toggle_error_sounds_save_retains_state_and_checkmark(failure) ->
     assert controller.tray_snapshot().error_sounds_enabled is False
     assert errors == ["Could not save Piper error sound settings: %s" % failure]
     assert statuses == ["Piper error sound settings could not be saved."]
+    assert worker.submitted == []
 
 
 def test_disabled_error_sounds_submits_welcome_as_auxiliary_only():

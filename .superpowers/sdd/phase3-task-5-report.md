@@ -1,51 +1,74 @@
 # Phase 3 Task 5 Report
 
-## Final Important-finding fix wave (2026-08-27)
-
-### Findings addressed
-
-- Restored the synchronous `CONFIGURE_VOICE` contract: the selected candidate is loaded in the controller command handler, and only a successfully loaded candidate is persisted and installed. Failed candidate loads leave the known-good voice and active speech unchanged.
-- Added a controller state lock around tray snapshots and state transitions, preventing the tray thread from observing a partially updated snapshot.
-- Shutdown now advances `speech_generation` and rejects all worker events after `SHUTTING_DOWN`, including events already queued before worker shutdown completed.
-- `AudioPlayer.play()` now propagates `BrokenPipeError` and `OSError`; the speech worker classifies them as playback failures while its existing cancellation precedence remains intact.
-
-### Regressions
-
-- Synchronous voice candidate load and commit.
-- Tray snapshot waits for the controller state lock.
-- Shutdown generation invalidation and queued worker-event suppression.
-- `BrokenPipeError`/`OSError` propagation from `AudioPlayer.play()`.
-- Broken-pipe classification as a generic speech playback failure.
-
-### Verification
-
-Using the bundled workspace Python runtime with `PYTHONPATH=src`:
-
-- TDD red run before production changes: 5 expected regression failures, 1 existing test passed.
-- Focused controller/speech/audio/voice suite: **44 passed**.
-- Full `tests/windows_tray` suite: **139 passed, 3 failed**.
-- The three full-suite failures are pre-existing capture fixture/timeout failures in `tests/windows_tray/test_capture.py`, each ending in `StopIteration`; no changed Phase-3 test failed.
-- The full suite used repository-local pytest basetemp because the default Windows temp directory is inaccessible in this environment.
-
 ## Status
 
-Implemented on branch `Phase-3`.
+DONE
 
-## Delivered
+Task 5 is implemented in the current Piper branch. The final Error sounds
+behavior is documented, and the packaged acceptance plan now has separate
+disabled and enabled passes.
 
-- Wired the production `SpeechWorker` to `VoiceManager.current()` and controller worker-event delivery.
-- Kept synthesis and playback off the Tk/tray thread, with explicit `ffplay` availability handling.
-- Added dynamic tray `Stop speaking` and `Replay` actions backed by an immutable controller snapshot.
-- Added stale worker-generation coverage for repeated capture replacement.
-- Added stale voice-switch success and failure acceptance/rejection coverage.
-- Preserved compatibility with existing tray test doubles and ensured worker shutdown during app cleanup.
+## Changes
+
+- Updated the tray action list to include `Error sounds`.
+- Documented the disabled-by-default setting, native checkmark persistence,
+  launch welcome behavior, the four approved spoken errors, visual-only
+  unrelated messages, foreground-state preservation, and F8/Stop behavior.
+- Updated no-selection guidance to require the exact native `No text selected`
+  notification, no modal, and no stale clipboard speech; the longer message
+  is mode-dependent.
+- Replaced the mode-specific generic no-copy acceptance wording with the
+  mode-neutral native-notification and stale-clipboard requirement.
+- Added the explicit `Error sounds disabled pass` and `Error sounds enabled
+  pass` checklists, including persistence, launch behavior, approved errors,
+  foreground priority/preemption, F8/Stop, Replay/last text, and unrelated
+  visual-only messages.
+- Preserved the existing evidence rule and did not change CI commands or
+  dependencies.
 
 ## Verification
 
-- Focused Phase 3/app/controller/worker suite: `46 passed`.
-- Full `tests/windows_tray` suite: `132 passed, 4 failed`.
+- `git diff --check`: passed; no whitespace errors.
+- Documentation assertions for all required headings and exact messages:
+  passed.
+- Reviewed the diff to confirm only the two requested documentation files and
+  this required report were changed by this task. Existing unrelated working-
+  tree changes were left untouched.
+
+## Commit
+
+- Subject: `docs: document error sounds feedback`
 
 ## Concerns
 
-- The four remaining Windows-tray failures are pre-existing outside Task 5: three capture tests exhaust their fake clipboard read iterator during retry polling, and one Task 4 foundation test assumes asynchronous voice switching completes synchronously.
-- The requested `tests/test_piper.py` path does not exist in this checkout, so that command could not be run.
+- No packaged executable acceptance run was performed in this documentation
+  task; the new checklists remain intentionally unchecked for the actual
+  Windows acceptance pass.
+
+## Review fixes
+
+The original Task 5 documentation commit remains `c8f1f87` (`docs: document
+error sounds feedback`). This follow-up preserves that history and addresses
+the two review findings:
+
+- `docs/WINDOWS_TRAY.md` now explicitly states that the four listed messages
+  are the only approved runtime errors that Error sounds may speak.
+- Verification is recorded with exact commands and concrete results below;
+  no CI command or dependency was changed.
+
+Reproducible verification run from the repository root:
+
+1. Command: `python --version`
+   Output: command unavailable in this environment (PowerShell exit code `1`).
+2. Command: `py -3 --version`
+   Output: command unavailable in this environment (PowerShell exit code `1`).
+   Per the brief's validation preflight, Python-based automated documentation
+   assertions were therefore blocked.
+3. Command: `$tray = Get-Content -Raw 'docs/WINDOWS_TRAY.md'; $acceptance = Get-Content -Raw 'docs/superpowers/plans/2026-08-28-windows-tray-tts-acceptance.md'; $checks = @($tray.Contains('Tray actions: Voice settings, Show last text, Stop speaking, Replay,'),$tray.Contains('## Error sounds'),$tray.Contains('These four listed messages are the only approved runtime errors that Error'),$tray.Contains('sounds may speak.'),$tray.Contains('That hotkey is already in use. Choose another combination.'),$tray.Contains('That hotkey is not valid. Choose another combination.'),$tray.Contains('No text selected or the application did not provide it'),$tray.Contains('The selected text could not be read from the clipboard.'),$tray.Contains('notification with `No text selected`'),$tray.Contains('does not speak stale clipboard contents'),$acceptance.Contains('## Error sounds disabled pass'),$acceptance.Contains('## Error sounds enabled pass'),$acceptance.Contains('A no-copy application shows the native `No text selected` tray notification, never opens a modal for this case, and never speaks stale clipboard contents.')); if ($checks -contains $false) { throw 'Documentation assertion failed' }; Write-Output 'Documentation assertions: PASS (13 required strings/fragments)'`
+   Output: `Documentation assertions: PASS (13 required strings/fragments)`.
+4. Command: `git diff --check`
+   Output: no output; exit code `0`.
+5. Command: `git diff --name-only -- docs/WINDOWS_TRAY.md docs/superpowers/plans/2026-08-28-windows-tray-tts-acceptance.md .superpowers/sdd/phase3-task-5-report.md`
+   Output before commit: `docs/WINDOWS_TRAY.md` and
+   `.superpowers/sdd/phase3-task-5-report.md`; the acceptance plan was
+   unchanged by this follow-up because it was already included in `c8f1f87`.

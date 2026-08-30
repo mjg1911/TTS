@@ -19,8 +19,14 @@ from .voice_manager import VoiceManager, VoiceSwitchEvent
 
 _LOGGER = logging.getLogger(__name__)
 _LAUNCH_WELCOME = "Piper is ready."
-
-
+_APPROVED_SPOKEN_ERRORS = frozenset(
+    {
+        UserError.HOTKEY_CONFLICT,
+        UserError.HOTKEY_INVALID,
+        UserError.NO_TEXT,
+        UserError.CLIPBOARD,
+    }
+)
 VOICE_SETUP_ERRORS = (
     FileNotFoundError,
     OSError,
@@ -239,6 +245,21 @@ class Controller:
             SpeechPurpose.WELCOME,
         )
 
+    def _report_runtime_error(self, error: UserError) -> None:
+        if error not in _APPROVED_SPOKEN_ERRORS:
+            raise ValueError("runtime error is not approved for tray reporting")
+
+        message = user_message(error)
+        if error is not UserError.NO_TEXT:
+            self._show_status(message)
+
+        settings = self.state.settings
+        if settings is not None and settings.error_sounds:
+            try:
+                self._submit_auxiliary(message, SpeechPurpose.ERROR)
+            except Exception:
+                pass
+
     def drain_once(self) -> Optional[Command]:
         try:
             command = self._commands.get_nowait()
@@ -357,7 +378,7 @@ class Controller:
         )
 
         if not restored:
-            self._show_status(user_message(UserError.HOTKEY_CONFLICT))
+            self._report_runtime_error(UserError.HOTKEY_CONFLICT)
 
         if capture_invalidated:
             self.state.capture_in_progress = True
@@ -447,14 +468,9 @@ class Controller:
             if self._capture_replaced_speech:
                 self.state.playback = PlaybackState.STOPPED
             if result.status is CaptureStatus.ACCESS_ERROR:
-                self._show_status(user_message(UserError.CLIPBOARD))
+                self._report_runtime_error(UserError.CLIPBOARD)
             else:
-                try:
-                    self._show_notification(user_message(UserError.NO_TEXT))
-                except Exception as error:
-                    self._log_error(
-                        "Piper tray notification could not be shown: %s" % error
-                    )
+                self._report_runtime_error(UserError.NO_TEXT)
 
     def _stop_speech(self) -> None:
         if self._speech_worker is not None:
@@ -577,14 +593,14 @@ class Controller:
         try:
             candidate = parse_hotkey(requested)
         except ValueError:
-            self._show_status(user_message(UserError.HOTKEY_INVALID))
+            self._report_runtime_error(UserError.HOTKEY_INVALID)
             return False
         current = self.state.settings
         if current is None or self._save_settings is None:
             self._show_status("Hotkey settings could not be saved.")
             return False
         if not self._hotkeys.rebind(candidate):
-            self._show_status(user_message(UserError.HOTKEY_CONFLICT))
+            self._report_runtime_error(UserError.HOTKEY_CONFLICT)
             return False
         next_settings = replace(current, hotkey=candidate.canonical)
         try:

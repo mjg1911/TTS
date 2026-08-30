@@ -1,10 +1,30 @@
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from piper.windows_tray.capture import CaptureResult, CaptureStatus
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import CaptureCompletion, Controller
+from piper.windows_tray.errors import UserError, user_message
 from piper.windows_tray.settings import TraySettings
+from piper.windows_tray.speech import SpeechPurpose
+
+
+class RecordingSpeechWorker:
+    def __init__(self):
+        self.submitted = []
+        self.cancelled = []
+        self.cancelled_auxiliary = 0
+
+    def submit(self, request):
+        self.submitted.append(request)
+
+    def cancel_active(self, generation):
+        self.cancelled.append(generation)
+
+    def cancel_auxiliary(self):
+        self.cancelled_auxiliary += 1
 
 
 def test_capture_requests_collapse_to_newest_pending_request():
@@ -68,7 +88,12 @@ def test_failed_new_capture_does_not_replace_last_successful_text():
 
 def test_clipboard_access_failure_has_specific_recoverable_message():
     statuses = []
-    controller = Controller(capture_submit=lambda _job: None)
+    worker = RecordingSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=False),
+        capture_submit=lambda _job: None,
+        speech_worker=worker,
+    )
     controller.configure_runtime(show_status=statuses.append)
 
     controller.handle(Command(CommandKind.CAPTURE_REQUEST))
@@ -88,9 +113,39 @@ def test_clipboard_access_failure_has_specific_recoverable_message():
         "The selected text could not be read from the clipboard."
     ]
     assert controller.state.shutting_down is False
+    assert worker.submitted == []
 
 
-def test_no_text_capture_uses_native_notification_without_visual_status():
+@pytest.mark.parametrize("error_sounds, expected_speech_count", [(False, 0), (True, 1)])
+def test_clipboard_access_failure_uses_feedback_policy(
+    error_sounds, expected_speech_count
+):
+    statuses = []
+    worker = RecordingSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=error_sounds),
+        capture_submit=lambda _job: None,
+        speech_worker=worker,
+    )
+    controller.configure_runtime(show_status=statuses.append)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_FAILED,
+            CaptureCompletion(generation, CaptureResult(CaptureStatus.ACCESS_ERROR)),
+        )
+    )
+
+    assert statuses == ["The selected text could not be read from the clipboard."]
+    assert len(worker.submitted) == expected_speech_count
+    if error_sounds:
+        assert worker.submitted[0].text == user_message(UserError.CLIPBOARD)
+        assert worker.submitted[0].purpose is SpeechPurpose.ERROR
+
+
+def test_no_text_capture_has_no_native_notification_or_visual_status():
     notifications = []
     statuses = []
     controller = Controller(capture_submit=lambda _job: None)
@@ -108,35 +163,33 @@ def test_no_text_capture_uses_native_notification_without_visual_status():
         )
     )
 
-    assert notifications == ["No text selected or the application did not provide it"]
+    assert notifications == []
     assert statuses == []
 
 
-def test_native_notification_failure_uses_injected_logger():
-    statuses = []
-    errors = []
-    controller = Controller(capture_submit=lambda _job: None)
-    controller.configure_runtime(
-        show_notification=lambda _message: (_ for _ in ()).throw(
-            OSError("native notification failed")
-        ),
-        show_status=statuses.append,
-        log_error=errors.append,
+def test_no_text_capture_speaks_error_without_native_notification():
+    notifications = []
+    worker = RecordingSpeechWorker()
+    controller = Controller(
+        settings=TraySettings(error_sounds=True),
+        capture_submit=lambda _job: None,
+        speech_worker=worker,
     )
+    controller.configure_runtime(show_notification=notifications.append)
 
     controller.handle(Command(CommandKind.CAPTURE_REQUEST))
     generation = controller.state.capture_generation
     controller.handle(
         Command(
             CommandKind.CAPTURE_FAILED,
-            CaptureCompletion(generation, CaptureResult(CaptureStatus.EMPTY)),
+            CaptureCompletion(generation, CaptureResult(CaptureStatus.TIMEOUT)),
         )
     )
 
-    assert errors == [
-        "Piper tray notification could not be shown: native notification failed"
-    ]
-    assert statuses == []
+    assert notifications == []
+    assert len(worker.submitted) == 1
+    assert worker.submitted[0].text == user_message(UserError.NO_TEXT)
+    assert worker.submitted[0].purpose is SpeechPurpose.ERROR
 
 
 def test_cancel_request_is_noop_without_speech():
@@ -150,15 +203,17 @@ def test_cancel_request_is_noop_without_speech():
 
 def test_invalid_hotkey_does_not_show_user_input_or_exception_text():
     statuses = []
+    worker = RecordingSpeechWorker()
 
     class FakeHotkeys:
         def rebind(self, _candidate):
             raise AssertionError("invalid hotkey must be rejected before rebind")
 
     controller = Controller(
-        settings=TraySettings(hotkey="alt+backtick"),
+        settings=TraySettings(hotkey="alt+backtick", error_sounds=True),
         save_settings=lambda _settings: None,
         hotkeys=FakeHotkeys(),
+        speech_worker=worker,
     )
     controller.configure_runtime(show_status=statuses.append)
     malicious_input = "unsupported key: <SCRIPT>selected text</SCRIPT>"
@@ -167,6 +222,11 @@ def test_invalid_hotkey_does_not_show_user_input_or_exception_text():
 
     assert statuses == ["That hotkey is not valid. Choose another combination."]
     assert malicious_input not in statuses
+    assert [request.text for request in worker.submitted] == [
+        user_message(UserError.HOTKEY_INVALID)
+    ]
+    assert all(malicious_input not in request.text for request in worker.submitted)
+    assert all(request.purpose is SpeechPurpose.ERROR for request in worker.submitted)
 
 
 def test_capture_worker_logs_outcome_and_length_without_text(caplog):

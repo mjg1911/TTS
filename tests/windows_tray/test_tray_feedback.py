@@ -81,9 +81,9 @@ def test_show_notification_delegates_to_native_icon(monkeypatch, tmp_path: Path)
     tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
 
     tray.start()
-    tray.show_notification("No text selected")
+    tray.show_notification("Test notification")
 
-    assert notifications == [(('No text selected', 'Piper'), {})]
+    assert notifications == [(('Test notification', 'Piper'), {})]
 
 
 def test_fallback_snapshot_disables_error_sounds():
@@ -103,7 +103,7 @@ def test_show_notification_requires_running_tray(monkeypatch, tmp_path: Path, ac
         tray.stop()
 
     with pytest.raises(RuntimeError, match="^tray icon is not running$"):
-        tray.show_notification("No text selected")
+        tray.show_notification("Test notification")
 
 
 def test_show_notification_propagates_native_failure(monkeypatch, tmp_path: Path):
@@ -115,4 +115,4 @@ def test_show_notification_propagates_native_failure(monkeypatch, tmp_path: Path
     tray.start()
 
     with pytest.raises(OSError, match="notification failed"):
-        tray.show_notification("No text selected")
+        tray.show_notification("Test notification")

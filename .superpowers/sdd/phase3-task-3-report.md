@@ -2,60 +2,32 @@
 
 ## Status
 
-Implemented the controller playback state machine on `Phase-3`.
+Implemented Task 3: runtime invalid-hotkey, rebind-conflict, and resume-conflict paths now use the approved runtime error policy. Visual status copy remains exact, enabled error sounds submit the same approved copy with `SpeechPurpose.ERROR`, and persistence rollback failures remain on their existing visual/logging path. Startup app paths were not changed.
 
-## Scope
+## Commits
 
-Changed only the Task 3 implementation and test files:
+- `feat: speak approved hotkey errors`
 
-- `src/piper/windows_tray/commands.py`
-- `src/piper/windows_tray/controller.py`
-- `tests/windows_tray/test_controller_speech.py`
+## Test commands and output
 
-## Requirements implemented
+- Red phase, before the controller change:
+  `C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest --basetemp=.pytest-basetemp-task3 tests/windows_tray/test_hotkey_rebind.py tests/windows_tray/test_controller_capture.py tests/windows_tray/test_resume_recovery.py -q`
+  Result: 4 failed, 27 passed. The failures were the new speech assertions for invalid hotkey, rebind conflict, malicious-input protection, and enabled resume conflict.
+- Focused and regression suite:
+  `C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest --basetemp=.pytest-basetemp-task3 tests/windows_tray/test_hotkey_rebind.py tests/windows_tray/test_controller_capture.py tests/windows_tray/test_hotkey_service.py tests/windows_tray/test_resume_recovery.py tests/windows_tray/test_app_foundation.py -q`
+  Result: 71 passed, 1 failed. The failure is the pre-existing `test_tk_thread_dispatches_activation_and_exit` expectation in `test_app_foundation.py`; it observes an existing F8 registration-conflict status before the activation status. The foundation file is unchanged.
+- Startup visual-only checks included in the regression run passed: invalid persisted hotkey and startup registration conflict did not submit error speech even with error sounds enabled.
+- `C:\Users\mhoem\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m compileall -q src/piper/windows_tray`: passed.
+- `git diff --check`: passed.
 
-- Added `PlaybackState.IDLE`, `SPEAKING`, `STOPPED`, and `SHUTTING_DOWN`.
-- Added monotonic `speech_generation` tracking.
-- Added `STOP_REQUEST`, `REPLAY_REQUEST`, and `WORKER_EVENT` commands.
-- Serialized worker output through `enqueue_worker_event`; the callback only queues a command and does not mutate state or access audio playback.
-- A capture request while speaking cancels the active generation, invalidates it, enters `STOPPED`, and starts capture.
-- A current successful capture replaces `last_text`, creates a new generation, enters `SPEAKING`, and submits a `SpeechRequest`.
-- A failed replacement capture enters `STOPPED` without replaying the prior text.
-- `CANCEL_REQUEST` and `STOP_REQUEST` cancel only active speech; idle/stopped requests are no-ops.
-- Replay cancels active speech when necessary, creates a new generation, and submits the unchanged `last_text`.
-- Matching worker events transition to `IDLE`/`STOPPED`; stale generations are ignored.
-- Matching worker failures log the worker detail and show a concise status message.
-- Exit transitions to `SHUTTING_DOWN`, shuts down the speech worker, and gates replay.
-- Existing Phase-2 capture behavior remains intact.
+## Self-review
 
-## TDD evidence
+- Changed only the requested controller and three test files, plus this report.
+- `_report_runtime_error()` is called for `ValueError` from parsing, failed runtime `rebind()`, and failed resume `reregister()` after auxiliary cancellation and before the existing reregistration completion path.
+- Persistence rollback failures remain visual/logging-only and are not routed to spoken runtime errors.
+- `tests/windows_tray/test_app_foundation.py` was verified unchanged and remains startup-only for this task.
+- The malicious hotkey input is absent from every submitted speech request; only `user_message(UserError.HOTKEY_INVALID)` is submitted.
 
-The new test module was written before the implementation. The initial RED run could not collect because the new `PlaybackState` API was not yet present. After implementation, the focused test module passed. One assertion was corrected after observing that a replacement capture correctly starts a second capture job immediately.
+## Concerns
 
-## Verification
-
-Using the bundled workspace Python runtime with `PYTHONPATH=src`:
-
-- `pytest tests/windows_tray/test_controller_speech.py -q`: 9 passed.
-- `pytest tests/windows_tray/test_controller_foundation.py tests/windows_tray/test_controller_capture.py tests/windows_tray/test_controller_speech.py tests/windows_tray/test_speech_worker.py -q`: 35 passed.
-- `python -m py_compile src/piper/windows_tray/commands.py src/piper/windows_tray/controller.py tests/windows_tray/test_controller_speech.py`: passed.
-- `git diff --check`: passed; Git reported only normal LF-to-CRLF conversion warnings for the two modified source files.
-
-The complete `tests/windows_tray` run was also attempted. It reported 101 passed, 11 failed, and 16 errors. The failures/errors are outside the Task 3 files and include pytest temporary-directory permission errors, existing app-test logger fixture mismatches, and capture fixture exhaustion. The Task 3 focused/regression set passed independently.
-
-## Review Fix: Pending Speech Cancellation
-
-The review finding was reproducible: when an active request occupied the worker and the controller advanced to a newer generation, `SpeechWorker.cancel_active()` returned because the requested generation was not active, leaving the matching pending request queued. That request could then play after cancellation.
-
-The fix updates `SpeechWorker.cancel_active()` to discard a pending request with the cancelled generation while retaining the existing active-player cancellation behavior. A regression test holds active generation 14, queues generation 15, cancels generation 15, and verifies that only generation 14 plays and no generation-15 event is emitted.
-
-Review-fix verification:
-
-- RED: `test_cancel_active_discards_matching_pending_request` failed because the stale pending audio played.
-- GREEN: the focused regression and controller speech tests passed: 10 passed.
-- Covering controller/worker suite after the fix: 36 passed.
-- Focused syntax compilation and `git diff --check`: passed.
-
-## Commit
-
-`feat: serialize tray speech state transitions`
+The prescribed suite is not fully green because of the existing app-foundation expectation described above. No Task 3-scoped test failed after implementation.
