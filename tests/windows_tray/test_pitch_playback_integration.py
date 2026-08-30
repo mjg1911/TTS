@@ -37,10 +37,16 @@ def _positive_zero_crossing_frequency(pcm: bytes) -> float:
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
-def test_ffmpeg_pitch_filter_preserves_duration_and_raises_frequency() -> None:
+@pytest.mark.parametrize(
+    ("pitch", "speed", "expected_frequency"),
+    [(0, 50, INPUT_FREQUENCY), (26, 50, INPUT_FREQUENCY * 1.26)],
+)
+def test_ffmpeg_pitch_filter_applies_speed_and_pitch(
+    pitch, speed, expected_frequency
+) -> None:
     source = _tone_pcm()
     completed = subprocess.run(
-        build_ffmpeg_command(SAMPLE_RATE, 26),
+        build_ffmpeg_command(SAMPLE_RATE, pitch, speed),
         input=source,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -52,5 +58,5 @@ def test_ffmpeg_pitch_filter_preserves_duration_and_raises_frequency() -> None:
     output_duration = len(output) / 2 / SAMPLE_RATE
     measured_frequency = _positive_zero_crossing_frequency(output)
 
-    assert output_duration == pytest.approx(input_duration, rel=0.05)
-    assert measured_frequency == pytest.approx(INPUT_FREQUENCY * 1.26, rel=0.05)
+    assert output_duration == pytest.approx(input_duration / 1.5, rel=0.05)
+    assert measured_frequency == pytest.approx(expected_frequency, rel=0.05)

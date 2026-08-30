@@ -9,7 +9,7 @@ from typing import Optional, Protocol
 
 from piper.audio_playback import AudioPlayer
 
-from .settings import validate_pitch_percent
+from .settings import validate_pitch_percent, validate_speed_percent
 
 
 class PlaybackPipeline(Protocol):
@@ -23,17 +23,24 @@ def _format_number(value: float) -> str:
     return f"{value:.8f}".rstrip("0").rstrip(".")
 
 
-def build_pitch_filter(sample_rate: int, pitch_percent: float) -> str:
+def build_pitch_filter(
+    sample_rate: int, pitch_percent: float, speed_percent: float
+) -> str:
     pitch = validate_pitch_percent(pitch_percent)
-    multiplier = 1.0 + pitch / 100.0
+    speed = validate_speed_percent(speed_percent)
+    pitch_multiplier = 1.0 + pitch / 100.0
+    speed_multiplier = 1.0 + speed / 100.0
     return (
-        f"asetrate={sample_rate}*{_format_number(multiplier)},"
+        f"asetrate={sample_rate}*{_format_number(pitch_multiplier)},"
         f"aresample={sample_rate},"
-        f"atempo={_format_number(1.0 / multiplier)}"
+        f"atempo={_format_number(1.0 / pitch_multiplier)},"
+        f"atempo={_format_number(speed_multiplier)}"
     )
 
 
-def build_ffmpeg_command(sample_rate: int, pitch_percent: float) -> list[str]:
+def build_ffmpeg_command(
+    sample_rate: int, pitch_percent: float, speed_percent: float
+) -> list[str]:
     return [
         "ffmpeg",
         "-hide_banner",
@@ -48,7 +55,7 @@ def build_ffmpeg_command(sample_rate: int, pitch_percent: float) -> list[str]:
         "-i",
         "pipe:0",
         "-af",
-        build_pitch_filter(sample_rate, pitch_percent),
+        build_pitch_filter(sample_rate, pitch_percent, speed_percent),
         "-f",
         "s16le",
         "-ar",
@@ -64,12 +71,14 @@ class FfmpegPitchPipeline:
         self,
         sample_rate: int,
         pitch_percent: float,
+        speed_percent: float,
         *,
         player_factory: Callable[[int], PlaybackPipeline] = AudioPlayer,
         popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
     ) -> None:
         self.sample_rate = sample_rate
         self.pitch_percent = validate_pitch_percent(pitch_percent)
+        self.speed_percent = validate_speed_percent(speed_percent)
         self._player_factory = player_factory
         self._popen_factory = popen_factory
         self._player_context: Optional[PlaybackPipeline] = None
@@ -92,7 +101,9 @@ class FfmpegPitchPipeline:
         )
         try:
             proc = self._popen_factory(
-                build_ffmpeg_command(self.sample_rate, self.pitch_percent),
+                build_ffmpeg_command(
+                    self.sample_rate, self.pitch_percent, self.speed_percent
+                ),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -243,10 +254,12 @@ class FfmpegPitchPipeline:
 def create_playback_pipeline(
     sample_rate: int,
     pitch_percent: float,
+    speed_percent: float,
 ) -> PlaybackPipeline:
     pitch = validate_pitch_percent(pitch_percent)
-    if pitch == 0.0:
+    speed = validate_speed_percent(speed_percent)
+    if pitch == 0.0 and speed == 0.0:
         return AudioPlayer(sample_rate)
     if not FfmpegPitchPipeline.is_available():
         raise RuntimeError("ffmpeg is not available")
-    return FfmpegPitchPipeline(sample_rate, pitch)
+    return FfmpegPitchPipeline(sample_rate, pitch, speed)

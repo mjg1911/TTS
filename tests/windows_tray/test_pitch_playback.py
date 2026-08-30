@@ -10,26 +10,36 @@ from piper.windows_tray import pitch_playback
 
 
 @pytest.mark.parametrize(
-    ("pitch", "expected"),
+    ("pitch", "speed", "expected"),
     [
-        (26, "asetrate=22050*1.26,aresample=22050,atempo=0.79365079"),
-        (-50, "asetrate=22050*0.5,aresample=22050,atempo=2"),
-        (100, "asetrate=22050*2,aresample=22050,atempo=0.5"),
+        (
+            26,
+            0,
+            "asetrate=22050*1.26,aresample=22050,atempo=0.79365079,atempo=1",
+        ),
+        (-50, 0, "asetrate=22050*0.5,aresample=22050,atempo=2,atempo=1"),
+        (100, 0, "asetrate=22050*2,aresample=22050,atempo=0.5,atempo=1"),
+        (0, 50, "asetrate=22050*1,aresample=22050,atempo=1,atempo=1.5"),
+        (
+            26,
+            50,
+            "asetrate=22050*1.26,aresample=22050,atempo=0.79365079,atempo=1.5",
+        ),
     ],
 )
 def test_build_pitch_filter_uses_rate_shift_and_tempo_compensation(
-    pitch, expected
+    pitch, speed, expected
 ) -> None:
-    assert pitch_playback.build_pitch_filter(22050, pitch) == expected
+    assert pitch_playback.build_pitch_filter(22050, pitch, speed) == expected
 
 
 def test_build_ffmpeg_command_is_explicit_raw_pcm_on_both_sides() -> None:
-    command = pitch_playback.build_ffmpeg_command(22050, 26)
+    command = pitch_playback.build_ffmpeg_command(22050, 26, 50)
 
     assert command == [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "s16le",
         "-ar", "22050", "-ac", "1", "-i", "pipe:0", "-af",
-        "asetrate=22050*1.26,aresample=22050,atempo=0.79365079", "-f",
+        "asetrate=22050*1.26,aresample=22050,atempo=0.79365079,atempo=1.5", "-f",
         "s16le", "-ar", "22050", "-ac", "1", "pipe:1",
     ]
 
@@ -125,7 +135,11 @@ def test_pipeline_starts_one_ffmpeg_process_and_streams_all_chunks() -> None:
         return process
 
     pipeline = pitch_playback.FfmpegPitchPipeline(
-        22050, 26, player_factory=lambda _sample_rate: player, popen_factory=popen
+        22050,
+        26,
+        50,
+        player_factory=lambda _sample_rate: player,
+        popen_factory=popen,
     )
     with pipeline:
         pipeline.play(b"first")
@@ -145,7 +159,10 @@ def test_reader_failure_terminates_ffmpeg_and_preserves_playback_error() -> None
     process = HangingProcess(output=b"\x01\x00")
     player = FailingPlayer()
     pipeline = pitch_playback.FfmpegPitchPipeline(
-        22050, 26, player_factory=lambda _sample_rate: player,
+        22050,
+        26,
+        50,
+        player_factory=lambda _sample_rate: player,
         popen_factory=lambda *_args, **_kwargs: process,
     )
 
@@ -160,7 +177,10 @@ def test_stop_terminates_ffmpeg_and_stops_forwarding_to_ffplay() -> None:
     process = FakeProcess(output=b"\x01\x00\x02\x00")
     player = FakePlayer()
     pipeline = pitch_playback.FfmpegPitchPipeline(
-        22050, 26, player_factory=lambda _sample_rate: player,
+        22050,
+        26,
+        50,
+        player_factory=lambda _sample_rate: player,
         popen_factory=lambda *_args, **_kwargs: process,
     )
 
@@ -177,7 +197,10 @@ def test_stop_terminates_ffmpeg_and_stops_forwarding_to_ffplay() -> None:
 def test_malformed_odd_length_ffmpeg_output_is_a_failure() -> None:
     process = FakeProcess(output=b"\x01")
     pipeline = pitch_playback.FfmpegPitchPipeline(
-        22050, 26, player_factory=lambda _sample_rate: FakePlayer(),
+        22050,
+        26,
+        50,
+        player_factory=lambda _sample_rate: FakePlayer(),
         popen_factory=lambda *_args, **_kwargs: process,
     )
 
@@ -190,7 +213,10 @@ def test_nonzero_ffmpeg_exit_is_a_failure() -> None:
     process = FakeProcess()
     process.returncode = 4
     pipeline = pitch_playback.FfmpegPitchPipeline(
-        22050, 26, player_factory=lambda _sample_rate: FakePlayer(),
+        22050,
+        26,
+        50,
+        player_factory=lambda _sample_rate: FakePlayer(),
         popen_factory=lambda *_args, **_kwargs: process,
     )
 
@@ -206,7 +232,7 @@ def test_zero_pitch_returns_direct_audio_player_without_checking_ffmpeg(monkeypa
         lambda: (_ for _ in ()).throw(AssertionError("ffmpeg should not be checked")),
     )
 
-    pipeline = pitch_playback.create_playback_pipeline(22050, 0)
+    pipeline = pitch_playback.create_playback_pipeline(22050, 0, 0)
 
     assert isinstance(pipeline, AudioPlayer)
 
@@ -215,7 +241,30 @@ def test_nonzero_pitch_requires_ffmpeg(monkeypatch) -> None:
     monkeypatch.setattr(pitch_playback.FfmpegPitchPipeline, "is_available", lambda: False)
 
     with pytest.raises(RuntimeError, match="ffmpeg is not available"):
-        pitch_playback.create_playback_pipeline(22050, 26)
+        pitch_playback.create_playback_pipeline(22050, 26, 0)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: pitch_playback.build_pitch_filter(22050, 0, 100.001),
+        lambda: pitch_playback.build_ffmpeg_command(22050, 0, 100.001),
+        lambda: pitch_playback.FfmpegPitchPipeline(22050, 0, 100.001),
+        lambda: pitch_playback.create_playback_pipeline(22050, 0, 100.001),
+    ],
+)
+def test_invalid_speed_is_rejected_by_every_playback_entry_point(build) -> None:
+    with pytest.raises(ValueError):
+        build()
+
+
+def test_speed_only_requires_ffmpeg(monkeypatch) -> None:
+    monkeypatch.setattr(
+        pitch_playback.FfmpegPitchPipeline, "is_available", lambda: False
+    )
+
+    with pytest.raises(RuntimeError, match="ffmpeg is not available"):
+        pitch_playback.create_playback_pipeline(22050, 0, 50)
 
 
 class BlockingOutput:
@@ -238,7 +287,10 @@ def test_reader_discards_output_released_after_stop() -> None:
     process.stdout = BlockingOutput()
     player = FakePlayer()
     pipeline = pitch_playback.FfmpegPitchPipeline(
-        22050, 26, player_factory=lambda _sample_rate: player,
+        22050,
+        26,
+        50,
+        player_factory=lambda _sample_rate: player,
         popen_factory=lambda *_args, **_kwargs: process,
     )
 
