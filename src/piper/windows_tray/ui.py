@@ -4,6 +4,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from typing import Optional
 
+from .settings import validate_pitch_percent
+
 
 class TkUi:
     def __init__(self) -> None:
@@ -45,6 +47,27 @@ class TkUi:
             parent=self.root,
         )
         return value.strip() if value and value.strip() else None
+
+    def prompt_pitch(self, current: float) -> Optional[float]:
+        self._assert_main_thread()
+        initial = f"{current:g}"
+        value = simpledialog.askstring(
+            "Pitch settings",
+            "Enter pitch from -50% to 100%. Speech speed is preserved.",
+            initialvalue=initial,
+            parent=self.root,
+        )
+        if value is None:
+            return None
+        try:
+            return validate_pitch_percent(float(value.strip()))
+        except (ValueError, OverflowError):
+            messagebox.showerror(
+                "Piper",
+                "Pitch must be between -50% and 100%.",
+                parent=self.root,
+            )
+            return None
 
     def close(self) -> None:
         self._assert_main_thread()

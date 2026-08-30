@@ -18,6 +18,7 @@ class CommandKind(Enum):
     WORKER_EVENT = auto()
     SHOW_LAST_TEXT = auto()
     CONFIGURE_HOTKEY = auto()
+    CONFIGURE_PITCH = auto()
     HOTKEY_FAILED = auto()
     VOICE_SWITCH_SUCCEEDED = auto()
     VOICE_SWITCH_FAILED = auto()

@@ -62,6 +62,7 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
         CommandKind.STOP_REQUEST,
         CommandKind.REPLAY_REQUEST,
         CommandKind.CONFIGURE_HOTKEY,
+        CommandKind.CONFIGURE_PITCH,
         CommandKind.TOGGLE_ERROR_SOUNDS,
         CommandKind.OPEN_LOG,
         CommandKind.EXIT,
@@ -174,6 +175,9 @@ class FakeUi:
 
     def show_last_text(self, _text):
         pass
+
+    def prompt_pitch(self, _current):
+        return None
 
     def close(self):
         self.root.destroy()

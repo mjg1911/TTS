@@ -14,6 +14,7 @@ from .hotkey_service import HotkeyManager
 from .logging_setup import configure_logging, log_exception_safe, log_path
 from .lifecycle import TeardownCoordinator
 from .power_events import PowerBroadcastListener
+from .pitch_playback import create_playback_pipeline
 from piper.audio_playback import AudioPlayer
 from .speech import SpeechWorker
 from .settings import TraySettings, load_settings, save_settings
@@ -58,10 +59,13 @@ def _load_configured_voice(
 
 
 def _build_speech_worker(controller: Controller, voice_manager: VoiceManager) -> SpeechWorker:
-    def player_factory(sample_rate: int) -> AudioPlayer:
+    def player_factory(sample_rate: int):
         if not AudioPlayer.is_available():
             raise RuntimeError("ffplay is not available")
-        return AudioPlayer(sample_rate)
+        return create_playback_pipeline(
+            sample_rate,
+            controller.current_pitch_percent(),
+        )
 
     return SpeechWorker(
         voice_manager.current,
@@ -274,6 +278,7 @@ def run_app(
                 if controller.state.settings is not None
                 else settings.hotkey
             ),
+            choose_pitch=ui.prompt_pitch,
             show_last_text=ui.show_last_text,
             request_teardown=teardown.run,
         )
