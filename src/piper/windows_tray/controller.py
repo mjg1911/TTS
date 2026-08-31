@@ -105,6 +105,37 @@ class TraySnapshot:
     codex_enabled: bool
 
 
+@dataclass(frozen=True)
+class SettingsWindowSnapshot:
+    voice_path: Optional[Path]
+    hotkey: str
+    pitch_percent: float
+    speed_percent: float
+    last_text: Optional[str]
+
+
+@dataclass(frozen=True)
+class SettingsApplyResult:
+    applied: bool
+    errors: Tuple[Tuple[str, str], ...] = ()
+    snapshot: Optional[SettingsWindowSnapshot] = None
+
+    def error_map(self) -> dict[str, str]:
+        return dict(self.errors)
+
+
+def _parse_percent_text(
+    value: str,
+    validator: Callable[[object], float],
+    message: str,
+) -> Tuple[Optional[float], Optional[str]]:
+    try:
+        parsed = float(value.strip())
+        return validator(parsed), None
+    except (ValueError, OverflowError):
+        return None, message
+
+
 def _start_daemon_job(job: Callable[[], None]) -> None:
     threading.Thread(target=job, name="piper-capture", daemon=True).start()
 
@@ -804,6 +835,144 @@ class Controller:
         if self._speech_worker is not None:
             self._speech_worker.submit(
                 SpeechRequest(self.state.speech_generation, self.state.last_text)
+            )
+
+    def settings_window_snapshot(self) -> Optional[SettingsWindowSnapshot]:
+        with self._state_lock:
+            settings = self.state.settings
+            if settings is None:
+                return None
+            return SettingsWindowSnapshot(
+                voice_path=self.state.voice_path,
+                hotkey=settings.hotkey,
+                pitch_percent=settings.pitch_percent,
+                speed_percent=settings.speed_percent,
+                last_text=self.state.last_text,
+            )
+
+    def apply_settings(
+        self,
+        hotkey: str,
+        pitch_text: str,
+        speed_text: str,
+        voice_path: Optional[Path],
+    ) -> SettingsApplyResult:
+        errors = []
+
+        try:
+            candidate_hotkey = parse_hotkey(hotkey)
+        except ValueError:
+            candidate_hotkey = None
+            errors.append(("hotkey", user_message(UserError.HOTKEY_INVALID)))
+
+        pitch_percent, pitch_error = _parse_percent_text(
+            pitch_text,
+            validate_pitch_percent,
+            "Pitch must be between -50% and 100%.",
+        )
+        if pitch_error is not None:
+            errors.append(("pitch", pitch_error))
+
+        speed_percent, speed_error = _parse_percent_text(
+            speed_text,
+            validate_speed_percent,
+            "Speed must be between -50% and 100%.",
+        )
+        if speed_error is not None:
+            errors.append(("speed", speed_error))
+
+        if errors:
+            return SettingsApplyResult(False, tuple(errors))
+
+        with self._state_lock:
+            current = self.state.settings
+            if (
+                current is None
+                or self._save_settings is None
+                or self._hotkeys is None
+                or candidate_hotkey is None
+                or pitch_percent is None
+                or speed_percent is None
+            ):
+                return SettingsApplyResult(
+                    False,
+                    (("general", "Piper settings are not available."),),
+                )
+
+            candidate_voice_path = None
+            candidate_voice = None
+            if voice_path is not None:
+                try:
+                    candidate_voice_path, candidate_voice = self._load_voice(
+                        str(voice_path)
+                    )
+                except VOICE_SETUP_ERRORS as error:
+                    self._log_error(
+                        "Selected Piper voice could not be loaded: %s" % error
+                    )
+                    return SettingsApplyResult(
+                        False,
+                        (
+                            (
+                                "voice",
+                                user_message(UserError.VOICE_LOAD_REPLACEMENT),
+                            ),
+                        ),
+                    )
+
+            next_settings = replace(
+                current,
+                hotkey=candidate_hotkey.canonical,
+                pitch_percent=pitch_percent,
+                speed_percent=speed_percent,
+                voice=(
+                    str(candidate_voice_path)
+                    if candidate_voice_path is not None
+                    else current.voice
+                ),
+            )
+
+            hotkey_changed = candidate_hotkey.canonical != current.hotkey
+            if hotkey_changed and not self._hotkeys.rebind(candidate_hotkey):
+                return SettingsApplyResult(
+                    False,
+                    (("hotkey", user_message(UserError.HOTKEY_CONFLICT)),),
+                )
+
+            try:
+                self._save_settings(next_settings)
+            except (OSError, ValueError) as error:
+                self._log_error("Could not save Piper settings: %s" % error)
+                if hotkey_changed:
+                    try:
+                        restored = bool(
+                            self._hotkeys.rebind(parse_hotkey(current.hotkey))
+                        )
+                    except (OSError, ValueError):
+                        restored = False
+                    if not restored:
+                        self._log_error("Could not restore the previous Piper hotkey")
+                        return SettingsApplyResult(
+                            False,
+                            (
+                                (
+                                    "general",
+                                    "Piper settings could not be saved, and the "
+                                    "previous hotkey could not be restored.",
+                                ),
+                            ),
+                        )
+                return SettingsApplyResult(
+                    False,
+                    (("general", "Piper settings could not be saved."),),
+                )
+
+            self.state.settings = next_settings
+            if candidate_voice_path is not None and candidate_voice is not None:
+                self.set_voice(candidate_voice_path, candidate_voice)
+            return SettingsApplyResult(
+                True,
+                snapshot=self.settings_window_snapshot(),
             )
 
     def _handle_worker_event(self, event: object) -> None:
