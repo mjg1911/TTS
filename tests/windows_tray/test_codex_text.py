@@ -39,3 +39,30 @@ def test_tilde_fences_are_removed_when_closed() -> None:
 def test_no_whitespace_near_limit_cuts_exactly_at_limit() -> None:
     prepared = prepare_codex_speech("x" * 6_001)
     assert prepared == "x" * MAX_CODEX_SPEECH_CHARS
+
+
+def test_markdown_links_speak_visible_labels_only() -> None:
+    text = "See [the setup guide](https://example.com/guide) and [settings](C:\\Projects\\Piper\\settings.json)."
+    assert prepare_codex_speech(text) == "See the setup guide and settings."
+
+
+def test_markdown_link_preserves_surrounding_punctuation() -> None:
+    text = "Open [Piper](https://example.com/piper), then continue."
+    assert prepare_codex_speech(text) == "Open Piper, then continue."
+
+
+def test_empty_markdown_link_label_drops_destination_but_keeps_context() -> None:
+    text = "Before [](/tmp/hidden.txt) after."
+    assert prepare_codex_speech(text) == "Before  after."
+
+
+def test_raw_urls_and_paths_remain_unchanged() -> None:
+    text = "Visit https://example.com or C:\\Projects\\Piper."
+    assert prepare_codex_speech(text) == text
+
+
+def test_images_and_malformed_links_are_preserved() -> None:
+    image = "![diagram](https://example.com/diagram.png)"
+    malformed = "Keep [this text](https://example.com"
+    assert prepare_codex_speech(image) == image
+    assert prepare_codex_speech(malformed) == malformed

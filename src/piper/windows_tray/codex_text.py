@@ -55,12 +55,49 @@ def _without_closed_fenced_blocks(text: str) -> str:
     return "\n".join(output)
 
 
+def _replace_markdown_links(text: str) -> str:
+    """Replace balanced inline Markdown links with their visible labels."""
+    output = []
+    index = 0
+    while index < len(text):
+        if text[index] != "[" or (index > 0 and text[index - 1] == "!"):
+            output.append(text[index])
+            index += 1
+            continue
+
+        label_end = text.find("]", index + 1)
+        if label_end == -1 or label_end + 1 >= len(text) or text[label_end + 1] != "(":
+            output.append(text[index])
+            index += 1
+            continue
+
+        destination_end = label_end + 2
+        depth = 1
+        while destination_end < len(text) and depth:
+            if text[destination_end] == "(":
+                depth += 1
+            elif text[destination_end] == ")":
+                depth -= 1
+            destination_end += 1
+
+        if depth:
+            output.append(text[index])
+            index += 1
+            continue
+
+        output.append(text[index + 1 : label_end])
+        index = destination_end
+
+    return "".join(output)
+
+
 def prepare_codex_speech(text: str) -> Optional[str]:
     normalized_newlines = text.replace("\r\n", "\n").replace("\r", "\n")
     without_code = _without_closed_fenced_blocks(normalized_newlines)
+    without_links = _replace_markdown_links(without_code)
     output = []
     previous_blank = False
-    for raw_line in without_code.split("\n"):
+    for raw_line in without_links.split("\n"):
         line = raw_line.strip()
         blank = not line
         if blank and previous_blank:
