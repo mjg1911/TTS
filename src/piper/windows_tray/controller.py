@@ -167,6 +167,9 @@ class Controller:
         self._open_settings: Callable[[SettingsWindowSnapshot], None] = (
             lambda _snapshot: None
         )
+        self._update_settings_last_text: Callable[[Optional[str]], None] = (
+            lambda _text: None
+        )
         self._ensure_tray_visible: Callable[[], None] = lambda: None
         self._request_teardown: Callable[[], None] = lambda: None
         self._capture = capture or (
@@ -201,6 +204,7 @@ class Controller:
         log_error: Optional[Callable[[str], None]] = None,
         open_log: Optional[Callable[[], None]] = None,
         open_settings: Optional[Callable[[SettingsWindowSnapshot], None]] = None,
+        update_settings_last_text: Optional[Callable[[Optional[str]], None]] = None,
         ensure_tray_visible: Optional[Callable[[], None]] = None,
         request_teardown: Optional[Callable[[], None]] = None,
         capture: Optional[Callable[[], CaptureResult]] = None,
@@ -230,6 +234,8 @@ class Controller:
             self._open_log = open_log
         if open_settings is not None:
             self._open_settings = open_settings
+        if update_settings_last_text is not None:
+            self._update_settings_last_text = update_settings_last_text
         if ensure_tray_visible is not None:
             self._ensure_tray_visible = ensure_tray_visible
         if request_teardown is not None:
@@ -770,7 +776,10 @@ class Controller:
             and result.status is CaptureStatus.SUCCESS
             and result.text is not None
         ):
+            previous_text = self.state.last_text
             self.state.last_text = result.text
+            if self.state.last_text != previous_text:
+                self._update_settings_last_text(self.state.last_text)
             self._capture_replaced_speech = False
             self.state.speech_generation += 1
             self.state.playback = PlaybackState.SPEAKING

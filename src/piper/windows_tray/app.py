@@ -301,6 +301,7 @@ def run_app(
                 snapshot,
                 controller.apply_settings,
             ),
+            update_settings_last_text=ui.update_settings_last_text,
             ensure_tray_visible=tray.ensure_visible,
             capture=capture.capture,
             log_info=getattr(logger, "info", lambda *_args: None),
@@ -380,6 +381,6 @@ def run_app(
         teardown.run()
         if ui is not None:
             try:
-                ui.root.destroy()
+                ui.close()
             except Exception:
                 pass

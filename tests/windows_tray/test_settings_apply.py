@@ -1,9 +1,10 @@
+import json
 from pathlib import Path
 
 import pytest
 
 from piper.windows_tray.controller import Controller
-from piper.windows_tray.settings import TraySettings
+from piper.windows_tray.settings import TraySettings, save_settings
 
 
 class FakeHotkeys:
@@ -267,3 +268,25 @@ def test_settings_window_snapshot_copies_committed_editor_state():
     assert snapshot.pitch_percent == 26
     assert snapshot.speed_percent == 0
     assert snapshot.last_text == "captured"
+
+
+def test_apply_settings_never_persists_last_captured_text(tmp_path):
+    path = tmp_path / "settings.json"
+    controller = Controller(
+        settings=TraySettings(),
+        save_settings=lambda settings: save_settings(settings, path),
+        hotkeys=FakeHotkeys(),
+    )
+    controller.state.last_text = "private captured text"
+
+    result = controller.apply_settings(
+        hotkey="alt+backtick",
+        pitch_text="26",
+        speed_text="0",
+        voice_path=None,
+    )
+
+    assert result.applied is True
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "last_text" not in payload
+    assert "private captured text" not in path.read_text(encoding="utf-8")

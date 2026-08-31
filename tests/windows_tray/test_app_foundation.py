@@ -199,6 +199,7 @@ class FakeUi:
         return None
 
     def close(self):
+        self.events.append("ui.close")
         self.root.destroy()
 
 
@@ -395,7 +396,7 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
         "tray",
         "watch",
     ]
-    assert events[-2:] == ["quit", "destroy"]
+    assert events[-3:] == ["quit", "ui.close", "destroy"]
     assert tray.events == ["start", "stop"]
     assert ("after", 0) in events
 
@@ -441,6 +442,42 @@ def test_tray_settings_opens_only_when_main_thread_pump_handles_command(monkeypa
     ui.root.mainloop = mainloop
 
     assert app.run_app([]) == 0
+
+
+def test_open_settings_is_closed_by_normal_shutdown(monkeypatch):
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    controller_holder = []
+    original_controller = app.Controller
+    tray_enqueue = []
+
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: controller_holder.append(
+            original_controller(*args, **kwargs)
+        )
+        or controller_holder[-1],
+    )
+    monkeypatch.setattr(
+        app,
+        "TrayIcon",
+        lambda _path, enqueue: tray_enqueue.append(enqueue) or _tray,
+    )
+
+    def mainloop():
+        ui.root.callbacks.pop(0)()
+        tray_enqueue[0](Command(CommandKind.CONFIGURE_SETTINGS))
+        ui.root.callbacks.pop(0)()
+        tray_enqueue[0](Command(CommandKind.EXIT))
+        ui.root.callbacks.pop(0)()
+
+    ui.root.mainloop = mainloop
+
+    assert app.run_app([]) == 0
+    assert "ui.close" in events
+    assert events.index("ui.close") > events.index("instance.close")
+    assert events.index("ui.close") > events.index("quit")
 
 
 def test_run_app_debug_forces_debug_logging_and_console(monkeypatch) -> None:
@@ -811,7 +848,7 @@ def test_primary_pre_tray_failures_close_instance(monkeypatch, failure_stage) ->
 
     expected = ["acquire", "instance.close"]
     if failure_stage == "controller":
-        expected.extend(["quit", "destroy"])
+        expected.extend(["quit", "ui.close", "destroy"])
     assert events == expected
 
 

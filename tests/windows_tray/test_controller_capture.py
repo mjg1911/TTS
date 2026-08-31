@@ -86,6 +86,70 @@ def test_failed_new_capture_does_not_replace_last_successful_text():
     assert controller.state.last_text == "first"
 
 
+def test_successful_capture_refreshes_open_settings_last_text():
+    updates = []
+    controller = Controller(capture_submit=lambda _job: None)
+    controller.configure_runtime(update_settings_last_text=updates.append)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_SUCCEEDED,
+            CaptureCompletion(
+                generation,
+                CaptureResult(CaptureStatus.SUCCESS, "fresh text"),
+            ),
+        )
+    )
+
+    assert controller.state.last_text == "fresh text"
+    assert updates == ["fresh text"]
+
+
+def test_failed_capture_does_not_refresh_settings_last_text():
+    updates = []
+    controller = Controller(capture_submit=lambda _job: None)
+    controller.configure_runtime(update_settings_last_text=updates.append)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_FAILED,
+            CaptureCompletion(generation, CaptureResult(CaptureStatus.TIMEOUT)),
+        )
+    )
+
+    assert updates == []
+
+
+def test_stale_capture_does_not_refresh_settings_last_text():
+    updates = []
+    controller = Controller(capture_submit=lambda _job: None)
+    controller.configure_runtime(update_settings_last_text=updates.append)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_SUCCEEDED,
+            CaptureCompletion(
+                0,
+                CaptureResult(CaptureStatus.SUCCESS, "stale text"),
+            ),
+        )
+    )
+
+    assert updates == []
+
+
+def test_new_settings_snapshot_includes_current_last_text():
+    controller = Controller(settings=TraySettings())
+    controller.state.last_text = "current text"
+
+    assert controller.settings_window_snapshot().last_text == "current text"
+
+
 def test_clipboard_access_failure_has_specific_recoverable_message():
     statuses = []
     worker = RecordingSpeechWorker()
