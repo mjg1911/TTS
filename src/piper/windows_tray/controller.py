@@ -859,6 +859,32 @@ class Controller:
                 SpeechRequest(self.state.speech_generation, self.state.last_text)
             )
 
+    def speak_manual_text(self, text: str) -> None:
+        with self._state_lock:
+            if (
+                self.state.shutting_down
+                or self.state.capture_in_progress
+                or not text.strip()
+            ):
+                return
+
+            if self.state.playback is PlaybackState.SPEAKING:
+                if self._speech_worker is not None:
+                    self._speech_worker.cancel_active(
+                        self.state.speech_generation
+                    )
+
+            self.state.speech_generation += 1
+            self.state.playback = PlaybackState.SPEAKING
+
+            if self._speech_worker is not None:
+                self._speech_worker.submit(
+                    SpeechRequest(
+                        self.state.speech_generation,
+                        text,
+                    )
+                )
+
     def settings_window_snapshot(self) -> Optional[SettingsWindowSnapshot]:
         with self._state_lock:
             settings = self.state.settings
