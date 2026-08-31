@@ -6,6 +6,7 @@ import pytest
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import Controller
 from piper.windows_tray.settings import TraySettings
+from piper.windows_tray.speech import SpeechRequest
 
 
 def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) -> None:
@@ -188,6 +189,7 @@ class FakeUi:
         self.root = FakeRoot(events)
         self.statuses = []
         self.settings_apply = None
+        self.settings_speak_text = None
 
     def choose_voice_model(self):
         return None
@@ -198,9 +200,10 @@ class FakeUi:
     def show_last_text(self, _text):
         pass
 
-    def open_settings(self, snapshot, on_apply):
+    def open_settings(self, snapshot, on_apply, on_speak_text):
         self.events.append(("settings.open", snapshot))
         self.settings_apply = on_apply
+        self.settings_speak_text = on_speak_text
 
     def update_settings_last_text(self, text):
         self.events.append(("settings.last_text", text))
@@ -451,6 +454,46 @@ def test_tray_settings_opens_only_when_main_thread_pump_handles_command(monkeypa
         )
         tray_enqueue[0](Command(CommandKind.EXIT))
         ui.root.callbacks.pop(0)()
+
+    ui.root.mainloop = mainloop
+
+    assert app.run_app([]) == 0
+
+
+def test_primary_bootstrap_speaks_text_entered_in_settings(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+    controller_holder = []
+    original_controller = app.Controller
+    worker = RecordingSpeechWorker(events, tray)
+    tray_enqueue = []
+
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: controller_holder.append(
+            original_controller(*args, **kwargs)
+        )
+        or controller_holder[-1],
+    )
+    monkeypatch.setattr(
+        app,
+        "_build_speech_worker",
+        lambda _controller, _voice_manager: worker,
+    )
+    monkeypatch.setattr(
+        app,
+        "TrayIcon",
+        lambda _path, enqueue: tray_enqueue.append(enqueue) or tray,
+    )
+
+    def mainloop():
+        controller = controller_holder[0]
+        ui.root.callbacks.pop(0)()
+        tray_enqueue[0](Command(CommandKind.CONFIGURE_SETTINGS))
+        ui.root.callbacks.pop(0)()
+        ui.settings_speak_text("typed from Settings")
+        assert worker.submitted[-1] == SpeechRequest(1, "typed from Settings")
 
     ui.root.mainloop = mainloop
 

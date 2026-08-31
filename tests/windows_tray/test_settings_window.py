@@ -365,6 +365,7 @@ def test_tk_ui_repeated_open_focuses_existing_window(monkeypatch):
     class RecordingWindow:
         def __init__(self, **kwargs):
             self.on_close = kwargs["on_close"]
+            self.on_speak_text = kwargs["on_speak_text"]
             self.focus_calls = 0
             created.append(self)
 
@@ -383,12 +384,14 @@ def test_tk_ui_repeated_open_focuses_existing_window(monkeypatch):
     ui._thread_id = __import__("threading").get_ident()
     ui._settings_window = None
 
-    ui.open_settings(make_snapshot(), lambda *_args: SettingsApplyResult(True))
+    speak_text = lambda _text: None
+    ui.open_settings(make_snapshot(), lambda *_args: SettingsApplyResult(True), speak_text)
     first = created[0]
-    ui.open_settings(make_snapshot(), lambda *_args: SettingsApplyResult(True))
+    ui.open_settings(make_snapshot(), lambda *_args: SettingsApplyResult(True), lambda _text: None)
 
     assert len(created) == 1
     assert first.focus_calls == 2
+    assert first.on_speak_text is speak_text
 
 
 def test_tk_ui_first_open_makes_settings_window_visible(monkeypatch):
@@ -411,7 +414,9 @@ def test_tk_ui_first_open_makes_settings_window_visible(monkeypatch):
     ui._thread_id = __import__("threading").get_ident()
     ui._settings_window = None
 
-    ui.open_settings(make_snapshot(), lambda *_args: SettingsApplyResult(True))
+    ui.open_settings(
+        make_snapshot(), lambda *_args: SettingsApplyResult(True), lambda _text: None
+    )
 
     assert len(created) == 1
     assert created[0].focus_calls == 1
@@ -444,11 +449,15 @@ def test_tk_ui_reopens_after_close_and_forwards_last_text(monkeypatch):
     ui._settings_window = None
 
     ui.update_settings_last_text("ignored")
-    ui.open_settings(make_snapshot(), lambda *_args: SettingsApplyResult(True))
+    ui.open_settings(
+        make_snapshot(), lambda *_args: SettingsApplyResult(True), lambda _text: None
+    )
     ui.update_settings_last_text("new text")
     first = created[0]
     first.close()
-    ui.open_settings(make_snapshot(), lambda *_args: SettingsApplyResult(True))
+    ui.open_settings(
+        make_snapshot(), lambda *_args: SettingsApplyResult(True), lambda _text: None
+    )
 
     assert first.updated == "new text"
     assert len(created) == 2

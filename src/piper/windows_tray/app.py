@@ -300,6 +300,7 @@ def run_app(
             open_settings=lambda snapshot: ui.open_settings(
                 snapshot,
                 controller.apply_settings,
+                controller.speak_manual_text,
             ),
             update_settings_last_text=getattr(
                 ui, "update_settings_last_text", lambda _text: None
