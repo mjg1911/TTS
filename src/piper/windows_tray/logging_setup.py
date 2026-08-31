@@ -93,6 +93,27 @@ def log_synthesis_result(
     )
 
 
+def log_codex_result(
+    logger: Logger,
+    *,
+    conversation_id: str,
+    turn_id: str,
+    character_count: int,
+    outcome: str,
+) -> None:
+    logger.info(
+        "codex_response conversation_id=%s turn_id=%s character_count=%d outcome=%s",
+        conversation_id,
+        turn_id,
+        character_count,
+        outcome,
+    )
+
+
+def log_codex_status(logger: Logger, status: str) -> None:
+    logger.info("codex_monitor status=%s", status)
+
+
 def log_exception_safe(
     logger: Logger,
     event: str,

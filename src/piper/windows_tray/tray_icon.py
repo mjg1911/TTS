@@ -20,6 +20,7 @@ class TrayIcon:
                     "can_stop": True,
                     "can_replay": True,
                     "error_sounds_enabled": False,
+                    "codex_enabled": False,
                 },
             )()
         )
@@ -81,6 +82,13 @@ class TrayIcon:
                     lambda _icon, _item: self._enqueue(
                         Command(CommandKind.CONFIGURE_SPEED)
                     ),
+                ),
+                pystray.MenuItem(
+                    "Enable Codex",
+                    lambda _icon, _item: self._enqueue(
+                        Command(CommandKind.TOGGLE_CODEX)
+                    ),
+                    checked=lambda _item: self._snapshot_provider().codex_enabled,
                 ),
                 pystray.MenuItem(
                     "Error sounds",

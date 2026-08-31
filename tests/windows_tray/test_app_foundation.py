@@ -64,8 +64,9 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
         CommandKind.REPLAY_REQUEST,
         CommandKind.CONFIGURE_HOTKEY,
         CommandKind.CONFIGURE_PITCH,
-        CommandKind.CONFIGURE_SPEED,
-        CommandKind.TOGGLE_ERROR_SOUNDS,
+            CommandKind.CONFIGURE_SPEED,
+            CommandKind.TOGGLE_CODEX,
+            CommandKind.TOGGLE_ERROR_SOUNDS,
         CommandKind.OPEN_LOG,
         CommandKind.EXIT,
     ]

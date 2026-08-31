@@ -102,6 +102,34 @@ stale clipboard contents. When Error sounds is enabled, Piper speaks `No text
 selected or the application did not provide it`; when disabled, there is no
 user-facing no-text feedback.
 
+## Enable Codex
+
+`Enable Codex` is off by default. When enabled, Piper locally watches the current
+Windows user's supported Codex session history and reads the newest newly completed
+final Codex answer with the configured Piper voice.
+
+Piper establishes a baseline when monitoring starts, after restart, and after
+resume/recovery. Existing or missed responses are not read aloud later. Codex
+responses are latest-only: they are never queued as a backlog.
+
+Speech priority is:
+
+1. selected text;
+2. error feedback;
+3. Codex response;
+4. launch welcome.
+
+Starting selected-text speech stops current Codex speech. A Codex answer that arrives
+while higher-priority speech is active is skipped. `Stop speaking`/F8 stops current
+Codex speech but keeps monitoring enabled. Turning `Enable Codex` off stops monitoring
+and cancels Codex speech.
+
+Codex response text stays local and is not stored in Piper settings or logs. Piper
+may log non-content diagnostics such as response identity, character count, monitor
+state, and failure category. Unsupported Codex history formats fail closed instead of
+being guessed. Automatic Codex read-aloud omits closed fenced code blocks and caps
+prepared text at 6,000 characters.
+
 ## Files
 
 - Settings: `%APPDATA%\Piper\settings.json`

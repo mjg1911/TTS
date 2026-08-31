@@ -45,6 +45,34 @@ def test_teardown_runs_resources_in_safe_order() -> None:
     assert failures == []
 
 
+def test_teardown_stops_codex_before_speech_and_continues_after_failure() -> None:
+    events = []
+    failures = []
+
+    def fail_codex() -> None:
+        events.append("codex")
+        raise OSError("synthetic codex stop failure")
+
+    teardown = TeardownCoordinator(
+        stop_hotkeys=lambda: events.append("hotkeys"),
+        stop_power=lambda: events.append("power"),
+        stop_codex=fail_codex,
+        stop_speech=lambda: events.append("speech"),
+        stop_tray=lambda: events.append("tray"),
+        close_instance=lambda: events.append("instance"),
+        quit_root=lambda: events.append("tk"),
+        on_failure=lambda stage, error: failures.append((stage, type(error).__name__)),
+        on_complete=lambda: events.append("complete"),
+    )
+
+    teardown.run()
+
+    assert events == [
+        "hotkeys", "power", "codex", "speech", "tray", "instance", "tk", "complete"
+    ]
+    assert failures == [("codex", "OSError")]
+
+
 def test_teardown_is_idempotent() -> None:
     calls = []
 

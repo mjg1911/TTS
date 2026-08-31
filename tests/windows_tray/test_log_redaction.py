@@ -2,6 +2,7 @@ import logging
 
 from piper.windows_tray.logging_setup import (
     log_capture_result,
+    log_codex_result,
     log_exception_safe,
 )
 
@@ -42,3 +43,22 @@ def test_safe_exception_log_drops_exception_message(caplog) -> None:
     assert "generation=4" in caplog.text
     assert "phase=synthesis" in caplog.text
     assert secret not in caplog.text
+
+
+def test_codex_diagnostic_never_accepts_response_text(caplog) -> None:
+    secret = "PRIVATE-CODEX-RESPONSE-DO-NOT-LOG"
+    logger = logging.getLogger("piper.windows_tray.test")
+
+    with caplog.at_level(logging.INFO):
+        log_codex_result(
+            logger,
+            conversation_id="conversation-1",
+            turn_id="turn-1",
+            character_count=len(secret),
+            outcome="submitted",
+        )
+
+    assert secret not in caplog.text
+    assert "conversation-1" in caplog.text
+    assert "turn-1" in caplog.text
+    assert f"character_count={len(secret)}" in caplog.text

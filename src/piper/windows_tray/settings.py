@@ -46,6 +46,7 @@ class TraySettings:
     hotkey: str = DEFAULT_HOTKEY
     log_level: str = "INFO"
     error_sounds: bool = False
+    codex_enabled: bool = False
     pitch_percent: float = DEFAULT_PITCH_PERCENT
     speed_percent: float = DEFAULT_SPEED_PERCENT
 
@@ -74,6 +75,7 @@ def _validated(data: object) -> TraySettings:
     hotkey = data.get("hotkey")
     log_level = data.get("log_level", "INFO")
     error_sounds = data.get("error_sounds", False)
+    codex_enabled = data.get("codex_enabled", False)
     pitch_percent = validate_pitch_percent(
         data.get("pitch_percent", DEFAULT_PITCH_PERCENT)
     )
@@ -93,11 +95,14 @@ def _validated(data: object) -> TraySettings:
         raise ValueError("invalid log level")
     if type(error_sounds) is not bool:
         raise ValueError("error_sounds must be a boolean")
+    if type(codex_enabled) is not bool:
+        raise ValueError("codex_enabled must be a boolean")
     return TraySettings(
         voice=voice.strip(),
         hotkey=hotkey.strip(),
         log_level=log_level,
         error_sounds=error_sounds,
+        codex_enabled=codex_enabled,
         pitch_percent=pitch_percent,
         speed_percent=speed_percent,
     )
