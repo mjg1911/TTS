@@ -71,6 +71,14 @@ def test_markdown_heading_markers_are_not_spoken() -> None:
     assert prepare_codex_speech(text) == "Installation\nAdvanced setup\nFinal notes"
 
 
+def test_inline_markdown_heading_markers_are_not_spoken() -> None:
+    assert prepare_codex_speech("Before ## hello ## after") == "Before hello after"
+
+
+def test_bold_wrapped_heading_markers_are_not_spoken() -> None:
+    assert prepare_codex_speech("**## Self-Review Checklist**") == "Self-Review Checklist"
+
+
 def test_hashes_in_ordinary_text_are_preserved() -> None:
     text = "Use issue #42 and the color #fff."
     assert prepare_codex_speech(text) == text
