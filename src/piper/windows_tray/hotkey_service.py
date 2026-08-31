@@ -122,6 +122,8 @@ class HotkeyManager:
         self._registration_error: Optional[BaseException] = None
         self._cancel_registered = False
         self._owned_registrations = set()  # type: Set[int]
+        self._pending_capture_id: Optional[int] = None
+        self._pending_capture_spec = None
         self._lock = threading.RLock()
         self._commands = queue.Queue()
         self._direct_test_mode = False
@@ -196,6 +198,80 @@ class HotkeyManager:
             ):
                 self.start(candidate, self._on_capture, self._on_cancel)
                 return True
+            return False
+        except OSError:
+            return False
+
+    def prepare_rebind(self, candidate: Any) -> bool:
+        def command() -> bool:
+            with self._lock:
+                if self.capture_spec is None or self._pending_capture_id is not None:
+                    return False
+                inactive = (
+                    CAPTURE_IDS[1]
+                    if self._active_capture_id == CAPTURE_IDS[0]
+                    else CAPTURE_IDS[0]
+                )
+                if not self._register_capture(inactive, candidate):
+                    return False
+                self._pending_capture_id = inactive
+                self._pending_capture_spec = candidate
+                self._owned_registrations.add(inactive)
+                return True
+
+        try:
+            if self._message_thread_is_running():
+                return bool(self._run_on_message_thread(command))
+            if self._direct_test_mode:
+                return bool(command())
+            return False
+        except OSError:
+            return False
+
+    def commit_rebind(self) -> bool:
+        def command() -> bool:
+            with self._lock:
+                pending_id = self._pending_capture_id
+                pending_spec = self._pending_capture_spec
+                if pending_id is None or pending_spec is None:
+                    return False
+                self._api.unregister(self._active_capture_id)
+                self._owned_registrations.discard(self._active_capture_id)
+                self._active_capture_id = pending_id
+                self.capture_spec = pending_spec
+                self._pending_capture_id = None
+                self._pending_capture_spec = None
+                return True
+
+        try:
+            if self._message_thread_is_running():
+                return bool(self._run_on_message_thread(command))
+            if self._direct_test_mode:
+                return bool(command())
+            return False
+        except OSError:
+            return False
+
+    def rollback_rebind(self) -> bool:
+        def command() -> bool:
+            with self._lock:
+                pending_id = self._pending_capture_id
+                if pending_id is None:
+                    return True
+                try:
+                    self._api.unregister(pending_id)
+                except OSError:
+                    return False
+                self._owned_registrations.discard(pending_id)
+                self._pending_capture_id = None
+                self._pending_capture_spec = None
+                return True
+
+        try:
+            if self._message_thread_is_running():
+                return bool(self._run_on_message_thread(command))
+            if self._direct_test_mode:
+                return bool(command())
             return False
         except OSError:
             return False

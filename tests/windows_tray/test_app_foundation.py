@@ -52,24 +52,42 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr(tray_icon, "_load_dependencies", lambda: (FakePystray, FakeImageApi))
 
     commands = []
-    tray = tray_icon.TrayIcon(tmp_path / "icon.png", commands.append)
+    snapshot = SimpleNamespace(
+        can_stop=False,
+        can_replay=True,
+        codex_enabled=True,
+        error_sounds_enabled=False,
+    )
+    tray = tray_icon.TrayIcon(
+        tmp_path / "icon.png", commands.append, lambda: snapshot
+    )
     tray.start()
     for item in tray._icon.menu.items:
         item.action(None, item)
 
     assert [command.kind for command in commands] == [
-        CommandKind.CONFIGURE_VOICE,
-        CommandKind.SHOW_LAST_TEXT,
+        CommandKind.CONFIGURE_SETTINGS,
         CommandKind.STOP_REQUEST,
         CommandKind.REPLAY_REQUEST,
-        CommandKind.CONFIGURE_HOTKEY,
-        CommandKind.CONFIGURE_PITCH,
-            CommandKind.CONFIGURE_SPEED,
-            CommandKind.TOGGLE_CODEX,
-            CommandKind.TOGGLE_ERROR_SOUNDS,
+        CommandKind.TOGGLE_CODEX,
+        CommandKind.TOGGLE_ERROR_SOUNDS,
         CommandKind.OPEN_LOG,
         CommandKind.EXIT,
     ]
+    assert [item.text for item in tray._icon.menu.items] == [
+        "Settings",
+        "Stop speaking",
+        "Replay",
+        "Enable Codex",
+        "Error sounds",
+        "Open log",
+        "Exit",
+    ]
+    items = {item.text: item for item in tray._icon.menu.items}
+    assert items["Stop speaking"].enabled(None) is False
+    assert items["Replay"].enabled(None) is True
+    assert items["Enable Codex"].checked(None) is True
+    assert items["Error sounds"].checked(None) is False
 
 
 def test_tray_start_and_stop_delegate_to_pystray(monkeypatch, tmp_path: Path) -> None:
@@ -169,6 +187,7 @@ class FakeUi:
         self.events = events
         self.root = FakeRoot(events)
         self.statuses = []
+        self.settings_apply = None
 
     def choose_voice_model(self):
         return None
@@ -179,6 +198,13 @@ class FakeUi:
     def show_last_text(self, _text):
         pass
 
+    def open_settings(self, snapshot, on_apply):
+        self.events.append(("settings.open", snapshot))
+        self.settings_apply = on_apply
+
+    def update_settings_last_text(self, text):
+        self.events.append(("settings.last_text", text))
+
     def prompt_pitch(self, _current):
         return None
 
@@ -186,6 +212,7 @@ class FakeUi:
         return None
 
     def close(self):
+        self.events.append("ui.close")
         self.root.destroy()
 
 
@@ -382,9 +409,88 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
         "tray",
         "watch",
     ]
-    assert events[-2:] == ["quit", "destroy"]
+    assert events[-3:] == ["quit", "ui.close", "destroy"]
     assert tray.events == ["start", "stop"]
     assert ("after", 0) in events
+
+
+def test_tray_settings_opens_only_when_main_thread_pump_handles_command(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+    controller_holder = []
+    original_controller = app.Controller
+    tray_enqueue = []
+
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: controller_holder.append(
+            original_controller(*args, **kwargs)
+        )
+        or controller_holder[-1],
+    )
+    monkeypatch.setattr(
+        app,
+        "TrayIcon",
+        lambda _path, enqueue: tray_enqueue.append(enqueue) or tray,
+    )
+
+    def mainloop():
+        ui.root.callbacks.pop(0)()
+        tray_enqueue[0](Command(CommandKind.CONFIGURE_SETTINGS))
+        assert not any(
+            event[0] == "settings.open"
+            for event in ui.events
+            if isinstance(event, tuple)
+        )
+        ui.root.callbacks.pop(0)()
+        assert any(
+            event[0] == "settings.open"
+            for event in ui.events
+            if isinstance(event, tuple)
+        )
+        tray_enqueue[0](Command(CommandKind.EXIT))
+        ui.root.callbacks.pop(0)()
+
+    ui.root.mainloop = mainloop
+
+    assert app.run_app([]) == 0
+
+
+def test_open_settings_is_closed_by_normal_shutdown(monkeypatch):
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    controller_holder = []
+    original_controller = app.Controller
+    tray_enqueue = []
+
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: controller_holder.append(
+            original_controller(*args, **kwargs)
+        )
+        or controller_holder[-1],
+    )
+    monkeypatch.setattr(
+        app,
+        "TrayIcon",
+        lambda _path, enqueue: tray_enqueue.append(enqueue) or _tray,
+    )
+
+    def mainloop():
+        ui.root.callbacks.pop(0)()
+        tray_enqueue[0](Command(CommandKind.CONFIGURE_SETTINGS))
+        ui.root.callbacks.pop(0)()
+        tray_enqueue[0](Command(CommandKind.EXIT))
+        ui.root.callbacks.pop(0)()
+
+    ui.root.mainloop = mainloop
+
+    assert app.run_app([]) == 0
+    assert "ui.close" in events
+    assert events.index("ui.close") > events.index("instance.close")
+    assert events.index("ui.close") > events.index("quit")
 
 
 def test_run_app_debug_forces_debug_logging_and_console(monkeypatch) -> None:
@@ -636,6 +742,16 @@ def test_hotkey_start_conflict_keeps_tray_alive_for_recovery(monkeypatch):
             self.start(candidate, **self.callbacks)
             return True
 
+        def prepare_rebind(self, candidate):
+            self.start(candidate, **self.callbacks)
+            return True
+
+        def commit_rebind(self):
+            return True
+
+        def rollback_rebind(self):
+            return True
+
         def stop(self):
             events.append("hotkeys.stop")
 
@@ -755,7 +871,7 @@ def test_primary_pre_tray_failures_close_instance(monkeypatch, failure_stage) ->
 
     expected = ["acquire", "instance.close"]
     if failure_stage == "controller":
-        expected.extend(["quit", "destroy"])
+        expected.extend(["quit", "ui.close", "destroy"])
     assert events == expected
 
 

@@ -7,6 +7,7 @@ import pytest
 
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import Controller, PlaybackState
+from piper.windows_tray.settings import TraySettings
 from piper.windows_tray.speech import SpeechEvent, SpeechEventKind
 
 
@@ -53,6 +54,45 @@ def test_controller_owns_settings_and_active_voice() -> None:
     assert controller.state.settings is settings
     assert controller.state.voice_path == Path("voice.onnx")
     assert controller.state.voice is voice
+
+
+def test_configure_settings_routes_current_snapshot_to_runtime_callback():
+    opened = []
+    controller = Controller(
+        settings=TraySettings(
+            hotkey="ctrl+q",
+            pitch_percent=10,
+            speed_percent=-20,
+        )
+    )
+    controller.set_voice(Path("voice.onnx"), object())
+    controller.state.last_text = "latest"
+    controller.configure_runtime(open_settings=opened.append)
+
+    controller.handle(Command(CommandKind.CONFIGURE_SETTINGS))
+
+    assert len(opened) == 1
+    snapshot = opened[0]
+    assert snapshot.voice_path == Path("voice.onnx")
+    assert snapshot.hotkey == "ctrl+q"
+    assert snapshot.pitch_percent == 10
+    assert snapshot.speed_percent == -20
+    assert snapshot.last_text == "latest"
+
+
+def test_configure_settings_reports_missing_settings_without_opening():
+    opened = []
+    statuses = []
+    controller = Controller()
+    controller.configure_runtime(
+        open_settings=opened.append,
+        show_status=statuses.append,
+    )
+
+    controller.handle(Command(CommandKind.CONFIGURE_SETTINGS))
+
+    assert opened == []
+    assert statuses == ["Piper settings are not available."]
 
 
 def test_failed_voice_settings_save_retains_known_good_state() -> None:

@@ -40,15 +40,9 @@ class TrayIcon:
             "Piper",
             menu=pystray.Menu(
                 pystray.MenuItem(
-                    "Voice settings",
+                    "Settings",
                     lambda _icon, _item: self._enqueue(
-                        Command(CommandKind.CONFIGURE_VOICE)
-                    ),
-                ),
-                pystray.MenuItem(
-                    "Show last text",
-                    lambda _icon, _item: self._enqueue(
-                        Command(CommandKind.SHOW_LAST_TEXT)
+                        Command(CommandKind.CONFIGURE_SETTINGS)
                     ),
                 ),
                 pystray.MenuItem(
@@ -64,24 +58,6 @@ class TrayIcon:
                         Command(CommandKind.REPLAY_REQUEST)
                     ),
                     enabled=lambda _item: self._snapshot_provider().can_replay,
-                ),
-                pystray.MenuItem(
-                    "Hotkey settings",
-                    lambda _icon, _item: self._enqueue(
-                        Command(CommandKind.CONFIGURE_HOTKEY)
-                    ),
-                ),
-                pystray.MenuItem(
-                    "Pitch settings",
-                    lambda _icon, _item: self._enqueue(
-                        Command(CommandKind.CONFIGURE_PITCH)
-                    ),
-                ),
-                pystray.MenuItem(
-                    "Speed settings",
-                    lambda _icon, _item: self._enqueue(
-                        Command(CommandKind.CONFIGURE_SPEED)
-                    ),
                 ),
                 pystray.MenuItem(
                     "Enable Codex",

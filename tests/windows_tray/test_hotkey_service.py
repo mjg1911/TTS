@@ -139,6 +139,25 @@ def test_failed_rebind_keeps_old_capture_registration() -> None:
     assert api.registered[CAPTURE_IDS[0]][1] == old.vk
 
 
+def test_prepare_rebind_keeps_old_active_until_commit_or_rollback() -> None:
+    api = FakeHotkeyApi()
+    manager = HotkeyManager(api)
+    old = parse_hotkey("alt+backtick")
+    candidate = parse_hotkey("ctrl+q")
+    manager.register_for_test(old)
+
+    assert manager.prepare_rebind(candidate) is True
+    assert manager.capture_spec is old
+    assert manager._active_capture_id == CAPTURE_IDS[0]
+    assert api.registered[CAPTURE_IDS[0]][1] == old.vk
+    assert api.registered[CAPTURE_IDS[1]][1] == candidate.vk
+
+    assert manager.rollback_rebind() is True
+    assert manager.capture_spec is old
+    assert manager._active_capture_id == CAPTURE_IDS[0]
+    assert set(api.registered) == {CAPTURE_IDS[0], CANCEL_ID}
+
+
 def test_rebind_registers_inactive_id_before_removing_active_id() -> None:
     api = FakeHotkeyApi()
     manager = HotkeyManager(api)
