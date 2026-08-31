@@ -164,6 +164,9 @@ class Controller:
         self._show_notification: Callable[[str], None] = lambda _message: None
         self._log_error: Callable[[str], None] = lambda _message: None
         self._open_log: Callable[[], None] = lambda: None
+        self._open_settings: Callable[[SettingsWindowSnapshot], None] = (
+            lambda _snapshot: None
+        )
         self._ensure_tray_visible: Callable[[], None] = lambda: None
         self._request_teardown: Callable[[], None] = lambda: None
         self._capture = capture or (
@@ -197,6 +200,7 @@ class Controller:
         show_notification: Optional[Callable[[str], None]] = None,
         log_error: Optional[Callable[[str], None]] = None,
         open_log: Optional[Callable[[], None]] = None,
+        open_settings: Optional[Callable[[SettingsWindowSnapshot], None]] = None,
         ensure_tray_visible: Optional[Callable[[], None]] = None,
         request_teardown: Optional[Callable[[], None]] = None,
         capture: Optional[Callable[[], CaptureResult]] = None,
@@ -224,6 +228,8 @@ class Controller:
             self._log_error = log_error
         if open_log is not None:
             self._open_log = open_log
+        if open_settings is not None:
+            self._open_settings = open_settings
         if ensure_tray_visible is not None:
             self._ensure_tray_visible = ensure_tray_visible
         if request_teardown is not None:
@@ -404,6 +410,12 @@ class Controller:
             self._toggle_error_sounds()
         elif command.kind is CommandKind.OPEN_LOG:
             self._open_log()
+        elif command.kind is CommandKind.CONFIGURE_SETTINGS:
+            snapshot = self.settings_window_snapshot()
+            if snapshot is None:
+                self._show_status("Piper settings are not available.")
+                return
+            self._open_settings(snapshot)
         elif command.kind is CommandKind.CONFIGURE_VOICE:
             selected = self._choose_voice()
             if selected is None:

@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 class CommandKind(Enum):
     ACTIVATE = auto()
+    CONFIGURE_SETTINGS = auto()
     CONFIGURE_VOICE = auto()
     TOGGLE_CODEX = auto()
     TOGGLE_ERROR_SOUNDS = auto()

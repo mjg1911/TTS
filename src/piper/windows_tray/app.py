@@ -297,6 +297,10 @@ def run_app(
             show_notification=tray.show_notification,
             log_error=logger.error,
             open_log=lambda: os.startfile(log_path().parent),
+            open_settings=lambda snapshot: ui.open_settings(
+                snapshot,
+                controller.apply_settings,
+            ),
             ensure_tray_visible=tray.ensure_visible,
             capture=capture.capture,
             log_info=getattr(logger, "info", lambda *_args: None),

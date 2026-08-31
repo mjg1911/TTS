@@ -58,17 +58,22 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
         item.action(None, item)
 
     assert [command.kind for command in commands] == [
-        CommandKind.CONFIGURE_VOICE,
-        CommandKind.SHOW_LAST_TEXT,
+        CommandKind.CONFIGURE_SETTINGS,
         CommandKind.STOP_REQUEST,
         CommandKind.REPLAY_REQUEST,
-        CommandKind.CONFIGURE_HOTKEY,
-        CommandKind.CONFIGURE_PITCH,
-            CommandKind.CONFIGURE_SPEED,
-            CommandKind.TOGGLE_CODEX,
-            CommandKind.TOGGLE_ERROR_SOUNDS,
+        CommandKind.TOGGLE_CODEX,
+        CommandKind.TOGGLE_ERROR_SOUNDS,
         CommandKind.OPEN_LOG,
         CommandKind.EXIT,
+    ]
+    assert [item.text for item in tray._icon.menu.items] == [
+        "Settings",
+        "Stop speaking",
+        "Replay",
+        "Enable Codex",
+        "Error sounds",
+        "Open log",
+        "Exit",
     ]
 
 
@@ -169,6 +174,7 @@ class FakeUi:
         self.events = events
         self.root = FakeRoot(events)
         self.statuses = []
+        self.settings_apply = None
 
     def choose_voice_model(self):
         return None
@@ -178,6 +184,13 @@ class FakeUi:
 
     def show_last_text(self, _text):
         pass
+
+    def open_settings(self, snapshot, on_apply):
+        self.events.append(("settings.open", snapshot))
+        self.settings_apply = on_apply
+
+    def update_settings_last_text(self, text):
+        self.events.append(("settings.last_text", text))
 
     def prompt_pitch(self, _current):
         return None
@@ -385,6 +398,49 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
     assert events[-2:] == ["quit", "destroy"]
     assert tray.events == ["start", "stop"]
     assert ("after", 0) in events
+
+
+def test_tray_settings_opens_only_when_main_thread_pump_handles_command(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+    controller_holder = []
+    original_controller = app.Controller
+    tray_enqueue = []
+
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: controller_holder.append(
+            original_controller(*args, **kwargs)
+        )
+        or controller_holder[-1],
+    )
+    monkeypatch.setattr(
+        app,
+        "TrayIcon",
+        lambda _path, enqueue: tray_enqueue.append(enqueue) or tray,
+    )
+
+    def mainloop():
+        ui.root.callbacks.pop(0)()
+        tray_enqueue[0](Command(CommandKind.CONFIGURE_SETTINGS))
+        assert not any(
+            event[0] == "settings.open"
+            for event in ui.events
+            if isinstance(event, tuple)
+        )
+        ui.root.callbacks.pop(0)()
+        assert any(
+            event[0] == "settings.open"
+            for event in ui.events
+            if isinstance(event, tuple)
+        )
+        tray_enqueue[0](Command(CommandKind.EXIT))
+        ui.root.callbacks.pop(0)()
+
+    ui.root.mainloop = mainloop
+
+    assert app.run_app([]) == 0
 
 
 def test_run_app_debug_forces_debug_logging_and_console(monkeypatch) -> None:
