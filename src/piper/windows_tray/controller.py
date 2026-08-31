@@ -775,6 +775,7 @@ class Controller:
             command.kind is CommandKind.CAPTURE_SUCCEEDED
             and result.status is CaptureStatus.SUCCESS
             and result.text is not None
+            and result.text.strip()
         ):
             previous_text = self.state.last_text
             self.state.last_text = result.text

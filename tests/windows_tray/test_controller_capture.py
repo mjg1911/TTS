@@ -150,6 +150,51 @@ def test_new_settings_snapshot_includes_current_last_text():
     assert controller.settings_window_snapshot().last_text == "current text"
 
 
+@pytest.mark.parametrize("text", ["", " \t\n"])
+def test_successful_empty_capture_does_not_replace_last_text_or_refresh_settings(text):
+    updates = []
+    controller = Controller(capture_submit=lambda _job: None)
+    controller.configure_runtime(update_settings_last_text=updates.append)
+    controller.state.last_text = "previous text"
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_SUCCEEDED,
+            CaptureCompletion(
+                generation,
+                CaptureResult(CaptureStatus.SUCCESS, text),
+            ),
+        )
+    )
+
+    assert controller.state.last_text == "previous text"
+    assert updates == []
+
+
+def test_successful_capture_with_unchanged_text_does_not_refresh_settings():
+    updates = []
+    controller = Controller(capture_submit=lambda _job: None)
+    controller.configure_runtime(update_settings_last_text=updates.append)
+    controller.state.last_text = "same text"
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    generation = controller.state.capture_generation
+    controller.handle(
+        Command(
+            CommandKind.CAPTURE_SUCCEEDED,
+            CaptureCompletion(
+                generation,
+                CaptureResult(CaptureStatus.SUCCESS, "same text"),
+            ),
+        )
+    )
+
+    assert controller.state.last_text == "same text"
+    assert updates == []
+
+
 def test_clipboard_access_failure_has_specific_recoverable_message():
     statuses = []
     worker = RecordingSpeechWorker()
