@@ -1,6 +1,8 @@
 """Prepare Codex answers for predictable speech."""
 
+import re
 from typing import List, Optional, Tuple
+from urllib.parse import urlsplit
 
 
 MAX_CODEX_SPEECH_CHARS = 6_000
@@ -55,13 +57,91 @@ def _without_closed_fenced_blocks(text: str) -> str:
     return "\n".join(output)
 
 
+def _replace_markdown_links(text: str) -> str:
+    """Replace balanced inline Markdown links with their visible labels."""
+    output = []
+    index = 0
+    while index < len(text):
+        if text[index] != "[" or (index > 0 and text[index - 1] == "!"):
+            output.append(text[index])
+            index += 1
+            continue
+
+        label_end = text.find("]", index + 1)
+        if label_end == -1 or label_end + 1 >= len(text) or text[label_end + 1] != "(":
+            output.append(text[index])
+            index += 1
+            continue
+
+        destination_end = label_end + 2
+        depth = 1
+        while destination_end < len(text) and depth:
+            if text[destination_end] == "(":
+                depth += 1
+            elif text[destination_end] == ")":
+                depth -= 1
+            destination_end += 1
+
+        if depth:
+            output.append(text[index])
+            index += 1
+            continue
+
+        output.append(text[index + 1 : label_end])
+        index = destination_end
+
+    return "".join(output)
+
+
+_BARE_URL_RE = re.compile(r"(?<![\w@])(?:https?://|www\.)[^\s<>\]]+")
+
+
+def _is_markdown_destination(text: str, start: int) -> bool:
+    """Keep Markdown destinations unchanged while scanning bare URLs."""
+    opener = text.rfind("](", 0, start)
+    return (
+        opener != -1
+        and text.rfind(")", opener + 2, start) == -1
+    )
+
+
+def _replace_bare_urls(text: str) -> str:
+    """Replace bare URLs with their host names."""
+    output = []
+    previous_end = 0
+    for match in _BARE_URL_RE.finditer(text):
+        output.append(text[previous_end : match.start()])
+        token = match.group(0).rstrip(".,!?;:")
+        while token.endswith(")") and token.count(")") > token.count("("):
+            token = token[:-1]
+        if _is_markdown_destination(text, match.start()):
+            output.append(match.group(0))
+        else:
+            parsed = urlsplit(token if "://" in token else "https://" + token)
+            host = parsed.hostname
+            if host is None:
+                output.append(match.group(0))
+            elif token.lower().startswith("www.") and not host.lower().startswith(
+                "www."
+            ):
+                output.append("www." + host)
+            else:
+                output.append(host)
+            output.append(match.group(0)[len(token) :])
+        previous_end = match.end()
+    output.append(text[previous_end:])
+    return "".join(output)
+
+
 def prepare_codex_speech(text: str) -> Optional[str]:
     normalized_newlines = text.replace("\r\n", "\n").replace("\r", "\n")
     without_code = _without_closed_fenced_blocks(normalized_newlines)
+    without_links = _replace_markdown_links(without_code)
+    without_urls = _replace_bare_urls(without_links)
     output = []
     previous_blank = False
-    for raw_line in without_code.split("\n"):
-        line = raw_line.strip()
+    for raw_line in without_urls.split("\n"):
+        line = re.sub(r"^#{1,6}\s+", "", raw_line.strip())
         blank = not line
         if blank and previous_blank:
             continue
