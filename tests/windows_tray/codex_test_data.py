@@ -5,8 +5,17 @@ def rollout_line(timestamp: str, record_type: str, payload: dict) -> bytes:
     return (json.dumps({"timestamp": timestamp, "type": record_type, "payload": payload}, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-def session_meta(conversation_id="conversation-1", *, timestamp="2026-08-31T10:00:00Z"):
-    return rollout_line(timestamp, "session_meta", {"id": conversation_id})
+def session_meta(
+    conversation_id="conversation-1",
+    *,
+    timestamp="2026-08-31T10:00:00Z",
+    thread_source="user",
+):
+    return rollout_line(
+        timestamp,
+        "session_meta",
+        {"id": conversation_id, "thread_source": thread_source},
+    )
 
 
 def turn_started(turn_id="turn-1", *, timestamp="2026-08-31T10:01:00Z", alias=False):

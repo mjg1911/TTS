@@ -39,6 +39,7 @@ class CodexRolloutParser:
         self._conversation_id: Optional[str] = None
         self._turn_id: Optional[str] = None
         self._final_text: Optional[str] = None
+        self._user_session = False
 
     def feed_line(self, line: bytes) -> Optional[CodexCompletedResponse]:
         try:
@@ -64,13 +65,18 @@ class CodexRolloutParser:
         if not conversation_id:
             raise UnsupportedCodexFormat("session_meta.id is empty")
         self._conversation_id = conversation_id
+        self._user_session = payload.get("thread_source") == "user"
 
     def _read_response_item(self, payload: object) -> None:
         if not isinstance(payload, dict):
             raise UnsupportedCodexFormat("response_item payload is unavailable")
         if payload.get("type") != "message" or payload.get("role") != "assistant":
             return
-        if payload.get("phase") != "final_answer" or self._turn_id is None:
+        if (
+            not self._user_session
+            or payload.get("phase") != "final_answer"
+            or self._turn_id is None
+        ):
             return
         content = payload.get("content")
         if not isinstance(content, list):

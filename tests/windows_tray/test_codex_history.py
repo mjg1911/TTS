@@ -28,6 +28,14 @@ def test_non_final_assistant_messages_are_never_emitted(phase):
     assert parser.feed_line(turn_complete()) is None
 
 
+def test_internal_agent_session_final_answer_is_never_emitted():
+    parser = CodexRolloutParser()
+    parser.feed_line(session_meta(thread_source="subagent"))
+    parser.feed_line(turn_started())
+    parser.feed_line(assistant_message("Risk level: high"))
+    assert parser.feed_line(turn_complete()) is None
+
+
 def test_aliases_and_multiple_output_text_parts_are_supported():
     parser = CodexRolloutParser()
     parser.feed_line(session_meta()); parser.feed_line(turn_started(alias=True))
