@@ -216,6 +216,26 @@ def test_apply_failure_keeps_window_open_and_renders_field_errors(monkeypatch):
     assert window.error_text("pitch").startswith("Pitch must")
 
 
+def test_apply_failure_renders_voice_error_in_voice_section(monkeypatch):
+    settings_window = install_fake_tk(monkeypatch, [])
+    result = SettingsApplyResult(
+        False,
+        (("voice", "The selected voice could not be loaded."),),
+    )
+    window = settings_window.SettingsWindow(
+        parent=object(),
+        snapshot=make_snapshot(),
+        on_apply=lambda *_args: result,
+        on_close=lambda: None,
+    )
+
+    window._apply()
+
+    assert window.window.exists is True
+    assert window.error_text("voice") == "The selected voice could not be loaded."
+    assert window.voice_error_label.kwargs["textvariable"] is window._error_vars["voice"]
+
+
 def test_apply_success_closes_window(monkeypatch):
     settings_window = install_fake_tk(monkeypatch, [])
     apply_calls = []

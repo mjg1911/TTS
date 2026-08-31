@@ -16,6 +16,39 @@ class FakeHotkeys:
         self.candidates.append(candidate)
         return self.results.pop(0) if self.results else True
 
+    def prepare_rebind(self, candidate):
+        self.candidates.append(candidate)
+        return self.results.pop(0) if self.results else True
+
+    def commit_rebind(self):
+        return True
+
+    def rollback_rebind(self):
+        return True
+
+
+class TransactionalFakeHotkeys(FakeHotkeys):
+    def __init__(self, prepare=True, commit=True, rollback=True):
+        super().__init__()
+        self.prepare_result = prepare
+        self.commit_result = commit
+        self.rollback_result = rollback
+        self.prepared = []
+        self.calls = []
+
+    def prepare_rebind(self, candidate):
+        self.calls.append("prepare")
+        self.prepared.append(candidate)
+        return self.prepare_result
+
+    def commit_rebind(self):
+        self.calls.append("commit")
+        return self.commit_result
+
+    def rollback_rebind(self):
+        self.calls.append("rollback")
+        return self.rollback_result
+
 
 def make_controller(settings=None, hotkeys=None, save_settings=None):
     return Controller(
@@ -111,13 +144,21 @@ def test_apply_settings_loads_voice_before_rebind_and_commits_after_save():
         load_voice=lambda reference: events.append(("load", reference))
         or (Path(reference), new_voice),
     )
-    original_rebind = hotkeys.rebind
+    original_prepare = hotkeys.prepare_rebind
 
-    def recording_rebind(candidate):
-        events.append(("rebind", candidate.canonical))
-        return original_rebind(candidate)
+    def recording_prepare(candidate):
+        events.append(("prepare", candidate.canonical))
+        return original_prepare(candidate)
 
-    hotkeys.rebind = recording_rebind
+    hotkeys.prepare_rebind = recording_prepare
+
+    original_commit = hotkeys.commit_rebind
+
+    def recording_commit():
+        events.append(("commit",))
+        return original_commit()
+
+    hotkeys.commit_rebind = recording_commit
 
     result = controller.apply_settings(
         hotkey="Ctrl + Q",
@@ -129,7 +170,13 @@ def test_apply_settings_loads_voice_before_rebind_and_commits_after_save():
     assert result.applied is True
     assert result.errors == ()
     assert result.snapshot == controller.settings_window_snapshot()
-    assert [event[0] for event in events] == ["load", "rebind", "save", "replace"]
+    assert [event[0] for event in events] == [
+        "load",
+        "prepare",
+        "save",
+        "commit",
+        "replace",
+    ]
     assert controller.state.settings == TraySettings(
         voice="new.onnx",
         hotkey="ctrl+q",
@@ -238,15 +285,14 @@ def test_save_failure_restores_old_hotkey_and_keeps_old_voice_and_settings():
     assert result.error_map() == {"general": "Piper settings could not be saved."}
     assert [candidate.canonical for candidate in hotkeys.candidates] == [
         "ctrl+q",
-        "alt+backtick",
     ]
     assert controller.state.settings == original
     assert controller.state.voice_path == Path("old.onnx")
     assert controller.state.voice is old_voice
 
 
-def test_save_failure_reports_when_old_hotkey_cannot_be_restored():
-    hotkeys = FakeHotkeys(results=[True, False])
+def test_save_failure_reports_when_pending_hotkey_cannot_be_removed():
+    hotkeys = TransactionalFakeHotkeys(rollback=False)
     errors = []
 
     def fail_save(_settings):
@@ -259,15 +305,51 @@ def test_save_failure_reports_when_old_hotkey_cannot_be_restored():
 
     assert result.applied is False
     assert result.error_map() == {
-        "general": (
-            "Piper settings could not be saved, and the previous hotkey "
-            "could not be restored."
-        )
+        "general": "Piper settings could not be saved."
     }
-    assert errors == [
-        "Could not save Piper settings: disk full",
-        "Could not restore the previous Piper hotkey",
+
+
+def test_save_failure_rolls_back_candidate_without_rebinding_old_hotkey():
+    original = TraySettings(voice="old.onnx", hotkey="alt+backtick")
+    saved = []
+    hotkeys = TransactionalFakeHotkeys()
+
+    def fail_save(_settings):
+        raise OSError("disk full")
+
+    controller = make_controller(
+        settings=original, hotkeys=hotkeys, save_settings=fail_save
+    )
+
+    result = controller.apply_settings("ctrl+q", "26", "0", None)
+
+    assert result.applied is False
+    assert hotkeys.calls == ["prepare", "rollback"]
+    assert controller.state.settings == original
+    assert saved == []
+
+
+def test_commit_failure_restores_old_settings_after_new_settings_were_saved():
+    original = TraySettings(voice="old.onnx", hotkey="alt+backtick")
+    saved = []
+    hotkeys = TransactionalFakeHotkeys(commit=False)
+
+    def record_save(settings):
+        saved.append(settings)
+
+    controller = make_controller(
+        settings=original, hotkeys=hotkeys, save_settings=record_save
+    )
+
+    result = controller.apply_settings("ctrl+q", "26", "0", None)
+
+    assert result.applied is False
+    assert hotkeys.calls == ["prepare", "commit", "rollback"]
+    assert saved == [
+        TraySettings(voice="old.onnx", hotkey="ctrl+q"),
+        original,
     ]
+    assert controller.state.settings == original
 
 
 def test_settings_window_snapshot_copies_committed_editor_state():

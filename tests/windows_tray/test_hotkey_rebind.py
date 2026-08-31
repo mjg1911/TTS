@@ -15,12 +15,32 @@ class FakeHotkeys:
         self.result = result
         self.results = list(results) if results is not None else None
         self.candidates = []
+        self.transaction_calls = []
 
     def rebind(self, candidate):
         self.candidates.append(candidate)
         if self.results is not None:
             return self.results.pop(0)
         return self.result
+
+    def prepare_rebind(self, candidate):
+        self.transaction_calls.append("prepare")
+        self.candidates.append(candidate)
+        if self.results is not None:
+            return self.results.pop(0)
+        return self.result
+
+    def commit_rebind(self):
+        self.transaction_calls.append("commit")
+        if self.results is not None:
+            return self.results.pop(0)
+        return self.result
+
+    def rollback_rebind(self):
+        self.transaction_calls.append("rollback")
+        if self.results is not None:
+            return self.results.pop(0)
+        return True
 
 
 class RecordingSpeechWorker:
@@ -91,11 +111,11 @@ def test_successful_rebind_persists_canonical_hotkey_after_registration():
     assert hotkeys.candidates[0].canonical == "ctrl+q"
 
 
-def test_failed_save_reports_unrecoverable_failure_when_rollback_rebind_fails():
+def test_failed_save_rolls_back_pending_hotkey_without_rebinding_old_hotkey():
     settings = TraySettings(hotkey="alt+backtick")
     notifications = []
     errors = []
-    hotkeys = FakeHotkeys(results=[True, False])
+    hotkeys = FakeHotkeys(results=[True, True])
 
     def fail_save(_settings):
         raise OSError("disk full")
@@ -113,15 +133,12 @@ def test_failed_save_reports_unrecoverable_failure_when_rollback_rebind_fails():
     assert controller.request_hotkey_change("ctrl+q") is False
 
     assert controller.state.settings == settings
-    assert [candidate.canonical for candidate in hotkeys.candidates] == [
-        "ctrl+q",
-        "alt+backtick",
-    ]
+    assert [candidate.canonical for candidate in hotkeys.candidates] == ["ctrl+q"]
+    assert hotkeys.transaction_calls == ["prepare", "rollback"]
     assert notifications[-1] == (
-        "Piper hotkey settings could not be saved, and the previous hotkey "
-        "could not be restored."
+        "Piper hotkey settings could not be saved."
     )
-    assert errors[-1] == "Could not restore the previous Piper hotkey"
+    assert errors == ["Could not save Piper hotkey settings: disk full"]
 
 
 def test_generationless_capture_success_is_ignored():

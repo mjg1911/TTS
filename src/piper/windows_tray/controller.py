@@ -955,38 +955,38 @@ class Controller:
             )
 
             hotkey_changed = candidate_hotkey.canonical != current.hotkey
-            if hotkey_changed and not self._hotkeys.rebind(candidate_hotkey):
+            hotkey_prepared = False
+            if hotkey_changed and not self._hotkeys.prepare_rebind(candidate_hotkey):
                 return SettingsApplyResult(
                     False,
                     (("hotkey", user_message(UserError.HOTKEY_CONFLICT)),),
                 )
+            hotkey_prepared = hotkey_changed
 
             try:
                 self._save_settings(next_settings)
             except (OSError, ValueError) as error:
                 self._log_error("Could not save Piper settings: %s" % error)
-                if hotkey_changed:
-                    try:
-                        restored = bool(
-                            self._hotkeys.rebind(parse_hotkey(current.hotkey))
-                        )
-                    except (OSError, ValueError):
-                        restored = False
-                    if not restored:
-                        self._log_error("Could not restore the previous Piper hotkey")
-                        return SettingsApplyResult(
-                            False,
-                            (
-                                (
-                                    "general",
-                                    "Piper settings could not be saved, and the "
-                                    "previous hotkey could not be restored.",
-                                ),
-                            ),
-                        )
+                if hotkey_prepared and not self._hotkeys.rollback_rebind():
+                    self._log_error("Could not remove the pending Piper hotkey")
                 return SettingsApplyResult(
                     False,
                     (("general", "Piper settings could not be saved."),),
+                )
+
+            if hotkey_prepared and not self._hotkeys.commit_rebind():
+                if not self._hotkeys.rollback_rebind():
+                    self._log_error("Could not remove the pending Piper hotkey")
+                try:
+                    self._save_settings(current)
+                except (OSError, ValueError) as error:
+                    self._log_error(
+                        "Could not restore Piper settings after hotkey commit failure: %s"
+                        % error
+                    )
+                return SettingsApplyResult(
+                    False,
+                    (("general", "Piper settings could not be applied."),),
                 )
 
             self.state.settings = next_settings
@@ -1075,7 +1075,7 @@ class Controller:
         if current is None or self._save_settings is None:
             self._show_status("Hotkey settings could not be saved.")
             return False
-        if not self._hotkeys.rebind(candidate):
+        if not self._hotkeys.prepare_rebind(candidate):
             self._report_runtime_error(UserError.HOTKEY_CONFLICT)
             return False
         next_settings = replace(current, hotkey=candidate.canonical)
@@ -1083,21 +1083,21 @@ class Controller:
             self._save_settings(next_settings)
         except (OSError, ValueError) as error:
             self._log_error("Could not save Piper hotkey settings: %s" % error)
-            rollback_succeeded = False
+            if not self._hotkeys.rollback_rebind():
+                self._log_error("Could not remove the pending Piper hotkey")
+            self._show_status("Piper hotkey settings could not be saved.")
+            return False
+        if not self._hotkeys.commit_rebind():
+            if not self._hotkeys.rollback_rebind():
+                self._log_error("Could not remove the pending Piper hotkey")
             try:
-                rollback_succeeded = bool(
-                    self._hotkeys.rebind(parse_hotkey(current.hotkey))
+                self._save_settings(current)
+            except (OSError, ValueError) as error:
+                self._log_error(
+                    "Could not restore Piper hotkey settings after commit failure: %s"
+                    % error
                 )
-            except (OSError, ValueError):
-                pass
-            if rollback_succeeded:
-                self._show_status("Piper hotkey settings could not be saved.")
-            else:
-                self._log_error("Could not restore the previous Piper hotkey")
-                self._show_status(
-                    "Piper hotkey settings could not be saved, and the previous "
-                    "hotkey could not be restored."
-                )
+            self._show_status("Piper hotkey settings could not be applied.")
             return False
         self.state.settings = next_settings
         return True

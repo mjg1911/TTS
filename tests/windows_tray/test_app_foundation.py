@@ -742,6 +742,16 @@ def test_hotkey_start_conflict_keeps_tray_alive_for_recovery(monkeypatch):
             self.start(candidate, **self.callbacks)
             return True
 
+        def prepare_rebind(self, candidate):
+            self.start(candidate, **self.callbacks)
+            return True
+
+        def commit_rebind(self):
+            return True
+
+        def rollback_rebind(self):
+            return True
+
         def stop(self):
             events.append("hotkeys.stop")
 

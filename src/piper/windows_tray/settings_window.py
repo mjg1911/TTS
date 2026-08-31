@@ -57,6 +57,12 @@ class SettingsWindow:
         voice_frame.columnconfigure(0, weight=1)
         self.voice_label = ttk.Label(voice_frame)
         self.voice_label.grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        self.voice_error_label = ttk.Label(
+            voice_frame, textvariable=self._error_vars["voice"]
+        )
+        self.voice_error_label.grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4)
+        )
         ttk.Button(
             voice_frame, text="Choose voice...", command=self._choose_voice
         ).grid(
