@@ -530,29 +530,48 @@ class Controller:
             return False
         if enabled:
             next_settings = replace(current, codex_enabled=True)
-            try:
-                if self._save_settings is None:
-                    raise OSError("settings persistence is not configured")
-                self._save_settings(next_settings)
-            except (OSError, ValueError) as error:
-                self._log_error(
-                    "Could not save Piper Codex settings error_type=%s"
-                    % type(error).__name__
-                )
-                self._show_status("Piper Codex settings could not be saved.")
-                return False
             self.state.settings = next_settings
             self._advance_codex_epoch()
             if self._codex_monitor is not None:
                 try:
                     self._codex_monitor.start()
                 except Exception as error:
+                    self.state.settings = current
+                    self._advance_codex_epoch()
+                    try:
+                        self._codex_monitor.stop()
+                    except Exception as stop_error:
+                        self._log_error(
+                            "Codex monitor rollback stop failed error_type=%s"
+                            % type(stop_error).__name__
+                        )
                     self._log_error(
                         "Codex monitor start failed error_type=%s"
                         % type(error).__name__
                     )
                     self._show_status("Codex monitoring could not be started.")
                     return False
+            try:
+                if self._save_settings is None:
+                    raise OSError("settings persistence is not configured")
+                self._save_settings(next_settings)
+            except (OSError, ValueError) as error:
+                self.state.settings = current
+                self._advance_codex_epoch()
+                if self._codex_monitor is not None:
+                    try:
+                        self._codex_monitor.stop()
+                    except Exception as stop_error:
+                        self._log_error(
+                            "Codex monitor rollback stop failed error_type=%s"
+                            % type(stop_error).__name__
+                        )
+                self._log_error(
+                    "Could not save Piper Codex settings error_type=%s"
+                    % type(error).__name__
+                )
+                self._show_status("Piper Codex settings could not be saved.")
+                return False
             return True
 
         self._advance_codex_epoch()
