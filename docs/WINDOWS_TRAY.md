@@ -44,9 +44,33 @@ enable Windows logon startup. It must not open a terminal or playback window.
 
 - Speak selected text: `Alt` + `backtick`.
 - Stop current speech: `F8`.
-- Tray actions: Voice settings, Show last text, Stop speaking, Replay,
-  Hotkey settings, Pitch settings, Speed settings, Error sounds, Open log,
-  Exit.
+- Tray actions: Settings, Stop speaking, Replay, Enable Codex, Error sounds,
+  Open log, Exit.
+
+## Settings window
+
+Choose `Settings` from the tray to open Piper's single settings window. Choosing
+`Settings` again while it is already open focuses the same window.
+
+The window contains:
+
+- Voice model: shows the current model and provides `Choose voice...`.
+- Last captured text: read-only and refreshed after each successful capture.
+- Hotkey settings: edits the capture hotkey.
+- Pitch settings: accepts `-50%` through `100%`.
+- Speed settings: accepts `-50%` through `100%`.
+
+`Save/Apply` validates the editable settings together. A changed voice is loaded
+before Piper commits it. The candidate hotkey is registered and the complete
+settings object is saved before the new runtime settings are committed. If
+validation, voice loading, hotkey registration, or saving fails, the window
+stays open and the previous known-good settings remain active.
+
+`Cancel` closes the window without applying edits. Last captured text is
+informational only and is never stored in `settings.json`.
+
+Changes apply to subsequent speech requests. Applying settings does not alter
+speech that is already playing.
 
 ## Pitch settings
 
