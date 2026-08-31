@@ -1,10 +1,12 @@
 from pathlib import Path
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import messagebox, simpledialog
 from typing import Optional
 
 from .settings import validate_pitch_percent, validate_speed_percent
+from .settings_window import SettingsWindow, choose_voice_model
+from .controller import SettingsWindowSnapshot
 
 
 class TkUi:
@@ -12,6 +14,7 @@ class TkUi:
         self.root = tk.Tk()
         self.root.withdraw()
         self._thread_id = threading.get_ident()
+        self._settings_window: Optional[SettingsWindow] = None
 
     def _assert_main_thread(self) -> None:
         if threading.get_ident() != self._thread_id:
@@ -19,12 +22,33 @@ class TkUi:
 
     def choose_voice_model(self) -> Optional[Path]:
         self._assert_main_thread()
-        selected = filedialog.askopenfilename(
+        return choose_voice_model(self.root)
+
+    def open_settings(
+        self,
+        snapshot: SettingsWindowSnapshot,
+        on_apply,
+    ) -> None:
+        self._assert_main_thread()
+        current = self._settings_window
+        if current is not None:
+            current.focus()
+            return
+
+        def cleared() -> None:
+            self._settings_window = None
+
+        self._settings_window = SettingsWindow(
             parent=self.root,
-            title="Choose Piper voice model",
-            filetypes=[("Piper ONNX model", "*.onnx")],
+            snapshot=snapshot,
+            on_apply=on_apply,
+            on_close=cleared,
         )
-        return Path(selected) if selected else None
+
+    def update_settings_last_text(self, text: Optional[str]) -> None:
+        self._assert_main_thread()
+        if self._settings_window is not None:
+            self._settings_window.update_last_text(text)
 
     def show_status(self, message: str) -> None:
         self._assert_main_thread()
@@ -91,4 +115,7 @@ class TkUi:
 
     def close(self) -> None:
         self._assert_main_thread()
+        if self._settings_window is not None:
+            self._settings_window.close()
+            self._settings_window = None
         self.root.destroy()
