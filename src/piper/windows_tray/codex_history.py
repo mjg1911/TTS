@@ -64,6 +64,8 @@ class CodexRolloutParser:
         conversation_id = payload["id"].strip()
         if not conversation_id:
             raise UnsupportedCodexFormat("session_meta.id is empty")
+        if self._conversation_id is not None:
+            return
         self._conversation_id = conversation_id
         self._user_session = payload.get("thread_source") == "user"
 

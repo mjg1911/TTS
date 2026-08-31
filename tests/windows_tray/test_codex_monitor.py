@@ -8,6 +8,8 @@ from piper.windows_tray.codex_history import CodexResponseId
 from piper.windows_tray.codex_monitor import CodexMonitor, CodexMonitorStatus, MAX_JSONL_LINE_BYTES, codex_sessions_dir
 from .codex_test_data import assistant_message, rollout_line, session_meta, turn_complete, turn_records, turn_started
 
+BASELINE_WINDOW_BYTES = 4 * 1024 * 1024
+
 
 def _write_complete_turn(path: Path, conversation: str, turn: str, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -159,11 +161,62 @@ def test_unsupported_shape_reports_once(tmp_path):
 
 class _TrackingFile:
     def __init__(self, raw, seeks):
-        self._raw = raw; self._seeks = seeks
+        self._raw = raw; self._seeks = seeks; self.read_bytes = 0
     def __enter__(self): self._raw.__enter__(); return self
     def __exit__(self, exc_type, exc, tb): return self._raw.__exit__(exc_type, exc, tb)
     def seek(self, offset, whence=0): self._seeks.append((offset, whence)); return self._raw.seek(offset, whence)
+    def readline(self, *args):
+        line = self._raw.readline(*args)
+        self.read_bytes += len(line)
+        return line
     def __getattr__(self, name): return getattr(self._raw, name)
+
+
+def test_baseline_reads_only_a_bounded_tail_of_large_history(tmp_path, monkeypatch):
+    rollout = tmp_path / "sessions" / "rollout.jsonl"; rollout.parent.mkdir()
+    history = session_meta() + b"".join(turn_records(f"old-{index}", "old", completion_timestamp="2026-08-31T10:01:03Z") for index in range(BASELINE_WINDOW_BYTES // 400 + 10))
+    rollout.write_bytes(history)
+    opened = []
+    monitor = CodexMonitor(rollout.parent, lambda _: None, lambda _: None)
+
+    def open_tracking(path):
+        handle = _TrackingFile(path.open("rb"), [])
+        opened.append(handle)
+        return handle
+
+    monkeypatch.setattr(monitor, "_open_binary", open_tracking)
+    monitor._establish_baseline()
+
+    assert sum(handle.read_bytes for handle in opened) < rollout.stat().st_size
+    assert monitor._cursors[rollout].offset == rollout.stat().st_size
+
+
+def test_live_turn_start_in_baseline_tail_can_complete_afterward(tmp_path):
+    rollout = tmp_path / "sessions" / "rollout.jsonl"; rollout.parent.mkdir()
+    history = session_meta() + b"".join(turn_records(f"old-{index}", "old", completion_timestamp="2026-08-31T10:01:03Z") for index in range(BASELINE_WINDOW_BYTES // 400 + 10))
+    rollout.write_bytes(history + turn_started("turn-live"))
+    monitor = CodexMonitor(rollout.parent, lambda _: None, lambda _: None)
+    monitor._establish_baseline()
+    with rollout.open("ab") as handle:
+        handle.write(assistant_message("late answer")); handle.write(turn_complete("turn-live"))
+
+    response = monitor._poll_once()
+    assert response is not None and response.text == "late answer"
+
+
+def test_live_turn_start_at_tail_boundary_can_complete_afterward(tmp_path):
+    rollout = tmp_path / "sessions" / "rollout.jsonl"; rollout.parent.mkdir()
+    live_start = turn_started("turn-boundary")
+    padding_size = BASELINE_WINDOW_BYTES - len(live_start)
+    padding = b"{}\n" * (padding_size // 3) + b"\n" * (padding_size % 3)
+    rollout.write_bytes(session_meta() + live_start + padding)
+    monitor = CodexMonitor(rollout.parent, lambda _: None, lambda _: None)
+    monitor._establish_baseline()
+    with rollout.open("ab") as handle:
+        handle.write(assistant_message("boundary answer")); handle.write(turn_complete("turn-boundary"))
+
+    response = monitor._poll_once()
+    assert response is not None and response.text == "boundary answer"
 
 
 def test_incremental_poll_seeks_to_baseline_offset_not_file_start(tmp_path, monkeypatch):
@@ -187,6 +240,29 @@ def test_stop_invalidates_in_flight_delivery(tmp_path, monkeypatch):
     monitor.start(); assert entered.wait(1); before = monitor._lifecycle_generation
     stopper = threading.Thread(target=monitor.stop); stopper.start(); _wait_until(lambda: monitor._lifecycle_generation > before); release.set(); stopper.join(1)
     assert delivered == []
+
+
+def test_start_rejects_new_generation_while_timed_out_stop_thread_is_alive(tmp_path, monkeypatch):
+    sessions = tmp_path / "sessions"; sessions.mkdir()
+    entered = threading.Event(); release = threading.Event()
+    monitor = CodexMonitor(sessions, lambda _: None, lambda _: None, poll_interval_seconds=0.01)
+
+    def blocked_poll():
+        entered.set(); release.wait(1); return None
+
+    monkeypatch.setattr(monitor, "_poll_once", blocked_poll)
+    monkeypatch.setattr("piper.windows_tray.codex_monitor.STOP_JOIN_TIMEOUT_SECONDS", 0.01)
+    monitor.start()
+    assert entered.wait(1)
+
+    monitor.stop()
+    assert monitor.running is True
+    assert monitor.start() is False
+
+    release.set()
+    _wait_until(lambda: not monitor.running)
+    assert monitor.start() is True
+    monitor.stop()
 
 
 def test_permission_error_recovers_with_status(tmp_path, monkeypatch):

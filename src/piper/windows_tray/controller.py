@@ -311,7 +311,9 @@ class Controller:
             return False
         self._advance_codex_epoch()
         try:
-            self._codex_monitor.start()
+            start_result = self._codex_monitor.start()
+            if start_result is False:
+                raise RuntimeError("Codex monitor rejected start")
         except Exception as error:
             self._log_error(
                 "Codex monitor start failed error_type=%s" % type(error).__name__
@@ -534,7 +536,9 @@ class Controller:
             self._advance_codex_epoch()
             if self._codex_monitor is not None:
                 try:
-                    self._codex_monitor.start()
+                    start_result = self._codex_monitor.start()
+                    if start_result is False:
+                        raise RuntimeError("Codex monitor rejected start")
                 except Exception as error:
                     self.state.settings = current
                     self._advance_codex_epoch()

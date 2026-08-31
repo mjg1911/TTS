@@ -36,6 +36,36 @@ def test_internal_agent_session_final_answer_is_never_emitted():
     assert parser.feed_line(turn_complete()) is None
 
 
+@pytest.mark.parametrize(
+    ("metadata_records", "expected_response_id"),
+    [
+        (
+            [session_meta("root-conversation", thread_source="user"), session_meta("agent-conversation", thread_source="subagent")],
+            CodexResponseId("root-conversation", "turn-1"),
+        ),
+        (
+            [session_meta("root-conversation", thread_source="subagent"), session_meta("user-conversation", thread_source="user")],
+            None,
+        ),
+    ],
+)
+def test_first_valid_session_metadata_controls_response_identity_and_filtering(metadata_records, expected_response_id):
+    parser = CodexRolloutParser()
+    for record in metadata_records:
+        parser.feed_line(record)
+    parser.feed_line(turn_started())
+    parser.feed_line(assistant_message("root response"))
+
+    response = parser.feed_line(turn_complete())
+
+    if expected_response_id is None:
+        assert response is None
+    else:
+        assert response is not None
+        assert response.response_id == expected_response_id
+        assert response.text == "root response"
+
+
 def test_aliases_and_multiple_output_text_parts_are_supported():
     parser = CodexRolloutParser()
     parser.feed_line(session_meta()); parser.feed_line(turn_started(alias=True))

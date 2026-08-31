@@ -9,6 +9,7 @@ from .codex_history import CodexCompletedResponse, CodexResponseId, CodexRollout
 
 POLL_INTERVAL_SECONDS = 0.5
 MAX_JSONL_LINE_BYTES = 1_048_576
+BASELINE_TAIL_BYTES = 4 * 1024 * 1024
 STOP_JOIN_TIMEOUT_SECONDS = 1.0
 
 
@@ -103,6 +104,24 @@ class CodexMonitor:
         cursors: Dict[Path, _FileCursor] = {}
         for path in paths:
             cursor = _FileCursor(self._identity(path), 0, CodexRolloutParser())
+            with self._open_binary(path) as handle:
+                file_size = path.stat().st_size
+                # The parser needs the session id even when the rest of the
+                # historical prefix is intentionally omitted from baseline.
+                handle.seek(0)
+                session_line = handle.readline(MAX_JSONL_LINE_BYTES + 1)
+                if session_line.endswith(b"\n") and len(session_line) <= MAX_JSONL_LINE_BYTES:
+                    cursor.parser.feed_line(session_line)
+                cursor.offset = max(0, file_size - BASELINE_TAIL_BYTES)
+                if cursor.offset:
+                    handle.seek(cursor.offset - 1)
+                    if handle.read(1) != b"\n":
+                        # The parser must start on a record boundary so a turn
+                        # start in the tail can carry parser state across the
+                        # baseline, but an exact boundary is already aligned.
+                        handle.seek(cursor.offset)
+                        handle.readline(MAX_JSONL_LINE_BYTES + 1)
+                        cursor.offset = handle.tell()
             self._read_from_cursor(path, cursor)
             cursors[path] = cursor
         self._cursors = cursors
@@ -141,10 +160,10 @@ class CodexMonitor:
         self._status = status
         self._on_status(status)
 
-    def start(self) -> None:
+    def start(self) -> bool:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
-                return
+                return False
             self._lifecycle_generation += 1
             generation = self._lifecycle_generation
             self._rebaseline_version += 1
@@ -154,6 +173,7 @@ class CodexMonitor:
             self._wake.clear()
             self._thread = threading.Thread(target=self._run, args=(generation,), name="piper-codex-monitor", daemon=True)
             self._thread.start()
+            return self._thread.is_alive()
 
     def stop(self) -> None:
         with self._lock:

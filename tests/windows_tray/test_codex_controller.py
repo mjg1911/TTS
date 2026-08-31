@@ -29,6 +29,12 @@ class FailingStartMonitor(FakeMonitor):
         raise OSError("monitor start failed")
 
 
+class RejectedStartMonitor(FakeMonitor):
+    def start(self):
+        self.start_calls += 1
+        return False
+
+
 class FakeWorker:
     def __init__(self):
         self.submitted = []
@@ -138,6 +144,22 @@ def test_enabled_monitor_start_is_gated_and_epoch_tagged():
 
 def test_failed_codex_monitor_start_does_not_enable_codex():
     monitor = FailingStartMonitor()
+    saved = []
+    controller = Controller(
+        settings=TraySettings(codex_enabled=False),
+        save_settings=saved.append,
+    )
+    controller.configure_runtime(codex_monitor=monitor)
+
+    controller.handle(Command(CommandKind.TOGGLE_CODEX))
+
+    assert controller.state.settings.codex_enabled is False
+    assert saved == []
+    assert monitor.start_calls == 1
+
+
+def test_rejected_codex_monitor_start_does_not_enable_codex():
+    monitor = RejectedStartMonitor()
     saved = []
     controller = Controller(
         settings=TraySettings(codex_enabled=False),
