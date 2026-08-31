@@ -56,7 +56,9 @@ class SettingsWindow:
         voice_frame.columnconfigure(0, weight=1)
         self.voice_label = ttk.Label(voice_frame)
         self.voice_label.grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        ttk.Button(voice_frame, text="Choose voice...", command=self._choose_voice).grid(
+        ttk.Button(
+            voice_frame, text="Choose voice...", command=self._choose_voice
+        ).grid(
             row=0, column=1, padx=6, pady=4
         )
         self._set_voice_label(snapshot.voice_path)
@@ -84,14 +86,18 @@ class SettingsWindow:
         )
         buttons = ttk.Frame(self.window)
         buttons.grid(row=6, column=0, sticky="e", padx=8, pady=8)
-        ttk.Button(buttons, text="Save/Apply", command=self._apply).pack(side="left", padx=4)
+        ttk.Button(buttons, text="Save/Apply", command=self._apply).pack(
+            side="left", padx=4
+        )
         ttk.Button(buttons, text="Cancel", command=self.close).pack(side="left", padx=4)
 
     def _build_percent_section(self, title, row, variable, error_var, suffix):
         frame = ttk.LabelFrame(self.window, text=title)
         frame.grid(row=row, column=0, sticky="ew", padx=8, pady=4)
         frame.columnconfigure(0, weight=1)
-        ttk.Entry(frame, textvariable=variable).grid(row=0, column=0, sticky="ew", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=variable).grid(
+            row=0, column=0, sticky="ew", padx=6, pady=4
+        )
         if suffix:
             ttk.Label(frame, text=suffix).grid(row=0, column=1, padx=(0, 6), pady=4)
         ttk.Label(frame, textvariable=error_var).grid(

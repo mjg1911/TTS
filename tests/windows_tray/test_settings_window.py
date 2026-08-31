@@ -186,7 +186,10 @@ def test_apply_failure_keeps_window_open_and_renders_field_errors(monkeypatch):
         ),
     )
     window = settings_window.SettingsWindow(
-        parent=object(), snapshot=make_snapshot(), on_apply=lambda *_args: result, on_close=lambda: None
+        parent=object(),
+        snapshot=make_snapshot(),
+        on_apply=lambda *_args: result,
+        on_close=lambda: None,
     )
 
     window._apply()
@@ -220,7 +223,10 @@ def test_cancel_discards_local_edits_without_calling_apply(monkeypatch):
     settings_window = install_fake_tk(monkeypatch, [])
     apply_calls = []
     window = settings_window.SettingsWindow(
-        parent=object(), snapshot=make_snapshot(), on_apply=lambda *args: apply_calls.append(args), on_close=lambda: None
+        parent=object(),
+        snapshot=make_snapshot(),
+        on_apply=lambda *args: apply_calls.append(args),
+        on_close=lambda: None,
     )
     window.hotkey_var.set("ctrl+q")
     window.pending_voice_path = Path("new.onnx")
@@ -235,7 +241,10 @@ def test_cancel_discards_local_edits_without_calling_apply(monkeypatch):
 def test_update_last_text_keeps_text_read_only_and_refreshes_value(monkeypatch):
     settings_window = install_fake_tk(monkeypatch, [])
     window = settings_window.SettingsWindow(
-        parent=object(), snapshot=make_snapshot(), on_apply=lambda *_args: SettingsApplyResult(True), on_close=lambda: None
+        parent=object(),
+        snapshot=make_snapshot(),
+        on_apply=lambda *_args: SettingsApplyResult(True),
+        on_close=lambda: None,
     )
 
     window.update_last_text(None)
@@ -250,7 +259,10 @@ def test_choose_voice_only_stages_selected_path(monkeypatch):
     selected = Path("new.onnx")
     monkeypatch.setattr(settings_window, "choose_voice_model", lambda parent: selected)
     window = settings_window.SettingsWindow(
-        parent=object(), snapshot=make_snapshot(), on_apply=lambda *_args: SettingsApplyResult(True), on_close=lambda: None
+        parent=object(),
+        snapshot=make_snapshot(),
+        on_apply=lambda *_args: SettingsApplyResult(True),
+        on_close=lambda: None,
     )
 
     window._choose_voice()

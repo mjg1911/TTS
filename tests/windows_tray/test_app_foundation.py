@@ -52,7 +52,15 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr(tray_icon, "_load_dependencies", lambda: (FakePystray, FakeImageApi))
 
     commands = []
-    tray = tray_icon.TrayIcon(tmp_path / "icon.png", commands.append)
+    snapshot = SimpleNamespace(
+        can_stop=False,
+        can_replay=True,
+        codex_enabled=True,
+        error_sounds_enabled=False,
+    )
+    tray = tray_icon.TrayIcon(
+        tmp_path / "icon.png", commands.append, lambda: snapshot
+    )
     tray.start()
     for item in tray._icon.menu.items:
         item.action(None, item)
@@ -75,6 +83,11 @@ def test_tray_menu_callbacks_only_enqueue_commands(monkeypatch, tmp_path: Path) 
         "Open log",
         "Exit",
     ]
+    items = {item.text: item for item in tray._icon.menu.items}
+    assert items["Stop speaking"].enabled(None) is False
+    assert items["Replay"].enabled(None) is True
+    assert items["Enable Codex"].checked(None) is True
+    assert items["Error sounds"].checked(None) is False
 
 
 def test_tray_start_and_stop_delegate_to_pystray(monkeypatch, tmp_path: Path) -> None:

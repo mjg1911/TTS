@@ -301,7 +301,9 @@ def run_app(
                 snapshot,
                 controller.apply_settings,
             ),
-            update_settings_last_text=ui.update_settings_last_text,
+            update_settings_last_text=getattr(
+                ui, "update_settings_last_text", lambda _text: None
+            ),
             ensure_tray_visible=tray.ensure_visible,
             capture=capture.capture,
             log_info=getattr(logger, "info", lambda *_args: None),

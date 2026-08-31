@@ -166,9 +166,13 @@ def test_voice_load_failure_keeps_all_prior_state_and_skips_rebind_and_save():
     original = TraySettings(voice="old.onnx", hotkey="alt+backtick")
     hotkeys = FakeHotkeys()
     saved = []
-    controller = make_controller(settings=original, hotkeys=hotkeys, save_settings=saved.append)
+    controller = make_controller(
+        settings=original, hotkeys=hotkeys, save_settings=saved.append
+    )
     controller.set_voice(Path("old.onnx"), object())
-    controller.configure_runtime(load_voice=lambda _reference: (_ for _ in ()).throw(OSError("bad model")))
+    controller.configure_runtime(
+        load_voice=lambda _reference: (_ for _ in ()).throw(OSError("bad model"))
+    )
 
     result = controller.apply_settings("ctrl+q", "26", "0", Path("new.onnx"))
 
@@ -191,14 +195,20 @@ def test_hotkey_conflict_keeps_prior_settings_and_loaded_voice_uncommitted():
     new_voice = object()
     hotkeys = FakeHotkeys([False])
     saved = []
-    controller = make_controller(settings=original, hotkeys=hotkeys, save_settings=saved.append)
+    controller = make_controller(
+        settings=original, hotkeys=hotkeys, save_settings=saved.append
+    )
     controller.set_voice(Path("old.onnx"), old_voice)
-    controller.configure_runtime(load_voice=lambda _reference: (Path("new.onnx"), new_voice))
+    controller.configure_runtime(
+        load_voice=lambda _reference: (Path("new.onnx"), new_voice)
+    )
 
     result = controller.apply_settings("ctrl+q", "26", "0", Path("new.onnx"))
 
     assert result.applied is False
-    assert result.error_map() == {"hotkey": "That hotkey is already in use. Choose another combination."}
+    assert result.error_map() == {
+        "hotkey": "That hotkey is already in use. Choose another combination."
+    }
     assert controller.state.settings == original
     assert controller.state.voice_path == Path("old.onnx")
     assert controller.state.voice is old_voice
@@ -214,9 +224,13 @@ def test_save_failure_restores_old_hotkey_and_keeps_old_voice_and_settings():
     def fail_save(_settings):
         raise OSError("disk full")
 
-    controller = make_controller(settings=original, hotkeys=hotkeys, save_settings=fail_save)
+    controller = make_controller(
+        settings=original, hotkeys=hotkeys, save_settings=fail_save
+    )
     controller.set_voice(Path("old.onnx"), old_voice)
-    controller.configure_runtime(load_voice=lambda _reference: (Path("new.onnx"), new_voice))
+    controller.configure_runtime(
+        load_voice=lambda _reference: (Path("new.onnx"), new_voice)
+    )
 
     result = controller.apply_settings("ctrl+q", "26", "0", Path("new.onnx"))
 
