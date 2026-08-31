@@ -87,6 +87,13 @@ def test_spec_includes_tkinter_for_lazy_tray_ui_import() -> None:
     assert '"tkinter.simpledialog"' in text
 
 
+def test_spec_places_tcl_tk_data_where_pyinstaller_runtime_hook_expects_it() -> None:
+    text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
+
+    assert '"_tcl_data"' in text
+    assert '"_tk_data"' in text
+
+
 def test_spec_builds_one_file_executable() -> None:
     text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
     assert "COLLECT(" not in text
