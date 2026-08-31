@@ -79,6 +79,17 @@ def test_successful_replacement_submits_new_text_and_generation():
     assert worker.submitted == [SpeechRequest(1, "first"), SpeechRequest(3, "second")]
 
 
+def test_capture_speech_omits_double_hash_markers_without_mutating_captured_text():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker, capture_submit=lambda _job: None)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    capture_success(controller, 1, "## Heading ##")
+
+    assert controller.state.last_text == "## Heading ##"
+    assert worker.submitted == [SpeechRequest(1, "Heading")]
+
+
 def test_failed_replacement_leaves_old_text_stopped_without_replay():
     worker = FakeSpeechWorker()
     controller = Controller(speech_worker=worker, capture_submit=lambda _job: None)
@@ -119,6 +130,17 @@ def test_replay_resubmits_last_text_without_mutating_it():
     assert worker.submitted == [SpeechRequest(1, "saved")]
 
 
+def test_replay_omits_double_hash_markers():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker)
+    controller.state.last_text = "## Saved heading"
+
+    controller.handle(Command(CommandKind.REPLAY_REQUEST))
+
+    assert controller.state.last_text == "## Saved heading"
+    assert worker.submitted == [SpeechRequest(1, "Saved heading")]
+
+
 def test_replay_is_ignored_while_capture_is_in_progress():
     worker = FakeSpeechWorker()
     controller = Controller(speech_worker=worker, capture_submit=lambda _job: None)
@@ -144,6 +166,15 @@ def test_manual_text_speaks_without_replacing_last_text():
     assert controller.state.last_text == "captured"
     assert controller.state.playback is PlaybackState.SPEAKING
     assert worker.submitted == [SpeechRequest(1, "edited\ntext")]
+
+
+def test_manual_text_omits_double_hash_markers():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker)
+
+    controller.speak_manual_text("## Manual heading")
+
+    assert worker.submitted == [SpeechRequest(1, "Manual heading")]
 
 
 def test_manual_text_ignores_empty_or_whitespace_only_text():
