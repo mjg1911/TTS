@@ -142,8 +142,10 @@ def prepare_codex_speech(text: str) -> Optional[str]:
     previous_blank = False
     for raw_line in without_urls.split("\n"):
         line = raw_line.strip()
+        line = re.sub(r"^\*{2}(?=#{1,6}\s+)", "", line)
         line = re.sub(r"(?<!\S)#{1,6}(?:\s+|$)", "", line)
         line = re.sub(r"\s+#{1,6}(?=\s|$)", "", line).strip()
+        line = re.sub(r"\*{2}$", "", line).strip()
         blank = not line
         if blank and previous_blank:
             continue
