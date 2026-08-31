@@ -44,6 +44,7 @@ class TkUi:
             on_apply=on_apply,
             on_close=cleared,
         )
+        self._settings_window.focus()
 
     def update_settings_last_text(self, text: Optional[str]) -> None:
         self._assert_main_thread()

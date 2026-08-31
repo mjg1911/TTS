@@ -25,7 +25,8 @@ class SettingsWindow:
     ) -> None:
         self.window = tk.Toplevel(parent)
         self.window.title("Piper Settings")
-        self.window.transient(parent)
+        if getattr(parent, "state", lambda: None)() != "withdrawn":
+            self.window.transient(parent)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
         self._on_apply = on_apply

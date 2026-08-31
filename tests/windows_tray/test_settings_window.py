@@ -176,6 +176,23 @@ def test_window_builds_all_five_sections_with_initial_values(monkeypatch):
     assert window.last_text.configured["state"] == "disabled"
 
 
+def test_window_does_not_become_transient_of_a_withdrawn_root(monkeypatch):
+    settings_window = install_fake_tk(monkeypatch, [])
+
+    class WithdrawnRoot(FakeWidget):
+        def state(self):
+            return "withdrawn"
+
+    window = settings_window.SettingsWindow(
+        parent=WithdrawnRoot(),
+        snapshot=make_snapshot(),
+        on_apply=lambda *_args: SettingsApplyResult(True),
+        on_close=lambda: None,
+    )
+
+    assert not hasattr(window.window, "transient_parent")
+
+
 def test_apply_failure_keeps_window_open_and_renders_field_errors(monkeypatch):
     settings_window = install_fake_tk(monkeypatch, [])
     result = SettingsApplyResult(
@@ -303,7 +320,33 @@ def test_tk_ui_repeated_open_focuses_existing_window(monkeypatch):
     ui.open_settings(make_snapshot(), lambda *_args: SettingsApplyResult(True))
 
     assert len(created) == 1
-    assert first.focus_calls == 1
+    assert first.focus_calls == 2
+
+
+def test_tk_ui_first_open_makes_settings_window_visible(monkeypatch):
+    import piper.windows_tray.ui as ui_module
+
+    created = []
+
+    class RecordingWindow:
+        def __init__(self, **kwargs):
+            self.on_close = kwargs["on_close"]
+            self.focus_calls = 0
+            created.append(self)
+
+        def focus(self):
+            self.focus_calls += 1
+
+    monkeypatch.setattr(ui_module, "SettingsWindow", RecordingWindow)
+    ui = object.__new__(ui_module.TkUi)
+    ui.root = object()
+    ui._thread_id = __import__("threading").get_ident()
+    ui._settings_window = None
+
+    ui.open_settings(make_snapshot(), lambda *_args: SettingsApplyResult(True))
+
+    assert len(created) == 1
+    assert created[0].focus_calls == 1
 
 
 def test_tk_ui_reopens_after_close_and_forwards_last_text(monkeypatch):
