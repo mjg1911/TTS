@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from piper.windows_tray.codex_history import CodexRolloutParser, CodexResponseId, UnsupportedCodexFormat
-from tests.windows_tray.codex_test_data import assistant_message, rollout_line, session_meta, turn_complete, turn_started
+from .codex_test_data import assistant_message, rollout_line, session_meta, turn_complete, turn_started
 
 
 def test_final_answer_is_emitted_only_after_matching_turn_completion():

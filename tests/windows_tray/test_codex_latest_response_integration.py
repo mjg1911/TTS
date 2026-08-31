@@ -8,7 +8,7 @@ from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.controller import Controller, PlaybackState
 from piper.windows_tray.settings import TraySettings
 from piper.windows_tray.speech import SpeechPurpose
-from tests.windows_tray.codex_test_data import session_meta, turn_records
+from .codex_test_data import session_meta, turn_records
 
 
 class FakeSpeechWorker:

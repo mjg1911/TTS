@@ -6,7 +6,7 @@ import pytest
 
 from piper.windows_tray.codex_history import CodexResponseId
 from piper.windows_tray.codex_monitor import CodexMonitor, CodexMonitorStatus, MAX_JSONL_LINE_BYTES, codex_sessions_dir
-from tests.windows_tray.codex_test_data import assistant_message, rollout_line, session_meta, turn_complete, turn_records, turn_started
+from .codex_test_data import assistant_message, rollout_line, session_meta, turn_complete, turn_records, turn_started
 
 
 def _write_complete_turn(path: Path, conversation: str, turn: str, text: str) -> None:
