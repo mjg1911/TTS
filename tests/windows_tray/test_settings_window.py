@@ -158,6 +158,7 @@ def test_window_builds_all_five_sections_with_initial_values(monkeypatch):
         snapshot=snapshot,
         on_apply=lambda *_args: SettingsApplyResult(True),
         on_close=lambda: None,
+        on_speak_text=lambda _text: None,
     )
 
     assert [frame.text for frame in built_frames] == [
@@ -173,7 +174,7 @@ def test_window_builds_all_five_sections_with_initial_values(monkeypatch):
     assert window.pending_voice_path is None
     assert window.displayed_voice_path == Path("C:/voices/alba.onnx")
     assert window.last_text_value == "hello world"
-    assert window.last_text.configured["state"] == "disabled"
+    assert window.last_text.configured["state"] == "normal"
 
 
 def test_window_does_not_become_transient_of_a_withdrawn_root(monkeypatch):
@@ -188,6 +189,7 @@ def test_window_does_not_become_transient_of_a_withdrawn_root(monkeypatch):
         snapshot=make_snapshot(),
         on_apply=lambda *_args: SettingsApplyResult(True),
         on_close=lambda: None,
+        on_speak_text=lambda _text: None,
     )
 
     assert not hasattr(window.window, "transient_parent")
@@ -207,6 +209,7 @@ def test_apply_failure_keeps_window_open_and_renders_field_errors(monkeypatch):
         snapshot=make_snapshot(),
         on_apply=lambda *_args: result,
         on_close=lambda: None,
+        on_speak_text=lambda _text: None,
     )
 
     window._apply()
@@ -227,6 +230,7 @@ def test_apply_failure_renders_voice_error_in_voice_section(monkeypatch):
         snapshot=make_snapshot(),
         on_apply=lambda *_args: result,
         on_close=lambda: None,
+        on_speak_text=lambda _text: None,
     )
 
     window._apply()
@@ -244,6 +248,7 @@ def test_apply_success_closes_window(monkeypatch):
         snapshot=make_snapshot(),
         on_apply=lambda *args: apply_calls.append(args) or SettingsApplyResult(True),
         on_close=lambda: None,
+        on_speak_text=lambda _text: None,
     )
     window.hotkey_var.set("ctrl+q")
     window.pitch_var.set("-10")
@@ -264,6 +269,7 @@ def test_cancel_discards_local_edits_without_calling_apply(monkeypatch):
         snapshot=make_snapshot(),
         on_apply=lambda *args: apply_calls.append(args),
         on_close=lambda: None,
+        on_speak_text=lambda _text: None,
     )
     window.hotkey_var.set("ctrl+q")
     window.pending_voice_path = Path("new.onnx")
@@ -275,20 +281,27 @@ def test_cancel_discards_local_edits_without_calling_apply(monkeypatch):
     assert window.window.exists is False
 
 
-def test_update_last_text_keeps_text_read_only_and_refreshes_value(monkeypatch):
+def test_update_last_text_keeps_text_editable_and_refreshes_value(monkeypatch):
     settings_window = install_fake_tk(monkeypatch, [])
     window = settings_window.SettingsWindow(
         parent=object(),
         snapshot=make_snapshot(),
         on_apply=lambda *_args: SettingsApplyResult(True),
         on_close=lambda: None,
+        on_speak_text=lambda _text: None,
     )
+
+    window.update_last_text("captured\ntext")
+
+    assert window.last_text_value == "captured\ntext"
+    assert window.last_text.value == "captured\ntext"
+    assert window.last_text.configured["state"] == "normal"
 
     window.update_last_text(None)
 
     assert window.last_text_value is None
     assert window.last_text.value == "No text has been captured yet."
-    assert window.last_text.configured["state"] == "disabled"
+    assert window.last_text.configured["state"] == "normal"
 
 
 def test_choose_voice_only_stages_selected_path(monkeypatch):
@@ -300,6 +313,7 @@ def test_choose_voice_only_stages_selected_path(monkeypatch):
         snapshot=make_snapshot(),
         on_apply=lambda *_args: SettingsApplyResult(True),
         on_close=lambda: None,
+        on_speak_text=lambda _text: None,
     )
 
     window._choose_voice()
@@ -307,6 +321,40 @@ def test_choose_voice_only_stages_selected_path(monkeypatch):
     assert window.pending_voice_path == selected
     assert window.displayed_voice_path == Path("C:/voices/alba.onnx")
     assert window.voice_label.configured["text"] == str(selected)
+
+
+def test_speak_text_forwards_exact_multiline_contents(monkeypatch):
+    settings_window = install_fake_tk(monkeypatch, [])
+    spoken = []
+    window = settings_window.SettingsWindow(
+        parent=object(),
+        snapshot=make_snapshot(),
+        on_apply=lambda *_args: SettingsApplyResult(True),
+        on_close=lambda: None,
+        on_speak_text=spoken.append,
+    )
+    window.last_text.value = "First line\nSecond line  "
+
+    window._speak_text()
+
+    assert spoken == ["First line\nSecond line  "]
+
+
+def test_speak_text_ignores_whitespace_only_contents(monkeypatch):
+    settings_window = install_fake_tk(monkeypatch, [])
+    spoken = []
+    window = settings_window.SettingsWindow(
+        parent=object(),
+        snapshot=make_snapshot(),
+        on_apply=lambda *_args: SettingsApplyResult(True),
+        on_close=lambda: None,
+        on_speak_text=spoken.append,
+    )
+    window.last_text.value = " \n\t"
+
+    window._speak_text()
+
+    assert spoken == []
 
 
 def test_tk_ui_repeated_open_focuses_existing_window(monkeypatch):

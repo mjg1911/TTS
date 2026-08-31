@@ -22,6 +22,7 @@ class SettingsWindow:
         snapshot: SettingsWindowSnapshot,
         on_apply: Callable[[str, str, str, Optional[Path]], SettingsApplyResult],
         on_close: Callable[[], None],
+        on_speak_text: Callable[[str], None],
     ) -> None:
         self.window = tk.Toplevel(parent)
         self.window.title("Piper Settings")
@@ -31,6 +32,7 @@ class SettingsWindow:
 
         self._on_apply = on_apply
         self._on_close = on_close
+        self._on_speak_text = on_speak_text
         self._closed = False
         self.pending_voice_path: Optional[Path] = None
         self.displayed_voice_path = snapshot.voice_path
@@ -74,6 +76,10 @@ class SettingsWindow:
         text_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
         self.last_text = tk.Text(text_frame, width=60, height=8, wrap="word")
         self.last_text.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        self.speak_text_button = ttk.Button(
+            text_frame, text="Speak text", command=self._speak_text
+        )
+        self.speak_text_button.grid(row=1, column=0, sticky="e", padx=6, pady=(0, 6))
         text_frame.columnconfigure(0, weight=1)
         text_frame.rowconfigure(0, weight=1)
         self.update_last_text(snapshot.last_text)
@@ -164,7 +170,12 @@ class SettingsWindow:
         self.last_text.configure(state="normal")
         self.last_text.delete("1.0", "end")
         self.last_text.insert("1.0", value)
-        self.last_text.configure(state="disabled")
+        self.last_text.configure(state="normal")
+
+    def _speak_text(self) -> None:
+        text = self.last_text.get("1.0", "end-1c")
+        if text.strip():
+            self._on_speak_text(text)
 
     def close(self) -> None:
         if self._closed:
