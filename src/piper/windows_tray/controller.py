@@ -8,6 +8,9 @@ import threading
 from typing import Callable, Optional, Tuple
 
 from .capture import CaptureResult, CaptureStatus
+from .codex_history import CodexCompletedResponse, CodexResponseId
+from .codex_monitor import CodexMonitorStatus
+from .codex_text import prepare_codex_speech
 from .commands import Command, CommandKind
 from .hotkey import parse_hotkey
 from .logging_setup import log_capture_result, log_exception_safe
@@ -58,6 +61,7 @@ class AppState:
     speech_generation: int = 0
     auxiliary_generation: int = 0
     auxiliary_active_generation: Optional[int] = None
+    auxiliary_active_purpose: Optional[SpeechPurpose] = None
     voice_generation: int = 0
     playback: PlaybackState = PlaybackState.IDLE
     shutting_down: bool = False
@@ -81,11 +85,24 @@ class CaptureCompletion:
 
 
 @dataclass(frozen=True)
+class CodexDelivery:
+    epoch: int
+    response: CodexCompletedResponse
+
+
+@dataclass(frozen=True)
+class CodexStatusDelivery:
+    epoch: int
+    status: object
+
+
+@dataclass(frozen=True)
 class TraySnapshot:
     can_stop: bool
     can_replay: bool
     has_last_text: bool
     error_sounds_enabled: bool
+    codex_enabled: bool
 
 
 def _start_daemon_job(job: Callable[[], None]) -> None:
@@ -126,11 +143,17 @@ class Controller:
         self._capture_invalidated_on_resume = False
         self._log_info: Callable[[str], None] = lambda _message: None
         self._show_last_text: Callable[[Optional[str]], None] = lambda _text: None
+        self._codex_diagnostic: Callable[[CodexResponseId, int, str], None] = (
+            lambda _response_id, _character_count, _outcome: None
+        )
         self._hotkeys = hotkeys
         self._choose_hotkey: Callable[[], Optional[str]] = lambda: None
         self._choose_pitch: Callable[[float], Optional[float]] = lambda _current: None
         self._choose_speed: Callable[[float], Optional[float]] = lambda _current: None
         self._speech_worker = speech_worker
+        self._codex_monitor = None
+        self._codex_epoch_lock = threading.Lock()
+        self._codex_monitor_epoch = 0
         self._capture_replaced_speech = False
         self._voice_manager = voice_manager
         self._state_lock = threading.RLock()
@@ -155,6 +178,8 @@ class Controller:
         choose_speed: Optional[Callable[[float], Optional[float]]] = None,
         speech_worker: Optional[object] = None,
         voice_manager: Optional[VoiceManager] = None,
+        codex_monitor: Optional[object] = None,
+        codex_diagnostic: Optional[Callable[[CodexResponseId, int, str], None]] = None,
     ) -> None:
         if choose_voice is not None:
             self._choose_voice = choose_voice
@@ -194,6 +219,20 @@ class Controller:
             self._voice_manager = voice_manager
         elif self._voice_manager is None and self.state.voice is not None and load_voice is not None:
             self._voice_manager = VoiceManager(self.state.voice, load_voice)
+        if codex_monitor is not None:
+            self._codex_monitor = codex_monitor
+        if codex_diagnostic is not None:
+            self._codex_diagnostic = codex_diagnostic
+
+    @property
+    def codex_monitor_epoch(self) -> int:
+        with self._codex_epoch_lock:
+            return self._codex_monitor_epoch
+
+    def _advance_codex_epoch(self) -> int:
+        with self._codex_epoch_lock:
+            self._codex_monitor_epoch += 1
+            return self._codex_monitor_epoch
 
     def set_voice(self, path: Path, voice: object) -> None:
         with self._state_lock:
@@ -240,11 +279,49 @@ class Controller:
                     if self.state.settings is not None
                     else False
                 ),
+                codex_enabled=(
+                    self.state.settings.codex_enabled
+                    if self.state.settings is not None
+                    else False
+                ),
             )
 
     def enqueue_worker_event(self, event: SpeechEvent) -> None:
         """Queue worker output; worker callbacks must not touch controller state."""
         self.enqueue(Command(CommandKind.WORKER_EVENT, event))
+
+    def enqueue_codex_response(self, response: CodexCompletedResponse) -> None:
+        with self._codex_epoch_lock:
+            epoch = self._codex_monitor_epoch
+        self.enqueue(Command(CommandKind.CODEX_RESPONSE, CodexDelivery(epoch, response)))
+
+    def enqueue_codex_status(self, status: object) -> None:
+        with self._codex_epoch_lock:
+            epoch = self._codex_monitor_epoch
+        self.enqueue(Command(CommandKind.CODEX_MONITOR_STATUS, CodexStatusDelivery(epoch, status)))
+
+    def start_configured_codex_monitoring(self) -> bool:
+        settings = self.state.settings
+        if (
+            settings is None
+            or not settings.codex_enabled
+            or self._codex_monitor is None
+            or self.state.shutting_down
+        ):
+            return False
+        self._advance_codex_epoch()
+        try:
+            self._codex_monitor.start()
+        except Exception as error:
+            self._log_error(
+                "Codex monitor start failed error_type=%s" % type(error).__name__
+            )
+            self._show_status("Codex monitoring could not be started.")
+            return False
+        return True
+
+    def _record_codex_outcome(self, response: CodexCompletedResponse, outcome: str) -> None:
+        self._codex_diagnostic(response.response_id, len(response.text), outcome)
 
     def announce_ready(self) -> None:
         if self.state.shutting_down:
@@ -288,6 +365,8 @@ class Controller:
     def _handle(self, command: Command) -> None:
         if command.kind is CommandKind.ACTIVATE:
             self._show_status("Piper is already running.")
+        elif command.kind is CommandKind.TOGGLE_CODEX:
+            self._toggle_codex()
         elif command.kind is CommandKind.TOGGLE_ERROR_SOUNDS:
             self._toggle_error_sounds()
         elif command.kind is CommandKind.OPEN_LOG:
@@ -336,6 +415,10 @@ class Controller:
             self._replay()
         elif command.kind is CommandKind.WORKER_EVENT:
             self._handle_worker_event(command.value)
+        elif command.kind is CommandKind.CODEX_RESPONSE:
+            self._handle_codex_response(command.value)
+        elif command.kind is CommandKind.CODEX_MONITOR_STATUS:
+            self._handle_codex_status(command.value)
         elif command.kind in (
             CommandKind.VOICE_SWITCH_SUCCEEDED,
             CommandKind.VOICE_SWITCH_FAILED,
@@ -373,6 +456,131 @@ class Controller:
         self.state.settings = next_settings
         return True
 
+    def _toggle_codex(self) -> bool:
+        current = self.state.settings
+        if current is None:
+            self._show_status("Codex settings are not available.")
+            return False
+        return self._set_codex_enabled(not current.codex_enabled)
+
+    def _cancel_codex_speech(self) -> None:
+        cancel_codex = getattr(self._speech_worker, "cancel_codex", None)
+        if cancel_codex is not None:
+            cancel_codex()
+        if self.state.auxiliary_active_purpose is SpeechPurpose.CODEX:
+            self.state.auxiliary_active_purpose = None
+            self.state.auxiliary_active_generation = None
+
+    def _handle_codex_response(self, value: object) -> None:
+        if not isinstance(value, CodexDelivery):
+            return
+        settings = self.state.settings
+        if (
+            self.state.shutting_down
+            or settings is None
+            or not settings.codex_enabled
+            or value.epoch != self.codex_monitor_epoch
+        ):
+            return
+        if self.state.capture_in_progress or self.state.playback is PlaybackState.SPEAKING:
+            self._record_codex_outcome(value.response, "skipped_foreground")
+            return
+        text = prepare_codex_speech(value.response.text)
+        if text is None:
+            self._record_codex_outcome(value.response, "skipped_empty")
+            return
+        self.state.auxiliary_generation += 1
+        accepted = bool(
+            self._speech_worker is not None
+            and self._speech_worker.submit(
+                SpeechRequest(self.state.auxiliary_generation, text, SpeechPurpose.CODEX)
+            )
+        )
+        self._record_codex_outcome(
+            value.response,
+            "submitted" if accepted else "skipped_higher_priority",
+        )
+
+    def _handle_codex_status(self, value: object) -> None:
+        if not isinstance(value, CodexStatusDelivery):
+            return
+        settings = self.state.settings
+        if (
+            self.state.shutting_down
+            or settings is None
+            or not settings.codex_enabled
+            or value.epoch != self.codex_monitor_epoch
+        ):
+            return
+        status = value.status
+        status_name = getattr(status, "name", str(status))
+        self._log_info("codex_monitor status=%s" % status_name)
+        if status is CodexMonitorStatus.HISTORY_MISSING:
+            self._show_status(
+                "Codex history could not be found. Piper will keep trying while Enable Codex is on."
+            )
+        elif status is CodexMonitorStatus.UNSUPPORTED_FORMAT:
+            self._show_status(
+                "Codex monitoring is unavailable because this Codex history format is not supported."
+            )
+
+    def _set_codex_enabled(self, enabled: bool) -> bool:
+        current = self.state.settings
+        if current is None:
+            return False
+        if enabled:
+            next_settings = replace(current, codex_enabled=True)
+            try:
+                if self._save_settings is None:
+                    raise OSError("settings persistence is not configured")
+                self._save_settings(next_settings)
+            except (OSError, ValueError) as error:
+                self._log_error(
+                    "Could not save Piper Codex settings error_type=%s"
+                    % type(error).__name__
+                )
+                self._show_status("Piper Codex settings could not be saved.")
+                return False
+            self.state.settings = next_settings
+            self._advance_codex_epoch()
+            if self._codex_monitor is not None:
+                try:
+                    self._codex_monitor.start()
+                except Exception as error:
+                    self._log_error(
+                        "Codex monitor start failed error_type=%s"
+                        % type(error).__name__
+                    )
+                    self._show_status("Codex monitoring could not be started.")
+                    return False
+            return True
+
+        self._advance_codex_epoch()
+        if self._codex_monitor is not None:
+            try:
+                self._codex_monitor.stop()
+            except Exception as error:
+                self._log_error(
+                    "Codex monitor stop failed error_type=%s" % type(error).__name__
+                )
+        self._cancel_codex_speech()
+        next_settings = replace(current, codex_enabled=False)
+        self.state.settings = next_settings
+        try:
+            if self._save_settings is None:
+                raise OSError("settings persistence is not configured")
+            self._save_settings(next_settings)
+        except (OSError, ValueError) as error:
+            self._log_error(
+                "Could not save Piper Codex settings error_type=%s"
+                % type(error).__name__
+            )
+            self._show_status(
+                "Codex monitoring is off for this session, but Piper could not save the setting."
+            )
+            return False
+        return True
+
     def _recover_from_resume(self) -> None:
         if self.state.shutting_down:
             return
@@ -380,6 +588,7 @@ class Controller:
         if self._speech_worker is not None:
             self._speech_worker.cancel_auxiliary()
         self.state.auxiliary_active = False
+        self.state.auxiliary_active_purpose = None
 
         capture_invalidated = self.state.capture_in_progress
         if capture_invalidated:
@@ -395,6 +604,18 @@ class Controller:
 
             self.state.speech_generation += 1
             self.state.playback = PlaybackState.STOPPED
+
+        settings = self.state.settings
+        if settings is not None and settings.codex_enabled and self._codex_monitor is not None:
+            self._advance_codex_epoch()
+            self._cancel_codex_speech()
+            try:
+                self._codex_monitor.rebaseline()
+            except Exception as error:
+                self._log_error(
+                    "Codex monitor rebaseline failed error_type=%s"
+                    % type(error).__name__
+                )
 
         self._ensure_tray_visible()
 
@@ -421,6 +642,7 @@ class Controller:
         )
 
     def _request_capture(self) -> None:
+        self._cancel_codex_speech()
         if self.state.playback is PlaybackState.SPEAKING:
             self._stop_speech()
             self._capture_replaced_speech = True
@@ -501,7 +723,8 @@ class Controller:
     def _stop_speech(self) -> None:
         if self._speech_worker is not None:
             self._speech_worker.cancel_auxiliary()
-            self.state.auxiliary_active_generation = None
+        self.state.auxiliary_active_generation = None
+        self.state.auxiliary_active_purpose = None
         if self.state.playback is not PlaybackState.SPEAKING:
             return
         generation = self.state.speech_generation
@@ -568,8 +791,10 @@ class Controller:
         if event.purpose is not SpeechPurpose.FOREGROUND:
             if event.kind is SpeechEventKind.STARTED:
                 self.state.auxiliary_active_generation = event.generation
+                self.state.auxiliary_active_purpose = event.purpose
             elif (
                 event.generation == self.state.auxiliary_active_generation
+                and event.purpose is self.state.auxiliary_active_purpose
                 and event.kind in {
                     SpeechEventKind.FINISHED,
                     SpeechEventKind.CANCELLED,
@@ -577,6 +802,15 @@ class Controller:
                 }
             ):
                 self.state.auxiliary_active_generation = None
+                self.state.auxiliary_active_purpose = None
+            if event.purpose is SpeechPurpose.CODEX and event.kind is SpeechEventKind.FAILED:
+                self._show_status(
+                    user_message(
+                        UserError.SYNTHESIS
+                        if event.failure_phase == "synthesis"
+                        else UserError.PLAYBACK
+                    )
+                )
             return
         if event.generation != self.state.speech_generation:
             return
@@ -598,9 +832,11 @@ class Controller:
             return
 
         self.state.shutting_down = True
+        self._advance_codex_epoch()
         if self._speech_worker is not None:
             self._speech_worker.cancel_auxiliary()
         self.state.auxiliary_active = False
+        self.state.auxiliary_active_purpose = None
         if self.state.capture_in_progress:
             self.state.capture_generation += 1
             self.state.capture_in_progress = False

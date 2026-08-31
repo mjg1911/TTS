@@ -11,7 +11,12 @@ from .capture import SelectionCapture
 from .clipboard import Win32Clipboard
 from .hotkey import parse_hotkey
 from .hotkey_service import HotkeyManager
-from .logging_setup import configure_logging, log_exception_safe, log_path
+from .logging_setup import (
+    configure_logging,
+    log_codex_result,
+    log_exception_safe,
+    log_path,
+)
 from .lifecycle import TeardownCoordinator
 from .power_events import PowerBroadcastListener
 from .pitch_playback import create_playback_pipeline
@@ -21,6 +26,7 @@ from .settings import TraySettings, load_settings, save_settings
 from .single_instance import InstanceRole, SingleInstance
 from .tray_icon import TrayIcon
 from .voice_manager import VoiceManager
+from .codex_monitor import CodexMonitor, codex_sessions_dir
 
 
 def TkUi():
@@ -89,6 +95,8 @@ def run_app(
     speech_stopped = False
     power_listener = None
     power_stopped = False
+    codex_monitor = None
+    codex_stopped = False
     ui = None
     logger = None
 
@@ -146,6 +154,22 @@ def run_app(
             finally:
                 speech_stopped = True
 
+    def stop_codex() -> None:
+        nonlocal codex_stopped
+        if codex_monitor is not None and not codex_stopped:
+            try:
+                codex_monitor.stop()
+            except Exception as error:
+                if logger is not None:
+                    log_exception_safe(
+                        logger,
+                        "codex monitor stop failed",
+                        error,
+                        stage="shutdown",
+                    )
+            finally:
+                codex_stopped = True
+
     def stop_tray() -> None:
         nonlocal tray_stopped
         if tray is not None and not tray_stopped:
@@ -177,6 +201,7 @@ def run_app(
     teardown = TeardownCoordinator(
         stop_hotkeys=stop_hotkeys,
         stop_power=stop_power_listener,
+        stop_codex=stop_codex,
         stop_speech=stop_speech,
         stop_tray=stop_tray,
         close_instance=close_instance,
@@ -208,6 +233,11 @@ def run_app(
             settings = replace(settings, hotkey=DEFAULT_HOTKEY)
             capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
         controller = Controller(settings=settings, save_settings=save_settings)
+        codex_monitor = CodexMonitor(
+            codex_sessions_dir(),
+            controller.enqueue_codex_response,
+            controller.enqueue_codex_status,
+        )
 
         try:
             configured_path, configured_voice = _load_configured_voice(
@@ -280,7 +310,16 @@ def run_app(
             choose_speed=ui.prompt_speed,
             show_last_text=ui.show_last_text,
             request_teardown=teardown.run,
+            codex_monitor=codex_monitor,
+            codex_diagnostic=lambda response_id, character_count, outcome: log_codex_result(
+                logger,
+                conversation_id=response_id.conversation_id,
+                turn_id=response_id.turn_id,
+                character_count=character_count,
+                outcome=outcome,
+            ),
         )
+        controller.start_configured_codex_monitoring()
         hotkeys.set_failure_callback(
             lambda error: controller.enqueue(
                 Command(CommandKind.HOTKEY_FAILED, str(error))

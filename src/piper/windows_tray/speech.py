@@ -1,5 +1,7 @@
 """Background speech synthesis and playback coordination for the tray app."""
 
+from __future__ import annotations
+
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,6 +30,7 @@ class SpeechEventKind(Enum):
 class SpeechPurpose(Enum):
     FOREGROUND = auto()
     ERROR = auto()
+    CODEX = auto()
     WELCOME = auto()
 
 
@@ -62,6 +65,7 @@ class SpeechWorker:
         self._condition = threading.Condition()
         self._pending_foreground: Optional[SpeechRequest] = None
         self._pending_errors = deque()  # type: deque[SpeechRequest]
+        self._pending_codex: Optional[SpeechRequest] = None
         self._pending_welcome: Optional[SpeechRequest] = None
         self._active_request: Optional[SpeechRequest] = None
         self._active_cancel_event: Optional[threading.Event] = None
@@ -74,43 +78,73 @@ class SpeechWorker:
         )
         self._thread.start()
 
-    def submit(self, request: SpeechRequest) -> None:
+    def submit(self, request: SpeechRequest) -> bool:
         """Queue a request according to its speech purpose."""
-        cancel_auxiliary = False
+        cancel_active = False
         player = None
         cancel_event = None
 
         with self._condition:
             if self._shutdown:
-                return
+                return False
 
+            active_purpose = (
+                self._active_request.purpose
+                if self._active_request is not None
+                else None
+            )
             if request.purpose is SpeechPurpose.FOREGROUND:
                 self._pending_foreground = request
                 self._pending_errors.clear()
+                self._pending_codex = None
                 self._pending_welcome = None
-                cancel_auxiliary = (
-                    self._active_request is not None
-                    and self._active_request.purpose
-                    is not SpeechPurpose.FOREGROUND
+                cancel_active = (
+                    active_purpose is not None
+                    and active_purpose is not SpeechPurpose.FOREGROUND
                 )
-                if cancel_auxiliary:
-                    player = self._active_player
-                    cancel_event = self._active_cancel_event
             elif request.purpose is SpeechPurpose.ERROR:
                 self._pending_errors.append(request)
+                self._pending_codex = None
+                cancel_active = active_purpose in {
+                    SpeechPurpose.CODEX,
+                    SpeechPurpose.WELCOME,
+                }
+            elif request.purpose is SpeechPurpose.CODEX:
+                higher_pending = (
+                    self._pending_foreground is not None
+                    or bool(self._pending_errors)
+                )
+                higher_active = active_purpose in {
+                    SpeechPurpose.FOREGROUND,
+                    SpeechPurpose.ERROR,
+                }
+                if higher_pending or higher_active:
+                    return False
+                self._pending_codex = request
+                self._pending_welcome = None
+                cancel_active = active_purpose in {
+                    SpeechPurpose.CODEX,
+                    SpeechPurpose.WELCOME,
+                }
             else:
                 self._pending_welcome = request
 
+            if cancel_active:
+                player = self._active_player
+                cancel_event = self._active_cancel_event
             self._condition.notify()
 
-        if cancel_auxiliary:
-            if cancel_event is not None:
+        self._cancel_outside_condition(cancel_event, player)
+        return True
+
+    def _cancel_outside_condition(self, cancel_event, player) -> None:
+        if cancel_event is not None:
+            cancel_event.set()
+        if player is not None:
+            player.stop()
+        if cancel_event is not None:
+            with self._decision_boundary:
                 cancel_event.set()
-            if player is not None:
-                player.stop()
-            if cancel_event is not None:
-                with self._decision_boundary:
-                    cancel_event.set()
 
     def cancel_active(self, generation: int) -> None:
         """Cancel matching active work and discard a matching pending request."""
@@ -146,6 +180,7 @@ class SpeechWorker:
         cancel_event = None
         with self._condition:
             self._pending_errors.clear()
+            self._pending_codex = None
             self._pending_welcome = None
             active = self._active_request
             if (
@@ -156,13 +191,20 @@ class SpeechWorker:
             player = self._active_player
             cancel_event = self._active_cancel_event
 
-        if cancel_event is not None:
-            cancel_event.set()
-        if player is not None:
-            player.stop()
-        if cancel_event is not None:
-            with self._decision_boundary:
-                cancel_event.set()
+        self._cancel_outside_condition(cancel_event, player)
+
+    def cancel_codex(self) -> None:
+        """Cancel active and pending Codex speech only."""
+        player = None
+        cancel_event = None
+        with self._condition:
+            self._pending_codex = None
+            active = self._active_request
+            if active is None or active.purpose is not SpeechPurpose.CODEX:
+                return
+            player = self._active_player
+            cancel_event = self._active_cancel_event
+        self._cancel_outside_condition(cancel_event, player)
 
     def shutdown(self) -> None:
         """Stop active speech and wait briefly for the worker to finish."""
@@ -170,6 +212,7 @@ class SpeechWorker:
             self._shutdown = True
             self._pending_foreground = None
             self._pending_errors.clear()
+            self._pending_codex = None
             self._pending_welcome = None
             player = self._active_player
             cancel_event = self._active_cancel_event
@@ -216,6 +259,7 @@ class SpeechWorker:
         return (
             self._pending_foreground is not None
             or bool(self._pending_errors)
+            or self._pending_codex is not None
             or self._pending_welcome is not None
         )
 
@@ -227,6 +271,11 @@ class SpeechWorker:
 
         if self._pending_errors:
             return self._pending_errors.popleft()
+
+        if self._pending_codex is not None:
+            request = self._pending_codex
+            self._pending_codex = None
+            return request
 
         request = self._pending_welcome
         self._pending_welcome = None

@@ -6,6 +6,7 @@ from typing import Any, Optional
 class CommandKind(Enum):
     ACTIVATE = auto()
     CONFIGURE_VOICE = auto()
+    TOGGLE_CODEX = auto()
     TOGGLE_ERROR_SOUNDS = auto()
     OPEN_LOG = auto()
     EXIT = auto()
@@ -24,6 +25,8 @@ class CommandKind(Enum):
     VOICE_SWITCH_SUCCEEDED = auto()
     VOICE_SWITCH_FAILED = auto()
     SYSTEM_RESUME = auto()
+    CODEX_RESPONSE = auto()
+    CODEX_MONITOR_STATUS = auto()
 
 
 CommandValue = Any

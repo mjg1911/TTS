@@ -36,6 +36,27 @@ def test_missing_settings_use_safe_defaults(tmp_path: Path) -> None:
     assert result.source == "missing"
 
 
+def test_old_settings_default_codex_enabled_to_false(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path)
+    assert load_settings(path).settings.codex_enabled is False
+
+
+def test_codex_enabled_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    save_settings(TraySettings(codex_enabled=True), path)
+    assert load_settings(path).settings.codex_enabled is True
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", "false", [], {}])
+def test_invalid_codex_enabled_is_treated_as_corrupt(tmp_path: Path, value) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path, codex_enabled=value)
+    result = load_settings(path)
+    assert result.settings == TraySettings()
+    assert result.source == "corrupt"
+
+
 @pytest.mark.parametrize("value", [-50, -12.5, 0, 26, 100])
 def test_validate_pitch_percent_accepts_finite_values_inclusive(value) -> None:
     assert validate_pitch_percent(value) == float(value)
