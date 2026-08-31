@@ -66,6 +66,16 @@ def test_bare_urls_keep_the_host_and_drop_paths() -> None:
     assert prepare_codex_speech(text) == "Use www.google.com or docs.python.org"
 
 
+def test_markdown_heading_markers_are_not_spoken() -> None:
+    text = "# Installation\n## Advanced setup\n### Final notes"
+    assert prepare_codex_speech(text) == "Installation\nAdvanced setup\nFinal notes"
+
+
+def test_hashes_in_ordinary_text_are_preserved() -> None:
+    text = "Use issue #42 and the color #fff."
+    assert prepare_codex_speech(text) == text
+
+
 def test_images_and_malformed_links_are_preserved() -> None:
     image = "![diagram](https://example.com/diagram.png)"
     malformed = "Keep [this text](https://example.com"
