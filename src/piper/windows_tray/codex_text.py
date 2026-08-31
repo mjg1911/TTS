@@ -1,6 +1,8 @@
 """Prepare Codex answers for predictable speech."""
 
+import re
 from typing import List, Optional, Tuple
+from urllib.parse import urlsplit
 
 
 MAX_CODEX_SPEECH_CHARS = 6_000
@@ -91,13 +93,54 @@ def _replace_markdown_links(text: str) -> str:
     return "".join(output)
 
 
+_BARE_URL_RE = re.compile(r"(?<![\w@])(?:https?://|www\.)[^\s<>\]]+")
+
+
+def _is_markdown_destination(text: str, start: int) -> bool:
+    """Keep Markdown destinations unchanged while scanning bare URLs."""
+    opener = text.rfind("](", 0, start)
+    return (
+        opener != -1
+        and text.rfind(")", opener + 2, start) == -1
+    )
+
+
+def _replace_bare_urls(text: str) -> str:
+    """Replace bare URLs with their host names."""
+    output = []
+    previous_end = 0
+    for match in _BARE_URL_RE.finditer(text):
+        output.append(text[previous_end : match.start()])
+        token = match.group(0).rstrip(".,!?;:")
+        while token.endswith(")") and token.count(")") > token.count("("):
+            token = token[:-1]
+        if _is_markdown_destination(text, match.start()):
+            output.append(match.group(0))
+        else:
+            parsed = urlsplit(token if "://" in token else "https://" + token)
+            host = parsed.hostname
+            if host is None:
+                output.append(match.group(0))
+            elif token.lower().startswith("www.") and not host.lower().startswith(
+                "www."
+            ):
+                output.append("www." + host)
+            else:
+                output.append(host)
+            output.append(match.group(0)[len(token) :])
+        previous_end = match.end()
+    output.append(text[previous_end:])
+    return "".join(output)
+
+
 def prepare_codex_speech(text: str) -> Optional[str]:
     normalized_newlines = text.replace("\r\n", "\n").replace("\r", "\n")
     without_code = _without_closed_fenced_blocks(normalized_newlines)
     without_links = _replace_markdown_links(without_code)
+    without_urls = _replace_bare_urls(without_links)
     output = []
     previous_blank = False
-    for raw_line in without_links.split("\n"):
+    for raw_line in without_urls.split("\n"):
         line = raw_line.strip()
         blank = not line
         if blank and previous_blank:

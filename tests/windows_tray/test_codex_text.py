@@ -57,8 +57,13 @@ def test_empty_markdown_link_label_drops_destination_but_keeps_context() -> None
 
 
 def test_raw_urls_and_paths_remain_unchanged() -> None:
-    text = "Visit https://example.com or C:\\Projects\\Piper."
-    assert prepare_codex_speech(text) == text
+    text = "Visit https://example.com/a/very/long/path?tracking=true or C:\\Projects\\Piper."
+    assert prepare_codex_speech(text) == "Visit example.com or C:\\Projects\\Piper."
+
+
+def test_bare_urls_keep_the_host_and_drop_paths() -> None:
+    text = "Use www.google.com/search?q=piper or https://docs.python.org/3/library/"
+    assert prepare_codex_speech(text) == "Use www.google.com or docs.python.org"
 
 
 def test_images_and_malformed_links_are_preserved() -> None:
