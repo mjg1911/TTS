@@ -79,6 +79,17 @@ def test_successful_replacement_submits_new_text_and_generation():
     assert worker.submitted == [SpeechRequest(1, "first"), SpeechRequest(3, "second")]
 
 
+def test_capture_speech_omits_double_hash_markers_without_mutating_captured_text():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker, capture_submit=lambda _job: None)
+
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    capture_success(controller, 1, "## Heading ##")
+
+    assert controller.state.last_text == "## Heading ##"
+    assert worker.submitted == [SpeechRequest(1, "Heading")]
+
+
 def test_failed_replacement_leaves_old_text_stopped_without_replay():
     worker = FakeSpeechWorker()
     controller = Controller(speech_worker=worker, capture_submit=lambda _job: None)
@@ -119,6 +130,17 @@ def test_replay_resubmits_last_text_without_mutating_it():
     assert worker.submitted == [SpeechRequest(1, "saved")]
 
 
+def test_replay_omits_double_hash_markers():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker)
+    controller.state.last_text = "## Saved heading"
+
+    controller.handle(Command(CommandKind.REPLAY_REQUEST))
+
+    assert controller.state.last_text == "## Saved heading"
+    assert worker.submitted == [SpeechRequest(1, "Saved heading")]
+
+
 def test_replay_is_ignored_while_capture_is_in_progress():
     worker = FakeSpeechWorker()
     controller = Controller(speech_worker=worker, capture_submit=lambda _job: None)
@@ -132,6 +154,69 @@ def test_replay_is_ignored_while_capture_is_in_progress():
     assert controller.state.playback is PlaybackState.IDLE
     assert controller.tray_snapshot().can_replay is False
     assert worker.submitted == []
+
+
+def test_manual_text_speaks_without_replacing_last_text():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker)
+    controller.state.last_text = "captured"
+
+    controller.speak_manual_text("edited\ntext")
+
+    assert controller.state.last_text == "captured"
+    assert controller.state.playback is PlaybackState.SPEAKING
+    assert worker.submitted == [SpeechRequest(1, "edited\ntext")]
+
+
+def test_manual_text_omits_double_hash_markers():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker)
+
+    controller.speak_manual_text("## Manual heading")
+
+    assert worker.submitted == [SpeechRequest(1, "Manual heading")]
+
+
+def test_manual_text_ignores_empty_or_whitespace_only_text():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker)
+    controller.state.playback = PlaybackState.SPEAKING
+    controller.state.speech_generation = 4
+
+    controller.speak_manual_text(" \n\t")
+
+    assert controller.state.speech_generation == 4
+    assert controller.state.playback is PlaybackState.SPEAKING
+    assert worker.cancelled == []
+    assert worker.submitted == []
+
+
+def test_manual_text_interrupts_current_foreground_speech():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker)
+    controller.state.playback = PlaybackState.SPEAKING
+    controller.state.speech_generation = 4
+
+    controller.speak_manual_text("new text")
+
+    assert worker.cancelled == [4]
+    assert controller.state.speech_generation == 5
+    assert controller.state.playback is PlaybackState.SPEAKING
+    assert worker.submitted == [SpeechRequest(5, "new text")]
+
+
+def test_manual_text_is_ignored_during_capture_or_shutdown():
+    worker = FakeSpeechWorker()
+    controller = Controller(speech_worker=worker)
+    controller.state.capture_in_progress = True
+
+    controller.speak_manual_text("ignored during capture")
+    controller.state.capture_in_progress = False
+    controller.state.shutting_down = True
+    controller.speak_manual_text("ignored during shutdown")
+
+    assert worker.submitted == []
+    assert controller.state.speech_generation == 0
 
 
 def test_stale_worker_events_do_not_change_current_playback():

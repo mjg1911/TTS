@@ -777,16 +777,20 @@ class Controller:
             and result.text is not None
             and result.text.strip()
         ):
+            speech_text = prepare_codex_speech(result.text)
             previous_text = self.state.last_text
             self.state.last_text = result.text
             if self.state.last_text != previous_text:
                 self._update_settings_last_text(self.state.last_text)
+            if speech_text is None:
+                self.state.playback = PlaybackState.STOPPED
+                return
             self._capture_replaced_speech = False
             self.state.speech_generation += 1
             self.state.playback = PlaybackState.SPEAKING
             if self._speech_worker is not None:
                 self._speech_worker.submit(
-                    SpeechRequest(self.state.speech_generation, result.text)
+                    SpeechRequest(self.state.speech_generation, speech_text)
                 )
         else:
             if self._capture_replaced_speech:
@@ -849,6 +853,9 @@ class Controller:
             or self.state.last_text is None
         ):
             return
+        speech_text = prepare_codex_speech(self.state.last_text)
+        if speech_text is None:
+            return
         if self.state.playback is PlaybackState.SPEAKING:
             if self._speech_worker is not None:
                 self._speech_worker.cancel_active(self.state.speech_generation)
@@ -856,8 +863,37 @@ class Controller:
         self.state.playback = PlaybackState.SPEAKING
         if self._speech_worker is not None:
             self._speech_worker.submit(
-                SpeechRequest(self.state.speech_generation, self.state.last_text)
+                SpeechRequest(self.state.speech_generation, speech_text)
             )
+
+    def speak_manual_text(self, text: str) -> None:
+        with self._state_lock:
+            if (
+                self.state.shutting_down
+                or self.state.capture_in_progress
+                or not text.strip()
+            ):
+                return
+            speech_text = prepare_codex_speech(text)
+            if speech_text is None:
+                return
+
+            if self.state.playback is PlaybackState.SPEAKING:
+                if self._speech_worker is not None:
+                    self._speech_worker.cancel_active(
+                        self.state.speech_generation
+                    )
+
+            self.state.speech_generation += 1
+            self.state.playback = PlaybackState.SPEAKING
+
+            if self._speech_worker is not None:
+                self._speech_worker.submit(
+                    SpeechRequest(
+                        self.state.speech_generation,
+                        speech_text,
+                    )
+                )
 
     def settings_window_snapshot(self) -> Optional[SettingsWindowSnapshot]:
         with self._state_lock:

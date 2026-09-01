@@ -28,6 +28,7 @@ class TkUi:
         self,
         snapshot: SettingsWindowSnapshot,
         on_apply,
+        on_speak_text,
     ) -> None:
         self._assert_main_thread()
         current = self._settings_window
@@ -42,6 +43,7 @@ class TkUi:
             parent=self.root,
             snapshot=snapshot,
             on_apply=on_apply,
+            on_speak_text=on_speak_text,
             on_close=cleared,
         )
         self._settings_window.focus()
