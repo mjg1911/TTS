@@ -100,6 +100,85 @@ def make_worker(voice, events, played, entered):
     )
 
 
+def test_browser_is_rejected_while_foreground_or_error_is_active() -> None:
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=lambda _text: []
+    )
+    worker = make_worker(voice, [], [], threading.Event())
+    try:
+        with worker._condition:
+            worker._active_request = SpeechRequest(
+                1, "foreground", SpeechPurpose.FOREGROUND
+            )
+        assert worker.submit(SpeechRequest(2, "browser", SpeechPurpose.BROWSER)) is False
+        with worker._condition:
+            worker._active_request = SpeechRequest(3, "error", SpeechPurpose.ERROR)
+        assert worker.submit(SpeechRequest(4, "browser", SpeechPurpose.BROWSER)) is False
+    finally:
+        worker.shutdown()
+
+
+def test_browser_replaces_pending_welcome_and_codex() -> None:
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=lambda _text: []
+    )
+    worker = make_worker(voice, [], [], threading.Event())
+    try:
+        with worker._condition:
+            worker._active_request = SpeechRequest(0, "codex", SpeechPurpose.CODEX)
+        assert worker.submit(SpeechRequest(1, "welcome", SpeechPurpose.WELCOME))
+        assert worker.submit(SpeechRequest(2, "browser", SpeechPurpose.BROWSER))
+        with worker._condition:
+            assert worker._pending_browser.generation == 2
+            assert worker._pending_codex is None
+            assert worker._pending_welcome is None
+    finally:
+        worker.shutdown()
+
+
+def test_foreground_and_error_clear_pending_browser() -> None:
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=lambda _text: []
+    )
+    worker = make_worker(voice, [], [], threading.Event())
+    try:
+        with worker._condition:
+            worker._active_request = SpeechRequest(0, "codex", SpeechPurpose.CODEX)
+        assert worker.submit(SpeechRequest(1, "browser", SpeechPurpose.BROWSER))
+        assert worker.submit(SpeechRequest(2, "foreground", SpeechPurpose.FOREGROUND))
+        with worker._condition:
+            assert worker._pending_browser is None
+            worker._pending_foreground = None
+        assert worker.submit(SpeechRequest(3, "browser", SpeechPurpose.BROWSER))
+        assert worker.submit(SpeechRequest(4, "error", SpeechPurpose.ERROR))
+        with worker._condition:
+            assert worker._pending_browser is None
+    finally:
+        worker.shutdown()
+
+
+def test_cancel_browser_does_not_cancel_foreground_or_error() -> None:
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=lambda _text: []
+    )
+    worker = make_worker(voice, [], [], threading.Event())
+    try:
+        with worker._condition:
+            worker._active_request = SpeechRequest(
+                1, "foreground", SpeechPurpose.FOREGROUND
+            )
+        worker.cancel_browser()
+        with worker._condition:
+            assert worker._active_request.purpose is SpeechPurpose.FOREGROUND
+        with worker._condition:
+            worker._active_request = SpeechRequest(2, "error", SpeechPurpose.ERROR)
+        worker.cancel_browser()
+        with worker._condition:
+            assert worker._active_request.purpose is SpeechPurpose.ERROR
+    finally:
+        worker.shutdown()
+
+
 def test_multi_chunk_request_creates_one_playback_pipeline() -> None:
     events = []
     played = []

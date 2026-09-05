@@ -112,6 +112,7 @@ setup(
         "windows-tray": [
             "pystray>=0.19.5,<1",
             "Pillow>=10,<12",
+            "websockets>=15,<16",
         ],
         "windows-tray-build": [
             "pyinstaller>=6,<7",
