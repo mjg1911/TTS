@@ -114,6 +114,21 @@ def log_codex_status(logger: Logger, status: str) -> None:
     logger.info("codex_monitor status=%s", status)
 
 
+def log_browser_status(
+    logger: Logger,
+    *,
+    status: str,
+    queue_size: int,
+    outcome: Optional[str] = None,
+) -> None:
+    message = "browser_tts status=%s queue_size=%d"
+    args = [status, queue_size]
+    if outcome is not None:
+        message += " outcome=%s"
+        args.append(outcome)
+    logger.info(message, *args)
+
+
 def log_exception_safe(
     logger: Logger,
     event: str,
