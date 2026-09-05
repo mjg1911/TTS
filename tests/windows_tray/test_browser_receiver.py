@@ -3,7 +3,7 @@ import socket
 import time
 
 import pytest
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import Close, ConnectionClosedOK, ConnectionClosedError
 from websockets.sync.client import connect
 
 from piper.windows_tray.browser_protocol import (
@@ -165,3 +165,70 @@ def test_stop_releases_port_for_reuse():
     replacement = BrowserReceiver(lambda _message: None, lambda _status: None, port=port)
     replacement.start("b" * 43)
     replacement.stop()
+
+
+def test_clean_authenticated_disconnect_does_not_report_temporary_unavailability():
+    receiver = BrowserReceiver(lambda _message: None, lambda _status: None)
+    statuses = []
+    receiver._on_status = statuses.append
+
+    class CleanDisconnect:
+        def recv(self, **_kwargs):
+            if not hasattr(self, "authenticated"):
+                self.authenticated = True
+                return json.dumps(hello("a" * 43), separators=(",", ":"))
+            raise ConnectionClosedOK(Close(1000, ""), None)
+
+        def close(self, **_kwargs):
+            pass
+
+        def send(self, _message):
+            pass
+
+    receiver._token = "a" * 43
+    receiver._server = object()
+    receiver._handle_connection(CleanDisconnect())
+
+    assert BrowserReceiverStatus.TEMPORARILY_UNAVAILABLE not in statuses
+
+
+def test_unexpected_authenticated_disconnect_reports_temporary_unavailability():
+    receiver = BrowserReceiver(lambda _message: None, lambda _status: None)
+    statuses = []
+    receiver._on_status = statuses.append
+
+    class UnexpectedDisconnect:
+        def recv(self, **_kwargs):
+            if not hasattr(self, "authenticated"):
+                self.authenticated = True
+                return json.dumps(hello("a" * 43), separators=(",", ":"))
+            raise ConnectionClosedError(Close(1006, ""), None)
+
+        def close(self, **_kwargs):
+            pass
+
+        def send(self, _message):
+            pass
+
+    receiver._token = "a" * 43
+    receiver._server = object()
+    receiver._handle_connection(UnexpectedDisconnect())
+
+    assert BrowserReceiverStatus.TEMPORARILY_UNAVAILABLE in statuses
+
+
+def test_start_clears_token_and_restores_stopped_state_when_bind_fails(monkeypatch):
+    receiver = BrowserReceiver(lambda _message: None, lambda _status: None)
+
+    def fail_to_bind(*_args, **_kwargs):
+        raise OSError("address already in use")
+
+    monkeypatch.setattr("piper.windows_tray.browser_receiver.serve", fail_to_bind)
+
+    with pytest.raises(OSError, match="address already in use"):
+        receiver.start("a" * 43)
+
+    assert receiver._token is None
+    assert receiver._server is None
+    assert receiver._thread is None
+    assert receiver._stopping is True

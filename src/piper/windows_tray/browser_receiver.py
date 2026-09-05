@@ -65,17 +65,24 @@ class BrowserReceiver:
                 raise RuntimeError("browser receiver is already running")
             self._token = token
             self._stopping = False
-            server = serve(
-                self._handle_connection,
-                self._host,
-                self._port,
-                compression=None,
-                ping_interval=20,
-                ping_timeout=20,
-                close_timeout=2,
-                max_size=MAX_WIRE_MESSAGE_BYTES,
-                max_queue=8,
-            )
+            try:
+                server = serve(
+                    self._handle_connection,
+                    self._host,
+                    self._port,
+                    compression=None,
+                    ping_interval=20,
+                    ping_timeout=20,
+                    close_timeout=2,
+                    max_size=MAX_WIRE_MESSAGE_BYTES,
+                    max_queue=8,
+                )
+            except Exception:
+                self._token = None
+                self._server = None
+                self._thread = None
+                self._stopping = True
+                raise
             self._server = server
             self._thread = threading.Thread(
                 target=server.serve_forever,
@@ -147,7 +154,8 @@ class BrowserReceiver:
                     raw = websocket.recv()
                     self._record_message_or_raise(timestamps)
                     message = parse_client_message(raw)
-                except ConnectionClosed:
+                except ConnectionClosed as error:
+                    unexpected_disconnect = self._is_unexpected_disconnect(error)
                     return
                 except ProtocolVersionError:
                     unexpected_disconnect = False
@@ -166,7 +174,8 @@ class BrowserReceiver:
                 if isinstance(message, KeepaliveMessage):
                     continue
                 self._on_message(message)
-        except ConnectionClosed:
+        except ConnectionClosed as error:
+            unexpected_disconnect = self._is_unexpected_disconnect(error)
             return
         finally:
             with self._lock:
@@ -183,3 +192,7 @@ class BrowserReceiver:
         timestamps.append(now)
         if len(timestamps) > MAX_MESSAGES_PER_10_SECONDS:
             raise ProtocolError("browser message rate exceeded")
+
+    @staticmethod
+    def _is_unexpected_disconnect(error: ConnectionClosed) -> bool:
+        return getattr(getattr(error, "rcvd", None), "code", None) not in {1000, 1001}
