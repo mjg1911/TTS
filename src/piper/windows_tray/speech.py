@@ -30,6 +30,7 @@ class SpeechEventKind(Enum):
 class SpeechPurpose(Enum):
     FOREGROUND = auto()
     ERROR = auto()
+    BROWSER = auto()
     CODEX = auto()
     WELCOME = auto()
 
@@ -65,6 +66,7 @@ class SpeechWorker:
         self._condition = threading.Condition()
         self._pending_foreground: Optional[SpeechRequest] = None
         self._pending_errors = deque()  # type: deque[SpeechRequest]
+        self._pending_browser: Optional[SpeechRequest] = None
         self._pending_codex: Optional[SpeechRequest] = None
         self._pending_welcome: Optional[SpeechRequest] = None
         self._active_request: Optional[SpeechRequest] = None
@@ -96,6 +98,7 @@ class SpeechWorker:
             if request.purpose is SpeechPurpose.FOREGROUND:
                 self._pending_foreground = request
                 self._pending_errors.clear()
+                self._pending_browser = None
                 self._pending_codex = None
                 self._pending_welcome = None
                 cancel_active = (
@@ -104,7 +107,26 @@ class SpeechWorker:
                 )
             elif request.purpose is SpeechPurpose.ERROR:
                 self._pending_errors.append(request)
+                self._pending_browser = None
                 self._pending_codex = None
+                cancel_active = active_purpose in {
+                    SpeechPurpose.CODEX,
+                    SpeechPurpose.WELCOME,
+                }
+            elif request.purpose is SpeechPurpose.BROWSER:
+                higher_pending = (
+                    self._pending_foreground is not None
+                    or bool(self._pending_errors)
+                )
+                higher_active = active_purpose in {
+                    SpeechPurpose.FOREGROUND,
+                    SpeechPurpose.ERROR,
+                }
+                if higher_pending or higher_active:
+                    return False
+                self._pending_browser = request
+                self._pending_codex = None
+                self._pending_welcome = None
                 cancel_active = active_purpose in {
                     SpeechPurpose.CODEX,
                     SpeechPurpose.WELCOME,
@@ -113,10 +135,12 @@ class SpeechWorker:
                 higher_pending = (
                     self._pending_foreground is not None
                     or bool(self._pending_errors)
+                    or self._pending_browser is not None
                 )
                 higher_active = active_purpose in {
                     SpeechPurpose.FOREGROUND,
                     SpeechPurpose.ERROR,
+                    SpeechPurpose.BROWSER,
                 }
                 if higher_pending or higher_active:
                     return False
@@ -180,6 +204,7 @@ class SpeechWorker:
         cancel_event = None
         with self._condition:
             self._pending_errors.clear()
+            self._pending_browser = None
             self._pending_codex = None
             self._pending_welcome = None
             active = self._active_request
@@ -191,6 +216,19 @@ class SpeechWorker:
             player = self._active_player
             cancel_event = self._active_cancel_event
 
+        self._cancel_outside_condition(cancel_event, player)
+
+    def cancel_browser(self) -> None:
+        """Cancel active and pending browser speech only."""
+        player = None
+        cancel_event = None
+        with self._condition:
+            self._pending_browser = None
+            active = self._active_request
+            if active is None or active.purpose is not SpeechPurpose.BROWSER:
+                return
+            player = self._active_player
+            cancel_event = self._active_cancel_event
         self._cancel_outside_condition(cancel_event, player)
 
     def cancel_codex(self) -> None:
@@ -212,6 +250,7 @@ class SpeechWorker:
             self._shutdown = True
             self._pending_foreground = None
             self._pending_errors.clear()
+            self._pending_browser = None
             self._pending_codex = None
             self._pending_welcome = None
             player = self._active_player
@@ -259,6 +298,7 @@ class SpeechWorker:
         return (
             self._pending_foreground is not None
             or bool(self._pending_errors)
+            or self._pending_browser is not None
             or self._pending_codex is not None
             or self._pending_welcome is not None
         )
@@ -271,6 +311,11 @@ class SpeechWorker:
 
         if self._pending_errors:
             return self._pending_errors.popleft()
+
+        if self._pending_browser is not None:
+            request = self._pending_browser
+            self._pending_browser = None
+            return request
 
         if self._pending_codex is not None:
             request = self._pending_codex
