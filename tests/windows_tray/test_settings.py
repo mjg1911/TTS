@@ -42,6 +42,29 @@ def test_old_settings_default_codex_enabled_to_false(tmp_path: Path) -> None:
     assert load_settings(path).settings.codex_enabled is False
 
 
+def test_old_settings_default_browser_chatgpt_enabled_to_false(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path)
+    result = load_settings(path)
+    assert result.settings.browser_chatgpt_enabled is False
+    assert result.source == "loaded"
+
+
+def test_browser_chatgpt_enabled_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    save_settings(TraySettings(browser_chatgpt_enabled=True), path)
+    assert load_settings(path).settings.browser_chatgpt_enabled is True
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", "false", [], {}])
+def test_invalid_browser_chatgpt_enabled_is_corrupt(tmp_path: Path, value) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path, browser_chatgpt_enabled=value)
+    result = load_settings(path)
+    assert result.settings == TraySettings()
+    assert result.source == "corrupt"
+
+
 def test_codex_enabled_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     save_settings(TraySettings(codex_enabled=True), path)
