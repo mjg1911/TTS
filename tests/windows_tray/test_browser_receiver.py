@@ -3,7 +3,8 @@ import socket
 import time
 
 import pytest
-from websockets.exceptions import Close, ConnectionClosedOK, ConnectionClosedError
+from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
+from websockets.frames import Close
 from websockets.sync.client import connect
 
 from piper.windows_tray.browser_protocol import (
