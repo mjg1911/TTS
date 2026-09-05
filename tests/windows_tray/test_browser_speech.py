@@ -59,7 +59,7 @@ def test_sequence_gap_faults_current_response_and_clears_pending():
     coordinator = BrowserSpeechCoordinator(submitter)
     coordinator.enable()
     coordinator.handle_message(ResponseStartMessage("conv", "resp", 0))
-    coordinator.handle_message(SentenceMessage("conv", "resp", 0, "Active."))
+    coordinator.handle_message(SentenceMessage("conv", "resp", 0, "Act."))
     coordinator.handle_message(SentenceMessage("conv", "resp", 1, "Pending."))
     assert coordinator.handle_message(SentenceMessage("conv", "resp", 3, "Gap.")) is BrowserMessageOutcome.OUT_OF_ORDER
     assert coordinator.snapshot().queued_sentences == 0
@@ -163,3 +163,85 @@ def test_queue_overflow_drops_response_remainder_and_recovers_next_response():
     coordinator.handle_message(SentenceMessage("conv", "fresh", 0, "Fresh."))
     assert coordinator.snapshot().response_id == "fresh"
     assert coordinator.snapshot().overflowed is False
+
+
+def test_utf8_queue_byte_limit_counts_encoded_bytes():
+    coordinator = BrowserSpeechCoordinator(
+        FakeSubmitter(), max_sentences=10, max_bytes=4
+    )
+    coordinator.enable()
+    coordinator.handle_message(ResponseStartMessage("conv", "resp", 0))
+    coordinator.handle_message(SentenceMessage("conv", "resp", 0, "Act."))
+
+    assert coordinator.handle_message(
+        SentenceMessage(
+            "conv", "resp", 1, bytes((0xC3, 0xA9, 0xC3, 0xA9)).decode("utf-8")
+        )
+    ) is BrowserMessageOutcome.ACCEPTED
+    assert coordinator.snapshot().queued_bytes == 4
+    assert coordinator.handle_message(
+        SentenceMessage("conv", "resp", 2, "x")
+    ) is BrowserMessageOutcome.OVERFLOW
+
+
+def test_priority_interruption_clears_pending_but_keeps_active_sentence():
+    submitter = FakeSubmitter()
+    coordinator = BrowserSpeechCoordinator(submitter)
+    coordinator.enable()
+    coordinator.handle_message(ResponseStartMessage("conv", "resp", 0))
+    coordinator.handle_message(SentenceMessage("conv", "resp", 0, "Active."))
+    coordinator.handle_message(SentenceMessage("conv", "resp", 1, "Pending."))
+
+    coordinator.interrupt_for_higher_priority()
+
+    snapshot = coordinator.snapshot()
+    assert snapshot.active is True
+    assert snapshot.queued_sentences == 0
+
+
+def test_disable_clears_pending_but_leaves_active_sentence_for_worker_cancel():
+    submitter = FakeSubmitter()
+    coordinator = BrowserSpeechCoordinator(submitter)
+    coordinator.enable()
+    coordinator.handle_message(ResponseStartMessage("conv", "resp", 0))
+    coordinator.handle_message(SentenceMessage("conv", "resp", 0, "Active."))
+    coordinator.handle_message(SentenceMessage("conv", "resp", 1, "Pending."))
+
+    coordinator.disable()
+
+    snapshot = coordinator.snapshot()
+    assert snapshot.enabled is False
+    assert snapshot.active is True
+    assert snapshot.queued_sentences == 0
+
+
+def test_mismatched_terminal_event_does_not_advance_browser_queue():
+    submitter = FakeSubmitter()
+    coordinator = BrowserSpeechCoordinator(submitter)
+    coordinator.enable()
+    coordinator.handle_message(ResponseStartMessage("conv", "resp", 0))
+    coordinator.handle_message(SentenceMessage("conv", "resp", 0, "Active."))
+    coordinator.handle_message(SentenceMessage("conv", "resp", 1, "Pending."))
+    active_generation = submitter.requests[0].generation
+
+    coordinator.handle_speech_event(
+        SpeechEvent(
+            SpeechEventKind.FINISHED,
+            active_generation + 1,
+            purpose=SpeechPurpose.BROWSER,
+        )
+    )
+
+    assert [request.text for request in submitter.requests] == ["Active."]
+    assert coordinator.snapshot().active is True
+    coordinator.handle_speech_event(
+        SpeechEvent(
+            SpeechEventKind.CANCELLED,
+            active_generation,
+            purpose=SpeechPurpose.BROWSER,
+        )
+    )
+    assert [request.text for request in submitter.requests] == [
+        "Active.",
+        "Pending.",
+    ]
