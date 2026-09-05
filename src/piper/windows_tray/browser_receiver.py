@@ -10,7 +10,7 @@ from typing import Callable
 from uuid import uuid4
 
 from websockets.exceptions import ConnectionClosed
-from websockets.sync.server import Server, serve
+from websockets.sync.server import Server, ServerConnection, serve
 
 from .browser_protocol import (
     AUTH_TIMEOUT_SECONDS,
@@ -79,6 +79,7 @@ class BrowserReceiver:
         self._run_generation = 0
         self._server_generation: int | None = None
         self._client_owned = False
+        self._client_owner = None
         self._client_generation: int | None = None
         self._clients: dict[object, int] = {}
         self._client_threads: dict[object, threading.Thread] = {}
@@ -94,7 +95,7 @@ class BrowserReceiver:
             self._stopping = False
             try:
                 server = serve(
-                    self._handle_connection,
+                    self._make_connection_handler(generation),
                     self._host,
                     self._port,
                     compression=None,
@@ -104,6 +105,7 @@ class BrowserReceiver:
                     max_size=MAX_WIRE_MESSAGE_BYTES,
                     max_queue=8,
                     logger=_TRANSPORT_LOGGER,
+                    create_connection=self._make_connection_factory(generation),
                 )
             except Exception:
                 self._token = None
@@ -114,26 +116,27 @@ class BrowserReceiver:
                 raise
             self._server = server
             self._server_generation = generation
-            ready = threading.Event()
             self._thread = threading.Thread(
-                target=self._serve_forever,
-                args=(server, generation, ready),
+                target=server.serve_forever,
                 name="piper-browser-websocket",
                 daemon=True,
             )
             self._thread.start()
-            ready.wait(timeout=1)
             self._emit_status_locked(BrowserReceiverStatus.WAITING, generation=generation)
 
     def stop(self) -> None:
         with self._lock:
             self._stopping = True
             self._token = None
+            stop_generation = self._run_generation
             self._client_owned = False
+            self._client_owner = None
             self._client_generation = None
             server, thread = self._server, self._thread
             clients = list(self._clients)
             client_threads = list(self._client_threads.values())
+            self._clients.clear()
+            self._client_threads.clear()
             self._server = None
             self._thread = None
             self._server_generation = None
@@ -152,22 +155,39 @@ class BrowserReceiver:
                 if client_thread is not threading.current_thread():
                     client_thread.join(timeout=5)
             with self._lock:
-                self._emit_status_locked(BrowserReceiverStatus.DISABLED)
+                if stop_generation == self._run_generation and self._server is None:
+                    self._emit_status_locked(BrowserReceiverStatus.DISABLED)
 
-    def _handle_connection(self, websocket) -> None:
+    def _handle_connection(self, websocket, generation: int | None = None) -> None:
         with self._lock:
             if (
-                self._stopping
+                generation is not None
+                and self._clients.get(websocket) is None
+                and self._server_generation == generation
+                and self._server is not None
+                and not self._stopping
+            ):
+                self._clients[websocket] = generation
+                if self._client_owner is None:
+                    self._client_owner = websocket
+                    self._client_owned = True
+                    self._client_generation = generation
+            if (
+                generation is None
+                or self._stopping
                 or self._server is None
                 or self._server_generation is None
-                or self._client_owned
+                or self._server_generation != generation
+                or self._client_owner is not websocket
             ):
+                if (
+                    websocket in self._clients
+                    and self._clients[websocket] == generation
+                ):
+                    del self._clients[websocket]
+                    self._client_threads.pop(websocket, None)
                 websocket.close(code=1013, reason="browser receiver unavailable")
                 return
-            generation = self._server_generation
-            self._client_owned = True
-            self._client_generation = generation
-            self._clients[websocket] = generation
             self._client_threads[websocket] = threading.current_thread()
             token = self._token
 
@@ -213,6 +233,8 @@ class BrowserReceiver:
                     generation=generation,
                     require_running=True,
                 )
+                if not self._connection_is_active_locked(websocket, generation):
+                    return
                 websocket.send(hello_ack(self._server_instance_id))
 
             while True:
@@ -232,13 +254,32 @@ class BrowserReceiver:
                             generation=generation,
                             require_running=True,
                         )
+                        if authenticated:
+                            self._emit_status_locked(
+                                BrowserReceiverStatus.TEMPORARILY_UNAVAILABLE,
+                                generation=generation,
+                                require_running=True,
+                            )
                     websocket.close(code=1002, reason="unsupported protocol")
                     return
                 except ProtocolError:
+                    with self._lock:
+                        if authenticated:
+                            self._emit_status_locked(
+                                BrowserReceiverStatus.TEMPORARILY_UNAVAILABLE,
+                                generation=generation,
+                                require_running=True,
+                            )
                     websocket.close(code=1008, reason="invalid message")
                     return
 
                 if isinstance(message, HelloMessage):
+                    with self._lock:
+                        self._emit_status_locked(
+                            BrowserReceiverStatus.TEMPORARILY_UNAVAILABLE,
+                            generation=generation,
+                            require_running=True,
+                        )
                     websocket.close(code=1008, reason="already authenticated")
                     return
                 if isinstance(message, KeepaliveMessage):
@@ -273,16 +314,37 @@ class BrowserReceiver:
         if len(timestamps) > MAX_MESSAGES_PER_10_SECONDS:
             raise ProtocolError("browser message rate exceeded")
 
-    def _serve_forever(
-        self,
-        server: Server,
-        generation: int,
-        ready: threading.Event,
-    ) -> None:
+    def _make_connection_handler(self, generation: int):
+        def handle_connection(websocket) -> None:
+            self._handle_connection(websocket, generation)
+
+        return handle_connection
+
+    def _make_connection_factory(self, generation: int):
+        def create_connection(sock, protocol, **kwargs):
+            connection = ServerConnection(sock, protocol, **kwargs)
+            self._register_opening_connection(connection, generation)
+            return connection
+
+        return create_connection
+
+    def _register_opening_connection(self, websocket, generation: int) -> None:
+        close = False
         with self._lock:
-            if self._server is server and self._server_generation == generation:
-                ready.set()
-        server.serve_forever()
+            if (
+                self._stopping
+                or self._server is None
+                or self._server_generation != generation
+            ):
+                close = True
+            else:
+                self._clients[websocket] = generation
+                if self._client_owner is None:
+                    self._client_owner = websocket
+                    self._client_owned = True
+                    self._client_generation = generation
+        if close:
+            websocket.close(code=1001, reason="browser receiver stopped")
 
     def _connection_is_active(self, websocket, generation: int) -> bool:
         with self._lock:
@@ -294,6 +356,7 @@ class BrowserReceiver:
             and self._server is not None
             and self._server_generation == generation
             and self._client_owned
+            and self._client_owner is websocket
             and self._client_generation == generation
             and self._clients.get(websocket) == generation
         )
@@ -312,11 +375,13 @@ class BrowserReceiver:
                 self._client_threads.pop(websocket, None)
             owns_current_client = (
                 self._client_owned
+                and self._client_owner is websocket
                 and self._client_generation == generation
                 and self._server_generation == generation
             )
             if owns_current_client:
                 self._client_owned = False
+                self._client_owner = None
                 self._client_generation = None
             if authenticated and disconnected and owns_current_client:
                 self._emit_status_locked(

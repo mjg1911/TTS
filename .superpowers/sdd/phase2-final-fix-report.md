@@ -77,3 +77,10 @@ behavior was changed.
   `.venv` launcher still references a missing Python 3.12 executable.
 - No unresolved Phase 2 concerns remain from this restart test. Existing
   unrelated working-tree changes remain preserved.
+
+## Phase 2 final-review fix
+
+- Status: complete; stale handlers cannot adopt a newer receiver generation, authenticated policy closes publish the unavailable status, and an older stop cannot publish `DISABLED` after a newer start.
+- Regressions: added focused receiver coverage for stale handler adoption, exact authenticated policy-close status/close behavior, and stop/restart ordering.
+- Tests: focused receiver/speech/logging set — 44 passed; full Phase 2 browser backend gate — 94 passed; backend module compilation — passed.
+- Concerns: coordinator/worker cancellation remains intentionally deferred to Phase 3. Changes remain local.

@@ -255,7 +255,7 @@ def test_stop_prevents_a_received_message_from_being_dispatched():
     receiver._server = FakeServer()
     receiver._token = token
     client = MessageAfterStop()
-    thread = threading.Thread(target=receiver._handle_connection, args=(client,))
+    thread = threading.Thread(target=receiver._handle_connection, args=(client, 1))
     thread.start()
     assert received.wait(timeout=2)
     receiver.stop()
@@ -283,6 +283,86 @@ def test_stale_client_cleanup_cannot_release_new_generation_owner():
     assert new_client in receiver._clients
 
 
+def test_stop_closes_opening_connection_and_stale_handler_is_rejected():
+    class FakeServer:
+        def shutdown(self):
+            pass
+
+    class OpeningConnection:
+        def __init__(self):
+            self.close_calls = []
+
+        def close(self, **kwargs):
+            self.close_calls.append(kwargs)
+
+    receiver = BrowserReceiver(lambda _message: None, lambda _status: None)
+    receiver._run_generation = 1
+    receiver._server_generation = 1
+    receiver._server = FakeServer()
+    opening = OpeningConnection()
+    receiver._register_opening_connection(opening, 1)
+
+    receiver.stop()
+
+    assert opening.close_calls == [
+        {"code": 1001, "reason": "browser receiver stopped"}
+    ]
+
+    receiver._run_generation = 2
+    receiver._server_generation = 2
+    receiver._server = FakeServer()
+    receiver._stopping = False
+    stale = OpeningConnection()
+    receiver._handle_connection(stale, 1)
+
+    assert stale.close_calls == [
+        {"code": 1013, "reason": "browser receiver unavailable"}
+    ]
+
+
+def test_handler_without_generation_cannot_adopt_post_restart_state():
+    token = "b" * 43
+    messages = []
+    statuses = []
+
+    class FakeServer:
+        def shutdown(self):
+            pass
+
+    class StaleConnection:
+        def __init__(self):
+            self.recv_calls = 0
+            self.close_calls = []
+
+        def recv(self, **_kwargs):
+            self.recv_calls += 1
+            if self.recv_calls == 1:
+                return json.dumps(hello(token), separators=(",", ":"))
+            raise ConnectionClosedOK(Close(1000, ""), None)
+
+        def close(self, **kwargs):
+            self.close_calls.append(kwargs)
+
+        def send(self, _message):
+            pass
+
+    receiver = BrowserReceiver(messages.append, statuses.append)
+    receiver._run_generation = 2
+    receiver._server_generation = 2
+    receiver._server = FakeServer()
+    receiver._token = token
+    stale_handler = receiver._handle_connection
+    stale = StaleConnection()
+
+    stale_handler(stale)
+
+    assert stale.close_calls == [
+        {"code": 1013, "reason": "browser receiver unavailable"}
+    ]
+    assert messages == []
+    assert statuses == []
+
+
 def test_rate_limit_rejects_the_message_after_the_window_budget(monkeypatch):
     receiver = BrowserReceiver(lambda _message: None, lambda _status: None)
     timestamps = deque([100.0] * MAX_MESSAGES_PER_10_SECONDS)
@@ -296,13 +376,32 @@ def test_browser_transport_debug_logging_drops_wire_payloads(caplog):
     secret = "PRIVATE-BROWSER-TOKEN-AND-TEXT"
     transport_logger = browser_receiver_module._TRANSPORT_LOGGER
     old_level = transport_logger.level
+    class CaptureHandler(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.records = []
+
+        def emit(self, record):
+            self.records.append(record)
+
+    handler = CaptureHandler()
+    transport_logger.addHandler(handler)
     try:
         transport_logger.setLevel(logging.DEBUG)
         with caplog.at_level(logging.DEBUG):
-            transport_logger.debug("received TEXT %s", secret)
+            receiver = BrowserReceiver(lambda _message: None, lambda _status: None, port=free_port())
+            receiver.start(secret)
+            try:
+                with connect(f"ws://127.0.0.1:{receiver._port}") as websocket:
+                    send_json(websocket, hello(secret))
+                    websocket.recv()
+            finally:
+                receiver.stop()
     finally:
+        transport_logger.removeHandler(handler)
         transport_logger.setLevel(old_level)
 
+    assert all(secret not in record.getMessage() for record in handler.records)
     assert secret not in caplog.text
 
 
@@ -346,7 +445,7 @@ def test_authentication_status_is_ordered_before_stop_disabled():
     receiver._token = token
     thread = threading.Thread(
         target=receiver._handle_connection,
-        args=(AuthenticatedClient(),),
+        args=(AuthenticatedClient(), 1),
     )
     thread.start()
     assert connected.wait(timeout=2)
@@ -367,6 +466,126 @@ def test_authentication_status_is_ordered_before_stop_disabled():
         BrowserReceiverStatus.CONNECTED,
         BrowserReceiverStatus.DISABLED,
     ]
+
+
+@pytest.mark.parametrize("policy", ["malformed", "rate_limit", "repeated_hello", "unsupported"])
+def test_authenticated_policy_close_reports_unavailable_status(policy, monkeypatch):
+    token = "a" * 43
+    statuses = []
+
+    class FakeServer:
+        def shutdown(self):
+            pass
+
+    class PolicyClient:
+        def __init__(self):
+            self.recv_calls = 0
+            self.close_calls = []
+
+        def recv(self, **_kwargs):
+            self.recv_calls += 1
+            if self.recv_calls == 1:
+                return json.dumps(hello(token), separators=(",", ":"))
+            if policy == "malformed":
+                return "not-json"
+            if policy == "repeated_hello":
+                return json.dumps(hello(token), separators=(",", ":"))
+            if policy == "unsupported":
+                return json.dumps(
+                    {
+                        "protocol_version": 999,
+                        "type": "keepalive",
+                    },
+                    separators=(",", ":"),
+                )
+            return json.dumps(
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "type": "keepalive",
+                },
+                separators=(",", ":"),
+            )
+
+        def close(self, **kwargs):
+            self.close_calls.append(kwargs)
+
+        def send(self, _message):
+            pass
+
+    receiver = BrowserReceiver(lambda _message: None, statuses.append)
+    receiver._run_generation = 1
+    receiver._server_generation = 1
+    receiver._server = FakeServer()
+    receiver._token = token
+    client = PolicyClient()
+    if policy == "rate_limit":
+        calls = 0
+
+        def record(_timestamps):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise ProtocolError("browser message rate exceeded")
+
+        monkeypatch.setattr(receiver, "_record_message_or_raise", record)
+
+    receiver._handle_connection(client, 1)
+
+    expected = [
+        BrowserReceiverStatus.CONNECTED,
+        BrowserReceiverStatus.TEMPORARILY_UNAVAILABLE,
+    ]
+    if policy == "unsupported":
+        expected.insert(1, BrowserReceiverStatus.UNSUPPORTED_PROTOCOL)
+    assert statuses == expected
+    if policy == "unsupported":
+        assert client.close_calls == [
+            {"code": 1002, "reason": "unsupported protocol"}
+        ]
+    elif policy == "repeated_hello":
+        assert client.close_calls == [
+            {"code": 1008, "reason": "already authenticated"}
+        ]
+    else:
+        assert client.close_calls == [
+            {"code": 1008, "reason": "invalid message"}
+        ]
+
+
+def test_old_stop_does_not_publish_disabled_over_new_start(monkeypatch):
+    stop_entered = threading.Event()
+    release_stop = threading.Event()
+    statuses = []
+
+    class BlockingServer:
+        def shutdown(self):
+            stop_entered.set()
+            assert release_stop.wait(timeout=2)
+
+    class NewServer:
+        def serve_forever(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    receiver = BrowserReceiver(lambda _message: None, statuses.append, port=free_port())
+    receiver._run_generation = 1
+    receiver._server_generation = 1
+    receiver._server = BlockingServer()
+    receiver._stopping = False
+    receiver._token = "a" * 43
+    stopper = threading.Thread(target=receiver.stop)
+    stopper.start()
+    assert stop_entered.wait(timeout=2)
+
+    monkeypatch.setattr(browser_receiver_module, "serve", lambda *_args, **_kwargs: NewServer())
+    receiver.start("b" * 43)
+    release_stop.set()
+    stopper.join(timeout=2)
+
+    assert statuses == [BrowserReceiverStatus.WAITING]
+    receiver.stop()
 
 
 def test_clean_authenticated_disconnect_reports_temporary_unavailability():
@@ -391,7 +610,7 @@ def test_clean_authenticated_disconnect_reports_temporary_unavailability():
     receiver._run_generation = 1
     receiver._server_generation = 1
     receiver._server = object()
-    receiver._handle_connection(CleanDisconnect())
+    receiver._handle_connection(CleanDisconnect(), 1)
 
     assert BrowserReceiverStatus.TEMPORARILY_UNAVAILABLE in statuses
 
@@ -418,7 +637,7 @@ def test_unexpected_authenticated_disconnect_reports_temporary_unavailability():
     receiver._run_generation = 1
     receiver._server_generation = 1
     receiver._server = object()
-    receiver._handle_connection(UnexpectedDisconnect())
+    receiver._handle_connection(UnexpectedDisconnect(), 1)
 
     assert BrowserReceiverStatus.TEMPORARILY_UNAVAILABLE in statuses
 
