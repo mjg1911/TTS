@@ -191,6 +191,7 @@ def test_stop_closes_live_client_and_restart_accepts_new_client():
         receiver.stop()
         with pytest.raises(ConnectionClosed):
             client.recv(timeout=1)
+        receiver.start("b" * 43)
         deadline = time.monotonic() + 2
         while True:
             try:
@@ -201,7 +202,7 @@ def test_stop_closes_live_client_and_restart_accepts_new_client():
                     raise
                 time.sleep(0.01)
         with replacement:
-            send_json(replacement, hello(token))
+            send_json(replacement, hello("b" * 43))
             reply = json.loads(replacement.recv())
             assert reply["type"] == "hello_ack"
     finally:

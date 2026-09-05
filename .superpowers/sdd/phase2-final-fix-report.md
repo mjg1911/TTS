@@ -54,3 +54,26 @@ boundary.
 
 One local commit is being created on `Kokoro-phase1`; no remote action was
 performed.
+
+## Follow-up restart investigation
+
+The single failing restart regression was a test synchronization/setup defect:
+it called `receiver.stop()` and then attempted to connect without calling
+`receiver.start()` again. Repeated executions reproduced the resulting
+`ConnectionRefusedError` deterministically. The test now restarts the same
+receiver instance with a replacement token before connecting, exercising the
+intended live-client shutdown and restart path. No Phase 3 cancellation
+behavior was changed.
+
+## Follow-up verification
+
+- `C:\\Users\\mhoem\\AppData\\Local\\Programs\\Python\\Python313\\python.exe -m pytest tests/windows_tray/test_browser_receiver.py tests/windows_tray/test_browser_speech.py tests/windows_tray/test_log_redaction.py -q`
+  - `37 passed in 18.54s`.
+- The focused suite has zero failures.
+
+## Follow-up concerns
+
+- The standalone Python 3.13 environment was used because the repository
+  `.venv` launcher still references a missing Python 3.12 executable.
+- No unresolved Phase 2 concerns remain from this restart test. Existing
+  unrelated working-tree changes remain preserved.
