@@ -89,6 +89,32 @@ try {
     }
 
     Write-Host "Frozen-runtime smoke passed: tray runtime reached its event loop from an isolated environment."
+
+    $originalLocalAppData = $env:LOCALAPPDATA
+    $originalAppData = $env:APPDATA
+    $testLocalAppData = Join-Path $env:TEMP "PiperTray-KokoroBlocked-Local-$PID"
+    $testAppData = Join-Path $env:TEMP "PiperTray-KokoroBlocked-Roaming-$PID"
+    $env:LOCALAPPDATA = $testLocalAppData
+    $env:APPDATA = $testAppData
+    New-Item -ItemType Directory -Force (Join-Path $testLocalAppData "Piper") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $testAppData "Piper") | Out-Null
+    $blockedRoot = Join-Path $testLocalAppData "Piper/Kokoro"
+    [IO.File]::WriteAllText($blockedRoot, "deployment intentionally blocked")
+    try {
+        $BlockedProcess = Start-Process -FilePath $Exe -PassThru
+        Start-Sleep -Seconds 3
+        if ($BlockedProcess.HasExited) {
+            throw "PiperTray exited when Kokoro deployment target was unavailable"
+        }
+        Stop-Process -Id $BlockedProcess.Id -Force
+    } finally {
+        $env:LOCALAPPDATA = $originalLocalAppData
+        $env:APPDATA = $originalAppData
+        Remove-Item $testLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item $testAppData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host "Blocked Kokoro deployment-target smoke passed: tray remained alive."
 }
 finally {
     try {
