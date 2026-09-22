@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -33,3 +34,20 @@ assert not any(
     )
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_windows_tray_import_does_not_load_kokoro_worker_dependencies():
+    code = r"""
+import json
+import sys
+import piper.windows_tray.app
+heavy = [name for name in ("kokoro", "torch", "transformers", "misaki", "spacy") if name in sys.modules]
+print(json.dumps(heavy))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(result.stdout) == []

@@ -121,6 +121,7 @@ setup(
     packages=[
         "piper",
         "piper.windows_tray",
+        "piper.kokoro_worker",
         "piper.tashkeel",
         "piper.hebrew",
         "piper.train",
