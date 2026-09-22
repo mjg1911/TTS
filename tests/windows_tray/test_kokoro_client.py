@@ -1,4 +1,5 @@
 import io
+import subprocess
 import time
 from pathlib import Path
 from threading import Condition, Event, Thread
@@ -246,3 +247,124 @@ def test_audio_after_cancel_is_not_yielded():
     process.stdout.feed_message({"type": "response_cancelled", "request_id": 1})
     thread.join(1.0)
     assert consumed == []
+
+
+def ready_process(*responses):
+    return FakeProcess([
+        {"type": "hello", "protocol_version": 1, "worker_version": "1", "kokoro_version": "0.9.4"},
+        {"type": "ready"},
+        *responses,
+    ])
+
+
+def test_worker_starts_lazily_on_first_synthesis():
+    process = ready_process({"type": "response_end", "request_id": 1})
+    starts = []
+    client = KokoroWorkerClient(
+        KokoroWorkerConfig(Path("KokoroWorker.exe"), Path("Kokoro"), "a" * 64, "1", "0.9.4"),
+        "af_heart",
+        lambda config: starts.append(config) or process,
+    )
+    assert starts == []
+    assert list(client.synthesize("hello", Event()).chunks) == []
+    assert len(starts) == 1
+
+
+def test_worker_is_reused_between_successful_requests():
+    process = ready_process(
+        {"type": "response_end", "request_id": 1},
+        {"type": "response_end", "request_id": 2},
+    )
+    starts = []
+    client = KokoroWorkerClient(
+        KokoroWorkerConfig(Path("KokoroWorker.exe"), Path("Kokoro"), "a" * 64, "1", "0.9.4"),
+        "af_heart",
+        lambda config: starts.append(config) or process,
+    )
+    assert list(client.synthesize("one", Event()).chunks) == []
+    assert list(client.synthesize("two", Event()).chunks) == []
+    assert len(starts) == 1
+
+
+def test_crash_restarts_with_increasing_short_backoff():
+    dead = ready_process()
+    dead.returncode = 1
+    live = ready_process({"type": "response_end", "request_id": 1})
+    processes = iter([dead, live])
+    sleeps = []
+    client = KokoroWorkerClient(
+        KokoroWorkerConfig(Path("KokoroWorker.exe"), Path("Kokoro"), "a" * 64, "1", "0.9.4"),
+        "af_heart",
+        lambda _config: next(processes),
+        sleep=sleeps.append,
+    )
+    assert list(client.synthesize("hello", Event()).chunks) == []
+    assert sleeps == [0.1]
+
+
+def test_restart_budget_marks_kokoro_unavailable_for_session():
+    starts = []
+
+    def factory(_config):
+        process = ready_process()
+        process.returncode = 1
+        starts.append(process)
+        return process
+
+    client = KokoroWorkerClient(
+        KokoroWorkerConfig(Path("KokoroWorker.exe"), Path("Kokoro"), "a" * 64, "1", "0.9.4"),
+        "af_heart",
+        factory,
+        sleep=lambda _delay: None,
+    )
+    with pytest.raises(KokoroUnavailable):
+        client.synthesize("hello", Event())
+    count = len(starts)
+    with pytest.raises(KokoroUnavailable):
+        client.synthesize("again", Event())
+    assert len(starts) == count
+
+
+def test_shutdown_sends_shutdown_and_waits_for_exit():
+    process = ready_process({"type": "response_end", "request_id": 1})
+    client = make_client(process)
+    assert list(client.synthesize("hello", Event()).chunks) == []
+    client.shutdown()
+    assert written_messages(process)[-1]["type"] == "shutdown"
+    assert not process.killed
+
+
+def test_shutdown_kills_worker_after_timeout():
+    class HangingProcess(FakeProcess):
+        def wait(self, timeout=None):
+            if not self.killed:
+                raise subprocess.TimeoutExpired("KokoroWorker.exe", timeout)
+            self.returncode = 1
+            return self.returncode
+
+    process = HangingProcess([
+        {"type": "hello", "protocol_version": 1, "worker_version": "1", "kokoro_version": "0.9.4"},
+        {"type": "ready"},
+        {"type": "response_end", "request_id": 1},
+    ])
+    client = make_client(process)
+    assert list(client.synthesize("hello", Event()).chunks) == []
+    client.shutdown()
+    assert process.killed
+
+
+def test_shutdown_is_idempotent():
+    process = ready_process({"type": "response_end", "request_id": 1})
+    client = make_client(process)
+    assert list(client.synthesize("hello", Event()).chunks) == []
+    client.shutdown()
+    client.shutdown()
+    assert [m["type"] for m in written_messages(process)].count("shutdown") == 1
+
+
+def test_pipe_eof_is_reported_as_recoverable_kokoro_failure():
+    process = ready_process()
+    result = make_client(process).synthesize("hello", Event())
+    process.stdout.close_input()
+    with pytest.raises(KokoroUnavailable, match="closed"):
+        list(result.chunks)

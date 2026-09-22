@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
+import subprocess
 import time
 from typing import Callable, Iterable, Iterator, Optional
 
@@ -40,6 +41,8 @@ _EOF = object()
 _HANDSHAKE_TIMEOUT_SECONDS = 5.0
 _RESPONSE_POLL_SECONDS = 0.05
 _CANCEL_TIMEOUT_SECONDS = 2.0
+_RESTART_DELAYS = (0.1, 0.25, 0.5)
+_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,9 @@ class KokoroWorkerClient:
         self._lock = Lock()
         self._terminal_request_ids = set()
         self._expected_protocol_version = PROTOCOL_VERSION
+        self._restart_attempts = 0
+        self._unavailable_for_session = False
+        self._shutdown_complete = False
 
     def ensure_ready(self) -> None:
         self._ensure_ready()
@@ -152,44 +158,89 @@ class KokoroWorkerClient:
         return item
 
     def _ensure_ready(self) -> None:
+        if self._shutdown_complete or self._unavailable_for_session:
+            raise KokoroUnavailable("Kokoro is unavailable for this session")
         if self._process is not None and self._process.poll() is None:
             return
         if self._process_factory is None:
             from .kokoro_process import launch_kokoro_worker
 
             self._process_factory = launch_kokoro_worker
-        try:
-            process = self._process_factory(self._config)
-        except Exception as error:
-            raise KokoroUnavailable("Kokoro worker could not be started") from error
-        if process.stdout is None:
-            raise KokoroUnavailable("Kokoro worker stdout pipe is unavailable")
-        self._process = process
-        self._inbox = _FrameInbox(process.stdout)
+        while True:
+            if self._restart_attempts:
+                if self._restart_attempts > len(_RESTART_DELAYS):
+                    self._unavailable_for_session = True
+                    raise KokoroUnavailable("Kokoro is unavailable for this session")
+                self._sleep(_RESTART_DELAYS[self._restart_attempts - 1])
+            try:
+                try:
+                    process = self._process_factory(self._config)
+                except Exception as error:
+                    self._restart_attempts += 1
+                    if self._restart_attempts > len(_RESTART_DELAYS):
+                        self._unavailable_for_session = True
+                        raise KokoroUnavailable("Kokoro is unavailable for this session") from error
+                    continue
+                if process.poll() is not None:
+                    raise KokoroUnavailable("Kokoro worker exited during startup")
+                self._process = process
+                if process.stdout is None:
+                    raise KokoroUnavailable("Kokoro worker stdout pipe is unavailable")
+                self._inbox = _FrameInbox(process.stdout)
 
-        hello = self._next_frame(_HANDSHAKE_TIMEOUT_SECONDS)
-        if hello is None:
-            raise KokoroUnavailable("Kokoro worker handshake timed out")
-        try:
-            validate_hello(hello)
-        except ProtocolError as error:
-            raise KokoroUnavailable("Kokoro worker protocol compatibility failure") from error
-        if (
-            hello.get("protocol_version") != self._expected_protocol_version
-            or hello.get("worker_version") != self._config.worker_version
-            or hello.get("kokoro_version") != self._config.kokoro_version
-        ):
-            raise KokoroUnavailable("Kokoro worker protocol compatibility failure")
+                hello = self._next_frame(_HANDSHAKE_TIMEOUT_SECONDS)
+                if hello is None:
+                    raise KokoroUnavailable("Kokoro worker handshake timed out")
+                try:
+                    validate_hello(hello)
+                except ProtocolError as error:
+                    raise KokoroUnavailable("Kokoro worker protocol compatibility failure") from error
+                if (
+                    hello.get("protocol_version") != self._expected_protocol_version
+                    or hello.get("worker_version") != self._config.worker_version
+                    or hello.get("kokoro_version") != self._config.kokoro_version
+                ):
+                    raise KokoroUnavailable("Kokoro worker protocol compatibility failure")
 
-        self._send(
-            {
-                "type": "initialize",
-                "manifest_sha256": self._config.manifest_sha256,
-            }
-        )
-        ready = self._next_frame(_HANDSHAKE_TIMEOUT_SECONDS)
-        if ready is None or ready.get("type") != "ready":
-            raise KokoroUnavailable("Kokoro worker did not become ready")
+                self._send(
+                    {
+                        "type": "initialize",
+                        "manifest_sha256": self._config.manifest_sha256,
+                    }
+                )
+                ready = self._next_frame(_HANDSHAKE_TIMEOUT_SECONDS)
+                if ready is None or ready.get("type") != "ready":
+                    raise KokoroUnavailable("Kokoro worker did not become ready")
+                return
+            except KokoroUnavailable:
+                if self._process is not None and self._process.poll() is None:
+                    raise
+                self._restart_attempts += 1
+                if self._restart_attempts > len(_RESTART_DELAYS):
+                    self._unavailable_for_session = True
+                    raise KokoroUnavailable("Kokoro is unavailable for this session")
+
+    def shutdown(self) -> None:
+        if self._shutdown_complete:
+            return
+        self._shutdown_complete = True
+        process = self._process
+        if process is None:
+            return
+        try:
+            if process.poll() is None:
+                try:
+                    self._send({"type": "shutdown"})
+                except KokoroUnavailable:
+                    pass
+                try:
+                    process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+        finally:
+            self._process = None
+            self._inbox = None
 
     def _record_terminal(self, request_id: int) -> None:
         if request_id in self._terminal_request_ids:
