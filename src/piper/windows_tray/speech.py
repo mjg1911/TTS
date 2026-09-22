@@ -349,8 +349,15 @@ class SpeechWorker:
         phase = "synthesis"
         synthesis_seconds = 0.0
         try:
-            voice = self._voice_provider()
-            sample_rate = voice.config.sample_rate
+            backend = self._voice_provider()
+            is_piper_voice = hasattr(backend, "config")
+            sample_rate = backend.config.sample_rate if is_piper_voice else None
+            if not is_piper_voice:
+                result = backend.synthesize(request.text, cancel_event)
+                sample_rate = result.sample_rate
+                audio_chunks = iter(result.chunks)
+            else:
+                audio_chunks = iter(backend.synthesize(request.text))
             phase = "playback"
             player_context = self._player_factory(sample_rate)
             with player_context as player:
@@ -361,7 +368,6 @@ class SpeechWorker:
                     player.stop()
 
                 phase = "synthesis"
-                audio_chunks = iter(voice.synthesize(request.text))
                 while True:
                     phase = "synthesis"
                     if cancel_event.is_set():
@@ -381,7 +387,9 @@ class SpeechWorker:
                     if cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
-                    audio_bytes = chunk.audio_int16_bytes
+                    audio_bytes = (
+                        chunk.audio_int16_bytes if is_piper_voice else chunk
+                    )
                     if cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break

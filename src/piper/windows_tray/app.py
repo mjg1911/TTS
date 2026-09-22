@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence, Tuple
 
 from .commands import Command, CommandKind
+from .backend_manager import BackendCandidate, BackendManager, BackendPreparationError
 from .controller import Controller, VOICE_SETUP_ERRORS
 from .errors import UserError, user_message
 from . import DEFAULT_HOTKEY
@@ -27,6 +28,8 @@ from .single_instance import InstanceRole, SingleInstance
 from .tray_icon import TrayIcon
 from .voice_manager import VoiceManager
 from .codex_monitor import CodexMonitor, codex_sessions_dir
+from piper.kokoro_assets import verify_kokoro_installation
+from .kokoro_client import KokoroWorkerClient, KokoroWorkerConfig
 
 
 def TkUi():
@@ -55,16 +58,27 @@ def _voice_data_dirs() -> Iterable[Path]:
     return directories
 
 
+def _kokoro_root() -> Path:
+    return Path(os.environ["LOCALAPPDATA"]) / "Piper" / "Kokoro"
+
+
+def _inspect_kokoro_installation():
+    try:
+        return verify_kokoro_installation(_kokoro_root()), None
+    except (FileNotFoundError, OSError, ValueError, KeyError) as error:
+        return None, "Kokoro installation is unavailable: %s" % type(error).__name__
+
+
 def _load_configured_voice(
     settings: TraySettings, data_dirs: Iterable[Path]
 ) -> Tuple[Path, Any]:
     from piper import PiperVoice
 
-    model_path = resolve_voice_reference(settings.voice, data_dirs)
+    model_path = resolve_voice_reference(settings.piper_voice, data_dirs)
     return model_path, PiperVoice.load(model_path)
 
 
-def _build_speech_worker(controller: Controller, voice_manager: VoiceManager) -> SpeechWorker:
+def _build_speech_worker(controller: Controller, backend_provider) -> SpeechWorker:
     def player_factory(sample_rate: int):
         if not AudioPlayer.is_available():
             raise RuntimeError("ffplay is not available")
@@ -72,7 +86,7 @@ def _build_speech_worker(controller: Controller, voice_manager: VoiceManager) ->
         return create_playback_pipeline(sample_rate, pitch_percent, speed_percent)
 
     return SpeechWorker(
-        voice_manager.current,
+        backend_provider,
         controller.enqueue_worker_event,
         player_factory,
     )
@@ -97,6 +111,8 @@ def run_app(
     power_stopped = False
     codex_monitor = None
     codex_stopped = False
+    backend_manager = None
+    backend_stopped = False
     ui = None
     logger = None
 
@@ -139,7 +155,7 @@ def run_app(
                 power_stopped = True
 
     def stop_speech() -> None:
-        nonlocal speech_stopped
+        nonlocal speech_stopped, backend_stopped
         if speech_worker is not None and not speech_stopped:
             try:
                 speech_worker.shutdown()
@@ -153,6 +169,14 @@ def run_app(
                     )
             finally:
                 speech_stopped = True
+        if backend_manager is not None and not backend_stopped:
+            try:
+                backend_manager.shutdown()
+            except Exception as error:
+                if logger is not None:
+                    log_exception_safe(logger, "speech backend stop failed", error, stage="shutdown")
+            finally:
+                backend_stopped = True
 
     def stop_codex() -> None:
         nonlocal codex_stopped
@@ -232,13 +256,6 @@ def run_app(
             )
             settings = replace(settings, hotkey=DEFAULT_HOTKEY)
             capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
-        controller = Controller(settings=settings, save_settings=save_settings)
-        codex_monitor = CodexMonitor(
-            codex_sessions_dir(),
-            controller.enqueue_codex_response,
-            controller.enqueue_codex_status,
-        )
-
         try:
             configured_path, configured_voice = _load_configured_voice(
                 settings, data_dirs
@@ -259,16 +276,74 @@ def run_app(
                 )
                 ui.show_status(user_message(UserError.VOICE_LOAD_STARTUP))
                 return 1
-            if not controller.install_voice(selected_path, selected_voice, persist=True):
+            try:
+                settings = replace(settings, piper_voice=str(selected_path))
+                save_settings(settings)
+            except (OSError, ValueError):
                 return 1
+            configured_path, configured_voice = selected_path, selected_voice
         else:
-            controller.set_voice(configured_path, configured_voice)
+            pass
+
+        kokoro_installation, kokoro_unavailable_reason = _inspect_kokoro_installation()
+
+        def prepare_backend(engine: str, voice_id: str) -> BackendCandidate:
+            if engine == "Piper":
+                path, voice = _load_configured_voice(
+                    replace(settings, piper_voice=voice_id), data_dirs
+                )
+                return BackendCandidate("Piper", voice_id, voice)
+            if engine != "Kokoro" or kokoro_installation is None:
+                raise BackendPreparationError("Kokoro is unavailable")
+            voice = kokoro_installation.voices.get(voice_id)
+            if voice is None:
+                raise BackendPreparationError("Unknown Kokoro voice")
+            config = KokoroWorkerConfig(
+                executable=kokoro_installation.worker_executable,
+                install_root=kokoro_installation.root,
+                manifest_sha256=kokoro_installation.manifest_sha256,
+                worker_version=kokoro_installation.worker_version,
+                kokoro_version=kokoro_installation.kokoro_version,
+            )
+            client = KokoroWorkerClient(config, voice_id)
+            try:
+                client.ensure_ready()
+            except (OSError, RuntimeError, ValueError) as error:
+                client.shutdown()
+                raise BackendPreparationError("Kokoro worker is unavailable") from error
+            return BackendCandidate("Kokoro", voice_id, client, client.shutdown)
+
+        backend_manager = BackendManager(configured_voice, lambda: None, prepare_backend)
+        if settings.engine == "Kokoro":
+            try:
+                startup_candidate = backend_manager.prepare("Kokoro", settings.kokoro_voice)
+                backend_manager.commit(startup_candidate)
+            except BackendPreparationError:
+                settings = replace(settings, engine="Piper")
+
+        controller = Controller(
+            settings=settings,
+            save_settings=save_settings,
+            backend_manager=backend_manager,
+            kokoro_voice_ids=(
+                tuple(sorted(kokoro_installation.voices))
+                if kokoro_installation is not None
+                else ()
+            ),
+            kokoro_unavailable_reason=kokoro_unavailable_reason,
+        )
+        controller.set_voice(configured_path, configured_voice)
+        codex_monitor = CodexMonitor(
+            codex_sessions_dir(),
+            controller.enqueue_codex_response,
+            controller.enqueue_codex_status,
+        )
 
         voice_manager = VoiceManager(
             controller.state.voice,
             lambda reference: load_voice_candidate(reference, data_dirs),
         )
-        speech_worker = _build_speech_worker(controller, voice_manager)
+        speech_worker = _build_speech_worker(controller, backend_manager.current)
 
         clipboard = Win32Clipboard()
         capture = SelectionCapture(clipboard, clipboard.send_ctrl_c)

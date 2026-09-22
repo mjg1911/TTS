@@ -30,6 +30,59 @@ def _write_v1_settings(path: Path, **overrides) -> None:
     path.write_text(json.dumps(settings), encoding="utf-8")
 
 
+def test_v1_settings_migrate_to_v2_without_corrupt_rename(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "voice": "en_GB-alba-medium",
+                "hotkey": "alt+backtick",
+                "log_level": "DEBUG",
+                "error_sounds": True,
+                "codex_enabled": True,
+                "pitch_percent": 10,
+                "speed_percent": -5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_settings(path)
+
+    assert result.source == "loaded"
+    assert result.settings.schema_version == 2
+    assert result.settings.engine == "Piper"
+    assert result.settings.piper_voice == "en_GB-alba-medium"
+    assert result.settings.kokoro_voice == "af_heart"
+    assert not path.with_name("settings.json.corrupt").exists()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["schema_version"] == 2
+    assert "voice" not in saved
+
+
+def test_future_schema_is_still_corrupt(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 99,
+                "engine": "Piper",
+                "piper_voice": "en_GB-alba-medium",
+                "kokoro_voice": "af_heart",
+                "hotkey": "alt+backtick",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_settings(path)
+
+    assert result.source == "corrupt"
+    assert not path.exists()
+    assert path.with_name("settings.json.corrupt").exists()
+
+
 def test_missing_settings_use_safe_defaults(tmp_path: Path) -> None:
     result = load_settings(tmp_path / "settings.json")
     assert result.settings == TraySettings()
@@ -180,7 +233,7 @@ def test_save_settings_uses_replace_and_writes_schema_version(
     save_settings(TraySettings(), path)
 
     assert replacements and replacements[0][1] == path
-    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
+    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 2
 
 
 def test_old_settings_default_error_sounds_to_false(tmp_path: Path) -> None:
@@ -308,11 +361,11 @@ def test_unhashable_log_level_is_preserved_as_corrupt(
     assert list(tmp_path.glob("settings.json.corrupt*"))
 
 
-def test_save_settings_rejects_non_v1_schema_version(tmp_path: Path) -> None:
+def test_save_settings_rejects_non_v2_schema_version(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
 
     with pytest.raises(ValueError, match="unsupported settings schema"):
-        save_settings(TraySettings(schema_version=2), path)
+        save_settings(TraySettings(schema_version=1), path)
 
     assert not path.exists()
 

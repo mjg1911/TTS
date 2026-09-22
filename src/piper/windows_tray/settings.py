@@ -7,7 +7,12 @@ from pathlib import Path
 import tempfile
 from typing import Literal, Optional
 
-from . import DEFAULT_HOTKEY, DEFAULT_VOICE, SETTINGS_SCHEMA_VERSION
+from . import (
+    DEFAULT_HOTKEY,
+    DEFAULT_KOKORO_VOICE,
+    DEFAULT_VOICE,
+    SETTINGS_SCHEMA_VERSION,
+)
 
 DEFAULT_PITCH_PERCENT: float = 26.0
 MIN_PITCH_PERCENT: float = -50.0
@@ -39,10 +44,12 @@ def validate_speed_percent(value: object) -> float:
     return speed_percent
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class TraySettings:
     schema_version: int = SETTINGS_SCHEMA_VERSION
-    voice: str = DEFAULT_VOICE
+    engine: Literal["Piper", "Kokoro"] = "Piper"
+    piper_voice: str = DEFAULT_VOICE
+    kokoro_voice: str = DEFAULT_KOKORO_VOICE
     hotkey: str = DEFAULT_HOTKEY
     log_level: str = "INFO"
     error_sounds: bool = False
@@ -50,6 +57,33 @@ class TraySettings:
     browser_chatgpt_enabled: bool = False
     pitch_percent: float = DEFAULT_PITCH_PERCENT
     speed_percent: float = DEFAULT_SPEED_PERCENT
+
+    def __init__(
+        self,
+        schema_version: int = SETTINGS_SCHEMA_VERSION,
+        engine: Literal["Piper", "Kokoro"] = "Piper",
+        piper_voice: str = DEFAULT_VOICE,
+        kokoro_voice: str = DEFAULT_KOKORO_VOICE,
+        hotkey: str = DEFAULT_HOTKEY,
+        log_level: str = "INFO",
+        error_sounds: bool = False,
+        codex_enabled: bool = False,
+        browser_chatgpt_enabled: bool = False,
+        pitch_percent: float = DEFAULT_PITCH_PERCENT,
+        speed_percent: float = DEFAULT_SPEED_PERCENT,
+        *,
+        voice: Optional[str] = None,
+    ) -> None:
+        if voice is not None and piper_voice == DEFAULT_VOICE:
+            piper_voice = voice
+        for name, value in locals().items():
+            if name not in {"self", "voice"}:
+                object.__setattr__(self, name, value)
+
+    @property
+    def voice(self) -> str:
+        """Compatibility alias for callers that only support Piper."""
+        return self.piper_voice
 
 
 @dataclass(frozen=True)
@@ -72,7 +106,9 @@ def _validated(data: object) -> TraySettings:
     ):
         raise ValueError("unsupported settings schema")
 
-    voice = data.get("voice")
+    engine = data.get("engine", "Piper")
+    piper_voice = data.get("piper_voice")
+    kokoro_voice = data.get("kokoro_voice", DEFAULT_KOKORO_VOICE)
     hotkey = data.get("hotkey")
     log_level = data.get("log_level", "INFO")
     error_sounds = data.get("error_sounds", False)
@@ -84,8 +120,12 @@ def _validated(data: object) -> TraySettings:
     speed_percent = validate_speed_percent(
         data.get("speed_percent", DEFAULT_SPEED_PERCENT)
     )
-    if not isinstance(voice, str) or not voice.strip():
-        raise ValueError("voice must be a non-empty string")
+    if not isinstance(engine, str) or engine not in {"Piper", "Kokoro"}:
+        raise ValueError("invalid engine")
+    if not isinstance(piper_voice, str) or not piper_voice.strip():
+        raise ValueError("piper_voice must be a non-empty string")
+    if not isinstance(kokoro_voice, str) or not kokoro_voice.strip():
+        raise ValueError("kokoro_voice must be a non-empty string")
     if not isinstance(hotkey, str) or not hotkey.strip():
         raise ValueError("hotkey must be a non-empty string")
     if not isinstance(log_level, str) or log_level not in {
@@ -102,7 +142,9 @@ def _validated(data: object) -> TraySettings:
     if type(browser_chatgpt_enabled) is not bool:
         raise ValueError("browser_chatgpt_enabled must be a boolean")
     return TraySettings(
-        voice=voice.strip(),
+        engine=engine,
+        piper_voice=piper_voice.strip(),
+        kokoro_voice=kokoro_voice.strip(),
         hotkey=hotkey.strip(),
         log_level=log_level,
         error_sounds=error_sounds,
@@ -122,14 +164,34 @@ def _corrupt_path(path: Path) -> Path:
     return candidate
 
 
+def _migrate(data: object) -> tuple[object, bool]:
+    if (
+        not isinstance(data, dict)
+        or type(data.get("schema_version")) is not int
+        or data.get("schema_version") != 1
+    ):
+        return data, False
+    migrated = dict(data)
+    legacy_voice = migrated.pop("voice", DEFAULT_VOICE)
+    migrated.update(
+        schema_version=SETTINGS_SCHEMA_VERSION,
+        engine="Piper",
+        piper_voice=legacy_voice,
+        kokoro_voice=DEFAULT_KOKORO_VOICE,
+    )
+    return migrated, True
+
+
 def load_settings(path: Optional[Path] = None) -> SettingsLoadResult:
     path = path or settings_path()
     try:
         if not path.exists():
             return SettingsLoadResult(TraySettings(), "missing")
-        return SettingsLoadResult(
-            _validated(json.loads(path.read_text(encoding="utf-8"))), "loaded"
-        )
+        data, migrated = _migrate(json.loads(path.read_text(encoding="utf-8")))
+        settings = _validated(data)
+        if migrated:
+            save_settings(settings, path)
+        return SettingsLoadResult(settings, "loaded")
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         try:
             path.replace(_corrupt_path(path))
