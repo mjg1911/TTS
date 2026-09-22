@@ -1,6 +1,7 @@
 import io
+import time
 from pathlib import Path
-from threading import Condition, Event
+from threading import Condition, Event, Thread
 
 import pytest
 
@@ -101,6 +102,15 @@ def written_messages(process):
     return messages
 
 
+def _wait_until(predicate, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 def test_client_rejects_protocol_version_mismatch():
     process = FakeProcess([
         {"type": "hello", "protocol_version": 2, "worker_version": "1", "kokoro_version": "0.9.4"}
@@ -169,3 +179,70 @@ def test_client_rejects_duplicate_terminal_frame_before_next_request():
     assert list(client.synthesize("first", Event()).chunks) == []
     with pytest.raises(RuntimeError, match="terminal"):
         list(client.synthesize("second", Event()).chunks)
+
+
+def test_cancel_is_forwarded_while_worker_has_not_produced_another_frame():
+    process = FakeProcess([
+        {"type": "hello", "protocol_version": 1, "worker_version": "1", "kokoro_version": "0.9.4"},
+        {"type": "ready"},
+    ])
+    cancelled = Event()
+    result = make_client(process).synthesize("hello", cancelled)
+    consumed = []
+    thread = Thread(target=lambda: consumed.append(list(result.chunks)), daemon=True)
+    thread.start()
+
+    cancelled.set()
+    assert _wait_until(
+        lambda: {"type": "cancel", "request_id": 1} in written_messages(process)
+    )
+    process.stdout.feed_message({"type": "response_cancelled", "request_id": 1})
+    thread.join(1.0)
+
+    assert not thread.is_alive()
+    assert consumed == [[]]
+
+
+def test_cancel_event_sends_exactly_one_cancel_for_active_request():
+    process = FakeProcess([
+        {"type": "hello", "protocol_version": 1, "worker_version": "1", "kokoro_version": "0.9.4"},
+        {"type": "ready"},
+    ])
+    cancelled = Event()
+    result = make_client(process).synthesize("hello", cancelled)
+    thread = Thread(target=lambda: list(result.chunks), daemon=True)
+    thread.start()
+
+    cancelled.set()
+    assert _wait_until(
+        lambda: len([m for m in written_messages(process) if m["type"] == "cancel"]) == 1
+    )
+    process.stdout.feed_message(
+        {"type": "audio", "request_id": 1, "audio": encode_audio(b"\x05\x00")}
+    )
+    time.sleep(0.1)
+    assert len([m for m in written_messages(process) if m["type"] == "cancel"]) == 1
+    process.stdout.feed_message({"type": "response_end", "request_id": 1})
+    thread.join(1.0)
+
+
+def test_audio_after_cancel_is_not_yielded():
+    process = FakeProcess([
+        {"type": "hello", "protocol_version": 1, "worker_version": "1", "kokoro_version": "0.9.4"},
+        {"type": "ready"},
+    ])
+    cancelled = Event()
+    result = make_client(process).synthesize("hello", cancelled)
+    consumed = []
+    thread = Thread(target=lambda: consumed.extend(result.chunks), daemon=True)
+    thread.start()
+    cancelled.set()
+    assert _wait_until(
+        lambda: {"type": "cancel", "request_id": 1} in written_messages(process)
+    )
+    process.stdout.feed_message(
+        {"type": "audio", "request_id": 1, "audio": encode_audio(b"\x05\x00")}
+    )
+    process.stdout.feed_message({"type": "response_cancelled", "request_id": 1})
+    thread.join(1.0)
+    assert consumed == []

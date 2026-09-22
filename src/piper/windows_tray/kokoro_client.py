@@ -38,6 +38,8 @@ class BackendSynthesisResult:
 
 _EOF = object()
 _HANDSHAKE_TIMEOUT_SECONDS = 5.0
+_RESPONSE_POLL_SECONDS = 0.05
+_CANCEL_TIMEOUT_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -85,10 +87,11 @@ class KokoroWorkerClient:
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        del sleep, monotonic
         self._config = config
         self._voice_id = voice_id
         self._process_factory = process_factory
+        self._sleep = sleep
+        self._monotonic = monotonic
         self._process: Optional[object] = None
         self._inbox: Optional[_FrameInbox] = None
         self._request_id = 0
@@ -194,11 +197,23 @@ class KokoroWorkerClient:
         self._terminal_request_ids.add(request_id)
 
     def _response_chunks(self, request_id: int, cancel_event: Event) -> Iterator[bytes]:
-        del cancel_event
+        cancel_sent = False
+        cancel_deadline = None
         while True:
-            frame = self._next_frame(_HANDSHAKE_TIMEOUT_SECONDS, response=True)
+            if cancel_event.is_set() and not cancel_sent:
+                self._send({"type": "cancel", "request_id": request_id})
+                cancel_sent = True
+                cancel_deadline = self._monotonic() + _CANCEL_TIMEOUT_SECONDS
+
+            frame = self._next_frame(_RESPONSE_POLL_SECONDS, response=True)
             if frame is None:
-                raise KokoroUnavailable("Kokoro worker response timed out")
+                if (
+                    cancel_sent
+                    and cancel_deadline is not None
+                    and self._monotonic() >= cancel_deadline
+                ):
+                    raise KokoroUnavailable("Kokoro worker cancellation timed out")
+                continue
             frame_request_id = frame.get("request_id")
             frame_type = frame.get("type")
             if frame_type in {"response_end", "response_error", "response_cancelled"}:
@@ -206,7 +221,8 @@ class KokoroWorkerClient:
             if frame_request_id != request_id:
                 continue
             if frame_type == "audio":
-                yield decode_audio(frame["audio"])
+                if not cancel_sent:
+                    yield decode_audio(frame["audio"])
                 continue
             if frame_type == "response_end" or frame_type == "response_cancelled":
                 return
