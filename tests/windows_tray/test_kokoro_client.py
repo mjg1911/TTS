@@ -327,11 +327,16 @@ def test_restart_budget_marks_kokoro_unavailable_for_session():
 
 def test_shutdown_sends_shutdown_and_waits_for_exit():
     process = ready_process({"type": "response_end", "request_id": 1})
+    closed = []
+    process._piper_kokoro_job = type(
+        "TrackingJob", (), {"close": lambda self: closed.append(True)}
+    )()
     client = make_client(process)
     assert list(client.synthesize("hello", Event()).chunks) == []
     client.shutdown()
     assert written_messages(process)[-1]["type"] == "shutdown"
     assert not process.killed
+    assert closed == [True]
 
 
 def test_shutdown_kills_worker_after_timeout():

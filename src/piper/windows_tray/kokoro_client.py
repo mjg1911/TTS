@@ -239,6 +239,9 @@ class KokoroWorkerClient:
                     process.kill()
                     process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
         finally:
+            job = getattr(process, "_piper_kokoro_job", None)
+            if job is not None:
+                job.close()
             self._process = None
             self._inbox = None
 
