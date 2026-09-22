@@ -17,6 +17,7 @@ from .kokoro_protocol import (
     read_frame,
     validate_hello,
     validate_response_frame,
+    validate_synthesize,
     write_frame,
 )
 
@@ -109,15 +110,20 @@ class KokoroWorkerClient:
         self._ensure_ready()
 
     def synthesize(self, text: str, cancel_event: Event) -> BackendSynthesisResult:
-        self.ensure_ready()
         request_id = self._next_request_id()
+        message = {
+            "type": "synthesize",
+            "request_id": request_id,
+            "text": text,
+            "voice_id": self._voice_id,
+        }
+        try:
+            validate_synthesize(message)
+        except (ProtocolError, UnicodeEncodeError) as error:
+            raise KokoroUnavailable("invalid Kokoro synthesis request") from error
+        self.ensure_ready()
         self._send(
-            {
-                "type": "synthesize",
-                "request_id": request_id,
-                "text": text,
-                "voice_id": self._voice_id,
-            }
+            message
         )
         return BackendSynthesisResult(
             sample_rate=24000,
@@ -213,12 +219,40 @@ class KokoroWorkerClient:
                     raise KokoroUnavailable("Kokoro worker did not become ready")
                 return
             except KokoroUnavailable:
-                if self._process is not None and self._process.poll() is None:
+                process_was_live = process.poll() is None
+                self._cleanup_process(process)
+                if process_was_live:
                     raise
                 self._restart_attempts += 1
                 if self._restart_attempts > len(_RESTART_DELAYS):
                     self._unavailable_for_session = True
                     raise KokoroUnavailable("Kokoro is unavailable for this session")
+
+    def _cleanup_process(self, process) -> None:
+        try:
+            if process.poll() is None:
+                try:
+                    process.terminate()
+                except (OSError, ProcessLookupError):
+                    pass
+                try:
+                    process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    try:
+                        process.kill()
+                    except (OSError, ProcessLookupError):
+                        pass
+                    try:
+                        process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        pass
+        finally:
+            job = getattr(process, "_piper_kokoro_job", None)
+            if job is not None:
+                job.close()
+            if self._process is process:
+                self._process = None
+                self._inbox = None
 
     def shutdown(self) -> None:
         if self._shutdown_complete:

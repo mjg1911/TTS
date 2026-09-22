@@ -54,6 +54,7 @@ class FakeProcess:
         self.returncode = None
         self.terminated = False
         self.killed = False
+        self.wait_calls = 0
         for message in messages:
             self.stdout.feed_message(message)
 
@@ -62,6 +63,7 @@ class FakeProcess:
 
     def wait(self, timeout=None):
         del timeout
+        self.wait_calls += 1
         if self.returncode is None:
             self.returncode = 0
         return self.returncode
@@ -118,6 +120,41 @@ def test_client_rejects_protocol_version_mismatch():
     ])
     with pytest.raises(KokoroUnavailable, match="protocol"):
         make_client(process).synthesize("hello", Event())
+
+
+def test_client_rejects_oversized_text_before_writing_a_request():
+    process = ready_process()
+    client = make_client(process)
+
+    with pytest.raises(KokoroUnavailable, match="request"):
+        client.synthesize("x" * (1024 * 1024 + 1), Event())
+
+    assert process.stdin.getvalue() == b""
+
+
+def test_failed_live_handshake_cleans_up_job_before_raising():
+    failed = FakeProcess([
+        {"type": "hello", "protocol_version": 2, "worker_version": "1", "kokoro_version": "0.9.4"}
+    ])
+    closed = []
+    failed._piper_kokoro_job = type(
+        "TrackingJob", (), {"close": lambda self: closed.append(True)}
+    )()
+    client = KokoroWorkerClient(
+        KokoroWorkerConfig(Path("KokoroWorker.exe"), Path("Kokoro"), "a" * 64, "1", "0.9.4"),
+        "af_heart",
+        lambda _config: failed,
+        sleep=lambda _delay: None,
+    )
+
+    with pytest.raises(KokoroUnavailable, match="protocol"):
+        client.synthesize("hello", Event())
+    assert failed.terminated
+    assert not failed.killed
+    assert failed.wait_calls == 1
+    assert closed == [True]
+    assert client._process is None
+    assert client._inbox is None
 
 
 def test_client_waits_for_ready_before_synthesis():
