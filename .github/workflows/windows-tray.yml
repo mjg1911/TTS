@@ -21,13 +21,13 @@ jobs:
         run: python -m pip install -e ".[dev,windows-tray,windows-tray-build]"
 
       - name: Run tray and core compatibility tests
-        run: pytest tests/windows_tray tests/test_core_compatibility.py -q
+        run: pytest tests/windows_tray tests/test_core_compatibility.py tests/test_kokoro_assets.py -q
 
       - name: Verify core CLI entry point
         run: python -m piper --help
 
       - name: Compile Windows tray package
-        run: python -m compileall -q src/piper/windows_tray
+        run: python -m compileall -q src/piper/windows_tray src/piper/kokoro_worker
 
       - name: Download frozen smoke voice
         shell: pwsh
