@@ -3,7 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from piper.windows_tray.logging_setup import configure_logging, log_path
+from piper.windows_tray.logging_setup import (
+    configure_logging,
+    log_exception_safe,
+    log_path,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -73,3 +77,21 @@ def test_normal_logging_does_not_add_console_handler(tmp_path, capsys) -> None:
     assert "file-only" in (tmp_path / "piper-tray.log").read_text(
         encoding="utf-8"
     )
+
+
+def test_exception_logging_omits_error_text(tmp_path: Path) -> None:
+    sentinel = "SENTINEL_PRIVATE_TEXT_91f0"
+    path = tmp_path / "piper-tray.log"
+    logger = configure_logging("INFO", path=path)
+
+    try:
+        raise RuntimeError(sentinel)
+    except RuntimeError as error:
+        log_exception_safe(logger, "kokoro request failed", error)
+
+    for handler in logger.handlers:
+        handler.flush()
+
+    text = path.read_text(encoding="utf-8")
+    assert sentinel not in text
+    assert "exception_type=RuntimeError" in text

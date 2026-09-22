@@ -14,6 +14,9 @@ from piper.windows_tray.kokoro_client import (
 from piper.windows_tray.kokoro_protocol import encode_audio, read_frame, write_frame
 
 
+SENTINEL = "SENTINEL_PRIVATE_TEXT_91f0"
+
+
 class BlockingStream:
     def __init__(self):
         self._buffer = bytearray()
@@ -192,6 +195,17 @@ def test_client_maps_response_error_to_synthesis_failure():
     result = make_client(process).synthesize("private text", Event())
     with pytest.raises(RuntimeError, match="inference"):
         list(result.chunks)
+
+
+def test_client_protocol_failure_does_not_expose_source_text(caplog):
+    process = ready_process(
+        {"type": "response_error", "request_id": 1, "category": "inference"}
+    )
+    result = make_client(process).synthesize(SENTINEL, Event())
+    with pytest.raises(RuntimeError):
+        list(result.chunks)
+    assert SENTINEL not in caplog.text
+    assert SENTINEL not in process.stderr.getvalue().decode("utf-8", errors="replace")
 
 
 def test_client_ignores_stale_audio_for_previous_request():

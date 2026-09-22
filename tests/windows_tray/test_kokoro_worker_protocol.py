@@ -8,6 +8,9 @@ from piper.kokoro_worker import main as worker_main
 from piper.windows_tray.kokoro_protocol import ProtocolError, read_frame, write_frame
 
 
+SENTINEL = "SENTINEL_PRIVATE_TEXT_91f0"
+
+
 def framed_input(*messages):
     stream = io.BytesIO()
     for message in messages:
@@ -107,6 +110,31 @@ def test_worker_runtime_error_returns_category_without_text(monkeypatch, tmp_pat
     assert read_all(stdout)[-1] == {"type": "response_error", "request_id": 2, "category": "inference"}
     assert "explode" not in stderr.getvalue()
     assert "SENTINEL_MUST_NOT_REACH_STDERR" not in stderr.getvalue()
+
+
+def test_worker_runtime_failure_stderr_omits_source_text(monkeypatch, tmp_path):
+    class FailingRuntime(FakeRuntime):
+        def synthesize_segments(self, text, voice_id):
+            assert text == SENTINEL
+            raise RuntimeError("inference exploded")
+            yield b""
+
+    monkeypatch.setattr(worker_main, "KokoroRuntime", FailingRuntime)
+    monkeypatch.setattr(
+        worker_main,
+        "verify_kokoro_installation",
+        lambda root: fake_installation(root),
+    )
+    stdin = framed_input(
+        initialize_message(),
+        {"type": "synthesize", "request_id": 9, "text": SENTINEL, "voice_id": "af_heart"},
+        {"type": "shutdown"},
+    )
+    stdout = io.BytesIO()
+    stderr = io.StringIO()
+    assert worker_main.main(stdin, stdout, stderr, install_root=tmp_path) == 0
+    assert SENTINEL not in stderr.getvalue()
+    assert "request_id=9" in stderr.getvalue()
 
 
 def test_worker_cancel_discards_segment_completed_after_cancel(monkeypatch, tmp_path):
