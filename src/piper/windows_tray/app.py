@@ -1,4 +1,5 @@
 import os
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence, Tuple
@@ -30,6 +31,7 @@ from .voice_manager import VoiceManager
 from .codex_monitor import CodexMonitor, codex_sessions_dir
 from piper.kokoro_assets import verify_kokoro_installation
 from .kokoro_client import KokoroWorkerClient, KokoroWorkerConfig
+from .kokoro_payload import ensure_bundled_kokoro_payload
 
 
 def TkUi():
@@ -67,6 +69,26 @@ def _inspect_kokoro_installation():
         return verify_kokoro_installation(_kokoro_root()), None
     except (FileNotFoundError, OSError, ValueError, KeyError) as error:
         return None, "Kokoro installation is unavailable: %s" % type(error).__name__
+
+
+def _bundled_kokoro_root() -> Optional[Path]:
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root is None:
+        return None
+    candidate = Path(frozen_root) / "kokoro_payload"
+    return candidate if candidate.is_dir() else None
+
+
+def _prepare_kokoro_installation(logger):
+    try:
+        install_root = _kokoro_root()
+        bundle_root = _bundled_kokoro_root()
+        if bundle_root is not None:
+            return ensure_bundled_kokoro_payload(bundle_root, install_root), None
+        return verify_kokoro_installation(install_root), None
+    except (OSError, ValueError, KeyError) as error:
+        logger.warning("Kokoro unavailable error_type=%s", type(error).__name__)
+        return None, "Kokoro is unavailable because its installed files could not be verified."
 
 
 def _load_configured_voice(
@@ -285,7 +307,9 @@ def run_app(
         else:
             pass
 
-        kokoro_installation, kokoro_unavailable_reason = _inspect_kokoro_installation()
+        kokoro_installation, kokoro_unavailable_reason = _prepare_kokoro_installation(
+            logger
+        )
 
         def prepare_backend(engine: str, voice_id: str) -> BackendCandidate:
             if engine == "Piper":

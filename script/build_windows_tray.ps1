@@ -26,6 +26,22 @@ if ($null -eq $Bridge) {
 }
 
 python script/make_piper_tray_icon.py
+
+$requireKokoro = $env:PIPER_REQUIRE_KOKORO_PAYLOAD -eq "1"
+$kokoroInputs = @(
+    $env:PIPER_KOKORO_CONFIG,
+    $env:PIPER_KOKORO_MODEL,
+    $env:PIPER_KOKORO_AF_HEART
+)
+$hasKokoroInputs = @($kokoroInputs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq $kokoroInputs.Count
+if ($requireKokoro -and -not $hasKokoroInputs) {
+    throw "release build requires local Kokoro asset paths"
+}
+if ($hasKokoroInputs) {
+    & "$Root/script/build_kokoro_worker.ps1"
+    & "$Root/script/stage_kokoro_payload.ps1"
+    $env:PIPER_KOKORO_PAYLOAD_DIR = (Resolve-Path "build/kokoro-payload").Path
+}
 python -m PyInstaller --clean --noconfirm script/piper_tray.spec
 
 if (-not (Test-Path $Exe)) {

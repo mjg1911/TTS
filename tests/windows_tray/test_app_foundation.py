@@ -363,6 +363,21 @@ def _patch_primary_app(monkeypatch, events):
     return app, instance, ui, tray
 
 
+def test_bundled_kokoro_deploy_failure_does_not_block_piper_startup(monkeypatch):
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    ui.root.mainloop = lambda: None
+    monkeypatch.setattr(
+        app,
+        "ensure_bundled_kokoro_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read-only disk")),
+    )
+    monkeypatch.setattr(app, "_bundled_kokoro_root", lambda: Path("bundle"))
+    assert app.run_app([]) == 0
+    assert "voice" in events
+    assert any("Kokoro" in message for message in ui.statuses)
+
+
 def test_power_resume_callback_enqueues_system_resume_and_stops(monkeypatch):
     events = []
     app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
