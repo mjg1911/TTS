@@ -44,6 +44,8 @@ Copy-Item $env:PIPER_KOKORO_AF_HEART (Join-Path $payloadRoot "voices\af_heart.pt
 
 $requiredWorkerPaths = @(
     (Join-Path $payloadRoot "worker\_internal\en_core_web_sm"),
+    (Join-Path $payloadRoot "worker\_internal\language_tags\data\json\index.json"),
+    (Join-Path $payloadRoot "worker\_internal\curated_transformers\models\output.py"),
     (Join-Path $payloadRoot "worker\_internal\misaki\data"),
     (Join-Path $payloadRoot "worker\_internal\espeakng_loader")
 )

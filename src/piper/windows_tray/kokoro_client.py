@@ -40,6 +40,7 @@ class BackendSynthesisResult:
 
 _EOF = object()
 _HANDSHAKE_TIMEOUT_SECONDS = 5.0
+_INITIALIZATION_TIMEOUT_SECONDS = 60.0
 _RESPONSE_POLL_SECONDS = 0.05
 _CANCEL_TIMEOUT_SECONDS = 2.0
 _RESTART_DELAYS = (0.1, 0.25, 0.5)
@@ -214,7 +215,7 @@ class KokoroWorkerClient:
                         "manifest_sha256": self._config.manifest_sha256,
                     }
                 )
-                ready = self._next_frame(_HANDSHAKE_TIMEOUT_SECONDS)
+                ready = self._next_frame(_INITIALIZATION_TIMEOUT_SECONDS)
                 if ready is None or ready.get("type") != "ready":
                     raise KokoroUnavailable("Kokoro worker did not become ready")
                 return

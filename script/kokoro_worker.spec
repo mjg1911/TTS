@@ -15,6 +15,7 @@ packages = (
     "transformers",
     "torch",
     "en_core_web_sm",
+    "language_tags",
 )
 
 datas = []
@@ -34,6 +35,7 @@ a = Analysis(
     datas=datas,
     hiddenimports=sorted(set(hiddenimports)),
     noarchive=False,
+    module_collection_mode={"curated_transformers": "py"},
 )
 pyz = PYZ(a.pure)
 exe = EXE(

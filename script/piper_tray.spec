@@ -11,7 +11,7 @@ from PyInstaller.utils.hooks import (
 
 SPEC_DIR = Path(SPECPATH)
 ROOT = SPEC_DIR.parent
-PYTHON_ROOT = Path(sys.prefix)
+PYTHON_ROOT = Path(sys.base_prefix)
 piper_datas = collect_data_files("piper")
 piper_binaries = collect_dynamic_libs("piper")
 piper_extensions = [

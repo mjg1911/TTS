@@ -6,6 +6,7 @@ from threading import Condition, Event, Thread
 
 import pytest
 
+import piper.windows_tray.kokoro_client as kokoro_client_module
 from piper.windows_tray.kokoro_client import (
     KokoroUnavailable,
     KokoroWorkerClient,
@@ -172,6 +173,24 @@ def test_client_waits_for_ready_before_synthesis():
         {"type": "initialize", "manifest_sha256": "a" * 64},
         {"type": "synthesize", "request_id": 1, "text": "hello", "voice_id": "af_heart"},
     ]
+
+
+def test_client_allows_slow_worker_initialization(monkeypatch):
+    monkeypatch.setattr(kokoro_client_module, "_HANDSHAKE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(
+        kokoro_client_module, "_INITIALIZATION_TIMEOUT_SECONDS", 0.1, raising=False
+    )
+    process = FakeProcess([
+        {"type": "hello", "protocol_version": 1, "worker_version": "1", "kokoro_version": "0.9.4"},
+    ])
+    Thread(
+        target=lambda: (
+            time.sleep(0.03), process.stdout.feed_message({"type": "ready"})
+        ),
+        daemon=True,
+    ).start()
+
+    make_client(process).ensure_ready()
 
 
 def test_client_streams_audio_until_response_end():
