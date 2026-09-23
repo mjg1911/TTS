@@ -72,6 +72,21 @@ informational only and is never stored in `settings.json`.
 Changes apply to subsequent speech requests. Applying settings does not alter
 speech that is already playing.
 
+### Kokoro file verification
+
+PiperTray does not perform a full Kokoro SHA-256 integrity scan during normal
+startup or worker initialization. Those paths only inspect the Kokoro manifest
+and confirm the required worker, model, voice, and runtime-resource locations
+exist.
+
+To run the full integrity check, open **Settings** and select
+**Verify Kokoro files** under **Kokoro maintenance**. The verification runs in
+the background and checks every manifest-listed file hash plus the complete
+payload inventory. It can take a few minutes.
+
+If Kokoro cannot start, Piper remains available and the app suggests running
+the manual verification as a troubleshooting step.
+
 ## Pitch settings
 
 Pitch defaults to `+26%`. The accepted range is `-50%` through `100%`.
