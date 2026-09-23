@@ -6,8 +6,11 @@ $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 if (-not (Test-Path $compiler)) {
     throw "Inno Setup 6 is required to build the installer"
 }
-if (-not (Test-Path "dist/PiperTray.exe")) {
-    throw "Build dist/PiperTray.exe before the installer"
+if (-not (Test-Path "dist/PiperTray/PiperTray.exe" -PathType Leaf)) {
+    throw "Build dist/PiperTray before the installer"
+}
+if (-not (Test-Path "dist/PiperTray/_internal/kokoro_payload/manifest.json" -PathType Leaf)) {
+    throw "Installer requires the complete offline Kokoro payload"
 }
 $setupText = Get-Content "setup.py" -Raw
 $versionMatch = [regex]::Match($setupText, 'version="([^"]+)"')

@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
-$Exe = Join-Path $Root "dist\PiperTray.exe"
+$Exe = Join-Path $Root "dist\PiperTray\PiperTray.exe"
 if (-not (Test-Path $Exe)) {
     throw "Missing packaged executable: $Exe"
 }

@@ -78,15 +78,18 @@ jobs:
         shell: pwsh
         run: ./script/smoke_windows_tray.ps1
 
-      - name: Verify executable artifact
+      - name: Verify portable distribution
         shell: pwsh
         run: |
-          if (-not (Test-Path "dist/PiperTray.exe")) {
-            throw "dist/PiperTray.exe was not produced"
+          $exe = "dist/PiperTray/PiperTray.exe"
+          $manifest = "dist/PiperTray/_internal/kokoro_payload/manifest.json"
+          $worker = "dist/PiperTray/_internal/kokoro_payload/worker/KokoroWorker.exe"
+          foreach ($file in @($exe, $manifest, $worker)) {
+            if (-not (Test-Path $file -PathType Leaf)) { throw "Portable distribution missing $file" }
           }
-          if ((Get-Item "dist/PiperTray.exe").Length -le 0) {
-            throw "dist/PiperTray.exe is empty"
-          }
+          if ((Get-Item $exe).Length -le 0) { throw "Portable launcher is empty" }
+          python -c "from pathlib import Path; from piper.kokoro_assets import verify_kokoro_installation; verify_kokoro_installation(Path('dist/PiperTray/_internal/kokoro_payload'))"
+          if ($LASTEXITCODE -ne 0) { throw "Collected Kokoro payload failed verification" }
 
       - name: Smoke frozen Kokoro worker
         shell: pwsh
@@ -110,7 +113,7 @@ jobs:
         with:
           name: PiperTray-windows
           path: |
-            dist/PiperTray.exe
+            dist/PiperTray/
             dist/PiperTraySetup.exe
             build/kokoro-payload/manifest.json
           if-no-files-found: error

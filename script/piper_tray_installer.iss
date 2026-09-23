@@ -20,7 +20,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
-Source: "..\dist\PiperTray.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\PiperTray\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Piper Tray"; Filename: "{app}\{#MyAppExeName}"

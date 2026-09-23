@@ -10,9 +10,9 @@
 ## Procedure
 
 1. Restore a clean Windows VM snapshot with no Python/Kokoro/spaCy/espeak-ng.
-2. Choose acceptance mode `Portable` or `Installer`, copy only that release artifact to the VM, and record its SHA-256.
+2. Choose acceptance mode `Portable` or `Installer`. For `Portable`, copy or extract the entire `PiperTray` directory (including `_internal`) to the VM; record the source artifact SHA-256. For `Installer`, copy `PiperTraySetup.exe` and record its SHA-256.
 3. Disable the VM network adapter before the first application/install action.
-4. For `Installer`, run `PiperTraySetup.exe` with networking disabled; for `Portable`, run `PiperTray.exe` directly.
+4. For `Installer`, run `PiperTraySetup.exe` with networking disabled; for `Portable`, run `PiperTray/PiperTray.exe` from the copied directory.
 5. Launch the tray and verify it remains responsive and the Kokoro payload is bootstrapped locally without network access.
 6. Open Settings; verify Speech engine contains Piper and Kokoro.
 7. Select Kokoro; verify voice control contains `af_heart` and has no model/voice browse button.

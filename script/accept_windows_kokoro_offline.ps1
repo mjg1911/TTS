@@ -1,7 +1,7 @@
 #requires -RunAsAdministrator
 
 param(
-    [string]$TrayExe = "dist/PiperTray.exe"
+    [string]$TrayExe = "dist/PiperTray/PiperTray.exe"
 )
 
 $ErrorActionPreference = "Stop"
