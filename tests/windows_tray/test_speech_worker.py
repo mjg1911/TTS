@@ -823,6 +823,155 @@ def test_latest_pending_request_replaces_older_pending_request():
         worker.shutdown()
 
 
+def test_backend_override_bypasses_voice_provider_and_lease_release():
+    events = []
+    played = []
+    entered = threading.Event()
+    piper_voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda text: [Chunk(text.encode())],
+    )
+    provider_calls = []
+
+    def provider():
+        provider_calls.append(True)
+        raise AssertionError("pinned startup speech must not acquire a backend")
+
+    worker = SpeechWorker(
+        provider,
+        events.append,
+        player_factory=lambda _sample_rate: FakePlayer(played, entered),
+    )
+
+    try:
+        worker.submit(
+            SpeechRequest(
+                120,
+                "loading status",
+                SpeechPurpose.STARTUP_STATUS,
+                backend_override=piper_voice,
+            )
+        )
+        wait_for_event(events, SpeechEventKind.FINISHED, 120)
+        assert played == [b"loading status"]
+        assert provider_calls == []
+    finally:
+        worker.shutdown()
+
+
+def test_startup_status_uses_single_replaceable_pending_slot():
+    events = []
+    played = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def synthesize(text):
+        if text == "active":
+            entered.set()
+            release.wait(timeout=2)
+        yield Chunk(text.encode())
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=synthesize
+    )
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: FakePlayer(played, entered),
+    )
+
+    try:
+        worker.submit(SpeechRequest(121, "active"))
+        assert entered.wait(timeout=1)
+        worker.submit(
+            SpeechRequest(122, "old status", SpeechPurpose.STARTUP_STATUS)
+        )
+        worker.submit(
+            SpeechRequest(123, "latest status", SpeechPurpose.STARTUP_STATUS)
+        )
+        with worker._condition:
+            assert worker._pending_startup_status.generation == 123
+        release.set()
+        wait_for_event(events, SpeechEventKind.FINISHED, 123)
+        assert b"latest status" in played
+        assert b"old status" not in played
+    finally:
+        release.set()
+        worker.shutdown()
+
+
+def test_higher_priority_request_reports_evicted_startup_status_cancelled():
+    events = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def synthesize(text):
+        if text == "active":
+            entered.set()
+            release.wait(timeout=2)
+        yield Chunk(text.encode())
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=synthesize
+    )
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: FakePlayer([], entered),
+    )
+
+    try:
+        worker.submit(SpeechRequest(124, "active"))
+        assert entered.wait(timeout=1)
+        worker.submit(
+            SpeechRequest(125, "loading", SpeechPurpose.STARTUP_STATUS)
+        )
+        worker.submit(SpeechRequest(126, "foreground replacement"))
+
+        cancellation = next(
+            event
+            for event in events
+            if event.generation == 125
+            and event.kind is SpeechEventKind.CANCELLED
+        )
+        assert cancellation.purpose is SpeechPurpose.STARTUP_STATUS
+    finally:
+        release.set()
+        worker.shutdown()
+
+
+def test_cancel_auxiliary_reports_evicted_startup_status_cancelled():
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda text: [Chunk(text.encode())],
+    )
+    events = []
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: FakePlayer([], threading.Event()),
+    )
+
+    try:
+        with worker._condition:
+            worker._active_request = SpeechRequest(127, "active")
+            worker._pending_startup_status = SpeechRequest(
+                128, "loading", SpeechPurpose.STARTUP_STATUS
+            )
+
+        worker.cancel_auxiliary()
+
+        cancellation = next(
+            event
+            for event in events
+            if event.generation == 128
+            and event.kind is SpeechEventKind.CANCELLED
+        )
+        assert cancellation.purpose is SpeechPurpose.STARTUP_STATUS
+    finally:
+        worker.shutdown()
+
+
 def test_cancel_active_discards_matching_pending_request():
     events = []
     played = []

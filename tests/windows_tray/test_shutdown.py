@@ -45,6 +45,33 @@ def test_teardown_runs_resources_in_safe_order() -> None:
     assert failures == []
 
 
+def test_teardown_cancels_startup_before_stopping_app_resources() -> None:
+    calls = []
+    teardown = TeardownCoordinator(
+        cancel_startup=lambda: calls.append("startup.cancel"),
+        stop_hotkeys=lambda: calls.append("hotkeys.stop"),
+        stop_power=lambda: calls.append("power.stop"),
+        stop_speech=lambda: calls.append("speech.shutdown"),
+        stop_tray=lambda: calls.append("tray.stop"),
+        close_instance=lambda: calls.append("instance.close"),
+        quit_root=lambda: calls.append("tk.quit"),
+        on_failure=lambda _stage, _error: None,
+        on_complete=lambda: None,
+    )
+
+    teardown.run()
+
+    assert calls == [
+        "startup.cancel",
+        "hotkeys.stop",
+        "power.stop",
+        "speech.shutdown",
+        "tray.stop",
+        "instance.close",
+        "tk.quit",
+    ]
+
+
 def test_teardown_stops_codex_before_speech_and_continues_after_failure() -> None:
     events = []
     failures = []

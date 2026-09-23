@@ -54,6 +54,12 @@ class PlaybackState(Enum):
     SHUTTING_DOWN = auto()
 
 
+class KokoroStartupState(Enum):
+    LOADING = auto()
+    READY = auto()
+    UNAVAILABLE = auto()
+
+
 @dataclass
 class AppState:
     last_text: Optional[str] = None
@@ -70,6 +76,7 @@ class AppState:
     voice_path: Optional[Path] = None
     voice: Optional[object] = None
     settings_recovery_required: bool = False
+    kokoro_startup_state: KokoroStartupState = KokoroStartupState.READY
 
     @property
     def auxiliary_active(self) -> bool:
@@ -211,6 +218,7 @@ class Controller:
             )
         )
         self._show_status: Callable[[str], None] = lambda _message: None
+        self._set_tray_status: Callable[[str], None] = lambda _message: None
         self._show_notification: Callable[[str], None] = lambda _message: None
         self._log_error: Callable[[str], None] = lambda _message: None
         self._open_log: Callable[[], None] = lambda: None
@@ -246,13 +254,89 @@ class Controller:
         self._backend_manager = backend_manager
         self._kokoro_voice_ids = tuple(sorted(kokoro_voice_ids))
         self._kokoro_unavailable_reason = kokoro_unavailable_reason
+        self._startup_piper_backend = None
+        self._startup_status_pending_or_active = False
+        self._startup_status_generation: Optional[int] = None
         self._state_lock = threading.RLock()
+
+    @property
+    def kokoro_startup_state(self) -> KokoroStartupState:
+        with self._state_lock:
+            return self.state.kokoro_startup_state
+
+    def set_kokoro_voice_ids(self, voice_ids: Sequence[str]) -> None:
+        with self._state_lock:
+            self._kokoro_voice_ids = tuple(sorted(voice_ids))
+
+    def begin_kokoro_startup(self) -> None:
+        with self._state_lock:
+            if self.state.shutting_down:
+                return
+            self.state.kokoro_startup_state = KokoroStartupState.LOADING
+            self._startup_status_pending_or_active = False
+            self._startup_status_generation = None
+            self._startup_piper_backend = (
+                self._backend_manager.current()
+                if self._backend_manager is not None
+                else self.state.voice
+            )
+            self._set_tray_status("Kokoro is loading")
+
+    def complete_kokoro_startup(
+        self, candidate: object, voice_ids: Sequence[str]
+    ) -> None:
+        with self._state_lock:
+            if (
+                self.state.shutting_down
+                or self.state.kokoro_startup_state is not KokoroStartupState.LOADING
+            ):
+                if self._backend_manager is not None:
+                    try:
+                        self._backend_manager.discard(candidate)
+                    except Exception:
+                        pass
+                return
+            try:
+                if self._backend_manager is None:
+                    raise RuntimeError("backend manager is not configured")
+                self._backend_manager.commit(candidate)
+            except Exception as error:
+                if self._backend_manager is not None:
+                    try:
+                        self._backend_manager.discard(candidate)
+                    except Exception:
+                        pass
+                self.fail_kokoro_startup(str(error))
+                return
+            self._kokoro_voice_ids = tuple(sorted(voice_ids))
+            self._kokoro_unavailable_reason = None
+            self._startup_piper_backend = None
+            self._startup_status_pending_or_active = False
+            self._startup_status_generation = None
+            self.state.kokoro_startup_state = KokoroStartupState.READY
+            self._set_tray_status("Kokoro is ready")
+
+    def fail_kokoro_startup(self, reason: str) -> None:
+        with self._state_lock:
+            if (
+                self.state.shutting_down
+                or self.state.kokoro_startup_state is not KokoroStartupState.LOADING
+            ):
+                return
+            self._kokoro_unavailable_reason = reason
+            self._startup_piper_backend = None
+            self._startup_status_pending_or_active = False
+            self._startup_status_generation = None
+            self.state.kokoro_startup_state = KokoroStartupState.UNAVAILABLE
+            self._set_tray_status("Kokoro unavailable; Piper is ready")
+            self._show_status("Kokoro is unavailable. Piper will continue to be used.")
 
     def configure_runtime(
         self,
         choose_voice: Optional[Callable[[], Optional[Path]]] = None,
         load_voice: Optional[Callable[[str], Tuple[Path, object]]] = None,
         show_status: Optional[Callable[[str], None]] = None,
+        set_tray_status: Optional[Callable[[str], None]] = None,
         show_notification: Optional[Callable[[str], None]] = None,
         log_error: Optional[Callable[[str], None]] = None,
         open_log: Optional[Callable[[], None]] = None,
@@ -279,6 +363,8 @@ class Controller:
             self._load_voice = load_voice
         if show_status is not None:
             self._show_status = show_status
+        if set_tray_status is not None:
+            self._set_tray_status = set_tray_status
         if show_notification is not None:
             self._show_notification = show_notification
         if log_error is not None:
@@ -355,7 +441,22 @@ class Controller:
             return True
 
     def enqueue(self, command: Command) -> None:
-        self._commands.put(command)
+        with self._state_lock:
+            if (
+                command.kind is CommandKind.CAPTURE_REQUEST
+                and command.capture_is_startup_status is None
+            ):
+                loading = (
+                    self.state.kokoro_startup_state is KokoroStartupState.LOADING
+                )
+                command = replace(
+                    command,
+                    capture_is_startup_status=loading,
+                    capture_status_backend=(
+                        self._startup_piper_backend if loading else None
+                    ),
+                )
+            self._commands.put(command)
 
     def tray_snapshot(self) -> TraySnapshot:
         with self._state_lock:
@@ -488,7 +589,21 @@ class Controller:
             self._stop_speech()
             self.install_voice(candidate_path, candidate_voice, persist=True)
         elif command.kind is CommandKind.CAPTURE_REQUEST:
-            self._request_capture()
+            capture_is_startup_status = getattr(
+                command, "capture_is_startup_status", None
+            )
+            capture_status_was_pinned = capture_is_startup_status is True
+            if capture_is_startup_status is None:
+                capture_is_startup_status = (
+                    self.state.kokoro_startup_state is KokoroStartupState.LOADING
+                )
+            if capture_is_startup_status:
+                self._announce_kokoro_loading(
+                    getattr(command, "capture_status_backend", None),
+                    backend_is_pinned=capture_status_was_pinned,
+                )
+            else:
+                self._request_capture()
         elif command.kind in (CommandKind.CAPTURE_SUCCEEDED, CommandKind.CAPTURE_FAILED):
             self._complete_capture(command)
         elif command.kind is CommandKind.SHOW_LAST_TEXT:
@@ -886,6 +1001,33 @@ class Controller:
             )
         )
 
+    def _announce_kokoro_loading(
+        self, backend_override=None, *, backend_is_pinned: bool = False
+    ) -> None:
+        if (
+            self.state.shutting_down
+            or self._speech_worker is None
+            or self._startup_status_pending_or_active
+        ):
+            return
+        self.state.auxiliary_generation += 1
+        generation = self.state.auxiliary_generation
+        submitted = self._speech_worker.submit(
+            SpeechRequest(
+                generation,
+                "Kokoro is loading, please wait.",
+                SpeechPurpose.STARTUP_STATUS,
+                backend_override=(
+                    backend_override
+                    if backend_is_pinned
+                    else self._startup_piper_backend
+                ),
+            )
+        )
+        if submitted is not False:
+            self._startup_status_pending_or_active = True
+            self._startup_status_generation = generation
+
     def _handle_voice_switch(self, event: object) -> None:
         if not isinstance(event, VoiceSwitchEvent):
             return
@@ -1009,6 +1151,18 @@ class Controller:
                     (("general", "Piper settings are not available."),),
                 )
 
+            if (
+                engine == "Kokoro"
+                and self.state.kokoro_startup_state is KokoroStartupState.LOADING
+            ):
+                return SettingsApplyResult(
+                    False,
+                    ((
+                        "engine",
+                        "Kokoro is still starting. Wait for startup to finish before applying Kokoro settings.",
+                    ),),
+                )
+
             piper_reference = current.piper_voice
             if piper_voice_path is not None:
                 try:
@@ -1030,7 +1184,11 @@ class Controller:
                     )
 
                 piper_reference = str(resolved_path)
-            if engine == "Kokoro" and kokoro_voice not in self._kokoro_voice_ids:
+            if (
+                engine == "Kokoro"
+                and self._kokoro_voice_ids
+                and kokoro_voice not in self._kokoro_voice_ids
+            ):
                 return SettingsApplyResult(
                     False,
                     (("kokoro_voice", "The selected Kokoro voice is not installed."),),
@@ -1108,6 +1266,14 @@ class Controller:
                 self.state.settings = next_settings
                 if engine == "Piper" and piper_voice_path is not None:
                     self.set_voice(resolved_path, _candidate_voice)
+                if self.state.kokoro_startup_state is KokoroStartupState.LOADING:
+                    self.state.kokoro_startup_state = KokoroStartupState.READY
+                    self._startup_piper_backend = None
+                    self._startup_status_pending_or_active = False
+                    self._startup_status_generation = None
+                    self._set_tray_status(
+                        "Piper is ready" if engine == "Piper" else "Kokoro is ready"
+                    )
                 return SettingsApplyResult(True, snapshot=self.settings_window_snapshot())
             finally:
                 if not committed:
@@ -1137,6 +1303,17 @@ class Controller:
             return
         if self.state.shutting_down:
             return
+        if (
+            event.purpose is SpeechPurpose.STARTUP_STATUS
+            and event.generation == self._startup_status_generation
+            and event.kind in {
+                SpeechEventKind.FINISHED,
+                SpeechEventKind.CANCELLED,
+                SpeechEventKind.FAILED,
+            }
+        ):
+            self._startup_status_pending_or_active = False
+            self._startup_status_generation = None
         if event.purpose is not SpeechPurpose.FOREGROUND:
             if event.kind is SpeechEventKind.STARTED:
                 self.state.auxiliary_active_generation = event.generation

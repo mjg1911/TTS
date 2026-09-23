@@ -3,8 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from piper.windows_tray.controller import Controller
+from piper.windows_tray.controller import Controller, KokoroStartupState
 from piper.windows_tray.backend_manager import BackendCandidate, BackendManager
+from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.settings import TraySettings, save_settings
 
 
@@ -232,6 +233,87 @@ def test_apply_settings_unchanged_voice_and_hotkey_still_saves_scalars():
     assert saved == [controller.state.settings]
     assert controller.state.settings.pitch_percent == -10
     assert controller.state.settings.speed_percent == 50
+
+
+@pytest.mark.parametrize("stale_result", ["success", "failure"])
+def test_settings_engine_switch_invalidates_in_flight_kokoro_startup(stale_result):
+    tray_statuses = []
+    settings = TraySettings(engine="Kokoro", kokoro_voice="af_heart")
+    controller = make_controller(
+        settings=settings,
+        hotkeys=FakeHotkeys(),
+        save_settings=lambda _settings: None,
+    )
+    controller.configure_runtime(set_tray_status=tray_statuses.append)
+    statuses = []
+    controller.configure_runtime(show_status=statuses.append)
+    capture_jobs = []
+    controller.configure_runtime(capture_submit=capture_jobs.append)
+    controller.begin_kokoro_startup()
+    stale_candidate = BackendCandidate("Kokoro", "af_heart", object())
+
+    result = apply_settings(
+        controller,
+        hotkey=settings.hotkey,
+        pitch_text=str(settings.pitch_percent),
+        speed_text=str(settings.speed_percent),
+        piper_voice_path=None,
+        engine="Piper",
+    )
+    assert result.applied is True
+
+    selected_backend = controller._backend_manager.current()
+    assert controller.state.settings.engine == "Piper"
+    assert tray_statuses[-1] == "Piper is ready"
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    assert len(capture_jobs) == 1
+    status_count = len(tray_statuses)
+
+    if stale_result == "success":
+        controller.complete_kokoro_startup(stale_candidate, ["af_heart"])
+    else:
+        controller.fail_kokoro_startup("stale Kokoro startup failure")
+
+    assert controller.state.settings.engine == "Piper"
+    assert controller._backend_manager.current() is selected_backend
+    assert statuses == []
+    if stale_result == "success":
+        assert stale_candidate._released is True
+    assert len(tray_statuses) == status_count
+
+
+def test_apply_kokoro_settings_during_startup_does_not_prepare_second_backend():
+    settings = TraySettings(engine="Kokoro", kokoro_voice="af_heart")
+    saved = []
+    controller = make_controller(
+        settings=settings,
+        hotkeys=FakeHotkeys(),
+        save_settings=saved.append,
+    )
+    preparations = []
+    original_prepare = controller._backend_manager.prepare
+    controller._backend_manager.prepare = lambda engine, voice: preparations.append(
+        (engine, voice)
+    ) or original_prepare(engine, voice)
+    controller.begin_kokoro_startup()
+
+    result = apply_settings(
+        controller,
+        hotkey=settings.hotkey,
+        pitch_text=str(settings.pitch_percent),
+        speed_text=str(settings.speed_percent),
+        piper_voice_path=None,
+        engine="Kokoro",
+    )
+
+    assert result.applied is False
+    assert result.error_map() == {
+        "engine": "Kokoro is still starting. Wait for startup to finish before applying Kokoro settings."
+    }
+    assert preparations == []
+    assert saved == []
+    assert controller.state.settings is settings
+    assert controller.kokoro_startup_state is KokoroStartupState.LOADING
 
 
 def test_voice_load_failure_keeps_all_prior_state_and_skips_rebind_and_save():

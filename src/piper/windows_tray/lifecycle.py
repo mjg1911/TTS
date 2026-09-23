@@ -21,8 +21,10 @@ class TeardownCoordinator:
         on_failure: FailureCallback,
         on_complete: Cleanup,
         stop_codex: Cleanup = lambda: None,
+        cancel_startup: Cleanup = lambda: None,
     ) -> None:
         self._steps = (
+            ("startup", cancel_startup),
             ("hotkeys", stop_hotkeys),
             ("power", stop_power),
             ("codex", stop_codex),

@@ -406,12 +406,125 @@ def test_shutdown_sends_shutdown_and_waits_for_exit():
     client.shutdown()
     assert written_messages(process)[-1]["type"] == "shutdown"
     assert not process.killed
+    assert process.poll() is not None
+    assert process.wait_calls == 1
     assert closed == [True]
+
+
+def test_shutdown_synchronizes_with_process_creation_before_returning():
+    process_creation_started = Event()
+    allow_process_creation_to_finish = Event()
+    shutdown_started = Event()
+    shutdown_finished = Event()
+    cancel_event = Event()
+    processes = []
+    process = ready_process()
+
+    def process_factory(_config):
+        process_creation_started.set()
+        assert allow_process_creation_to_finish.wait(1.0)
+        processes.append(process)
+        return process
+
+    client = KokoroWorkerClient(
+        KokoroWorkerConfig(Path("KokoroWorker.exe"), Path("Kokoro"), "a" * 64, "1", "0.9.4"),
+        "af_heart",
+        process_factory,
+        sleep=lambda _delay: None,
+    )
+
+    readiness_errors = []
+
+    def ensure_ready():
+        try:
+            client.ensure_ready(cancel_event)
+        except KokoroUnavailable as error:
+            readiness_errors.append(error)
+
+    readiness = Thread(target=ensure_ready, daemon=True)
+    readiness.start()
+    assert process_creation_started.wait(1.0)
+
+    def cancel_startup():
+        cancel_event.set()
+        shutdown_started.set()
+        client.shutdown()
+        shutdown_finished.set()
+
+    shutdown = Thread(target=cancel_startup, daemon=True)
+    shutdown.start()
+    assert shutdown_started.wait(1.0)
+    assert shutdown_finished.wait(0.05) is False
+
+    allow_process_creation_to_finish.set()
+    readiness.join(1.0)
+    shutdown.join(1.0)
+
+    assert not readiness.is_alive()
+    assert not shutdown.is_alive()
+    assert shutdown_finished.is_set()
+    assert processes == [process]
+    assert client._process is None
+    assert process.terminated
+    assert process.wait_calls == 1
+    assert len(readiness_errors) == 1
+    with pytest.raises(KokoroUnavailable):
+        client.ensure_ready()
+    assert processes == [process]
+
+
+def test_shutdown_during_restart_backoff_prevents_another_process_launch():
+    backoff_started = Event()
+    release_backoff = Event()
+    processes = []
+    dead_process = ready_process()
+    dead_process.returncode = 1
+    replacement = ready_process()
+
+    def process_factory(_config):
+        process = dead_process if not processes else replacement
+        processes.append(process)
+        return process
+
+    def sleep(_delay):
+        backoff_started.set()
+        assert release_backoff.wait(1.0)
+
+    client = KokoroWorkerClient(
+        KokoroWorkerConfig(Path("KokoroWorker.exe"), Path("Kokoro"), "a" * 64, "1", "0.9.4"),
+        "af_heart",
+        process_factory,
+        sleep=sleep,
+    )
+    errors = []
+
+    def ensure_ready():
+        try:
+            client.ensure_ready()
+        except KokoroUnavailable as error:
+            errors.append(error)
+
+    readiness = Thread(target=ensure_ready, daemon=True)
+    readiness.start()
+    assert backoff_started.wait(1.0)
+
+    client.shutdown()
+    release_backoff.set()
+    readiness.join(1.0)
+
+    assert not readiness.is_alive()
+    assert len(errors) == 1
+    assert processes == [dead_process]
+    assert client._process is None
+    with pytest.raises(KokoroUnavailable):
+        client.ensure_ready()
+    assert processes == [dead_process]
 
 
 def test_shutdown_kills_worker_after_timeout():
     class HangingProcess(FakeProcess):
         def wait(self, timeout=None):
+            self.wait_calls += 1
             if not self.killed:
                 raise subprocess.TimeoutExpired("KokoroWorker.exe", timeout)
             self.returncode = 1
@@ -426,6 +539,8 @@ def test_shutdown_kills_worker_after_timeout():
     assert list(client.synthesize("hello", Event()).chunks) == []
     client.shutdown()
     assert process.killed
+    assert process.poll() is not None
+    assert process.wait_calls == 2
 
 
 def test_shutdown_is_idempotent():

@@ -101,14 +101,18 @@ class KokoroWorkerClient:
         self._inbox: Optional[_FrameInbox] = None
         self._request_id = 0
         self._lock = Lock()
+        self._lifecycle_lock = Lock()
+        self._readiness_lock = Lock()
+        self._shutdown_requested = Event()
         self._terminal_request_ids = set()
         self._expected_protocol_version = PROTOCOL_VERSION
         self._restart_attempts = 0
         self._unavailable_for_session = False
         self._shutdown_complete = False
 
-    def ensure_ready(self) -> None:
-        self._ensure_ready()
+    def ensure_ready(self, cancel_event: Optional[Event] = None) -> None:
+        with self._readiness_lock:
+            self._ensure_ready(cancel_event)
 
     def synthesize(self, text: str, cancel_event: Event) -> BackendSynthesisResult:
         request_id = self._next_request_id()
@@ -145,14 +149,32 @@ class KokoroWorkerClient:
         except (OSError, ProtocolError) as error:
             raise KokoroUnavailable("Kokoro worker request failed") from error
 
-    def _next_frame(self, timeout: float, *, response: bool = False):
+    def _next_frame(
+        self,
+        timeout: float,
+        *,
+        response: bool = False,
+        cancel_event: Optional[Event] = None,
+    ):
         inbox = self._inbox
         if inbox is None:
             raise KokoroUnavailable("Kokoro worker response pipe is not ready")
-        try:
-            item = inbox.get(timeout=timeout)
-        except Empty:
-            return None
+        deadline = self._monotonic() + timeout
+        while True:
+            self._raise_if_cancelled(cancel_event)
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                item = inbox.get(
+                    timeout=min(remaining, _RESPONSE_POLL_SECONDS)
+                    if cancel_event is not None
+                    else remaining
+                )
+                break
+            except Empty:
+                if cancel_event is None and self._monotonic() >= deadline:
+                    return None
         if item is _EOF:
             raise KokoroUnavailable("Kokoro worker response pipe closed")
         if isinstance(item, BaseException):
@@ -164,25 +186,55 @@ class KokoroWorkerClient:
                 raise KokoroUnavailable("Kokoro worker sent an invalid response") from error
         return item
 
-    def _ensure_ready(self) -> None:
-        if self._shutdown_complete or self._unavailable_for_session:
-            raise KokoroUnavailable("Kokoro is unavailable for this session")
-        if self._process is not None and self._process.poll() is None:
-            return
+    def _is_cancelled(self, cancel_event: Optional[Event]) -> bool:
+        return self._shutdown_requested.is_set() or (
+            cancel_event is not None and cancel_event.is_set()
+        )
+
+    def _raise_if_cancelled(self, cancel_event: Optional[Event]) -> None:
+        if self._is_cancelled(cancel_event):
+            raise KokoroUnavailable("Kokoro startup was cancelled")
+
+    def _ensure_ready(self, cancel_event: Optional[Event] = None) -> None:
+        with self._lifecycle_lock:
+            self._raise_if_cancelled(cancel_event)
+            if self._unavailable_for_session:
+                raise KokoroUnavailable("Kokoro is unavailable for this session")
+            if self._process is not None and self._process.poll() is None:
+                return
         if self._process_factory is None:
             from .kokoro_process import launch_kokoro_worker
 
             self._process_factory = launch_kokoro_worker
         while True:
+            self._raise_if_cancelled(cancel_event)
             if self._restart_attempts:
                 if self._restart_attempts > len(_RESTART_DELAYS):
                     self._unavailable_for_session = True
                     raise KokoroUnavailable("Kokoro is unavailable for this session")
                 self._sleep(_RESTART_DELAYS[self._restart_attempts - 1])
+                self._raise_if_cancelled(cancel_event)
+            process = None
             try:
                 try:
-                    process = self._process_factory(self._config)
+                    with self._lifecycle_lock:
+                        self._raise_if_cancelled(cancel_event)
+                        if self._process is not None and self._process.poll() is None:
+                            return
+                        process = self._process_factory(self._config)
+                        if self._is_cancelled(cancel_event):
+                            self._cleanup_process_locked(process)
+                            raise KokoroUnavailable("Kokoro startup was cancelled")
+                        self._process = process
+                        if process.stdout is None:
+                            raise KokoroUnavailable(
+                                "Kokoro worker stdout pipe is unavailable"
+                            )
+                        self._inbox = _FrameInbox(process.stdout)
                 except Exception as error:
+                    self._raise_if_cancelled(cancel_event)
+                    if isinstance(error, KokoroUnavailable):
+                        raise
                     self._restart_attempts += 1
                     if self._restart_attempts > len(_RESTART_DELAYS):
                         self._unavailable_for_session = True
@@ -190,14 +242,13 @@ class KokoroWorkerClient:
                     continue
                 if process.poll() is not None:
                     raise KokoroUnavailable("Kokoro worker exited during startup")
-                self._process = process
-                if process.stdout is None:
-                    raise KokoroUnavailable("Kokoro worker stdout pipe is unavailable")
-                self._inbox = _FrameInbox(process.stdout)
 
-                hello = self._next_frame(_HANDSHAKE_TIMEOUT_SECONDS)
+                hello = self._next_frame(
+                    _HANDSHAKE_TIMEOUT_SECONDS, cancel_event=cancel_event
+                )
                 if hello is None:
                     raise KokoroUnavailable("Kokoro worker handshake timed out")
+                self._raise_if_cancelled(cancel_event)
                 try:
                     validate_hello(hello)
                 except ProtocolError as error:
@@ -215,12 +266,21 @@ class KokoroWorkerClient:
                         "manifest_sha256": self._config.manifest_sha256,
                     }
                 )
-                ready = self._next_frame(_INITIALIZATION_TIMEOUT_SECONDS)
+                ready = self._next_frame(
+                    _INITIALIZATION_TIMEOUT_SECONDS, cancel_event=cancel_event
+                )
                 if ready is None or ready.get("type") != "ready":
                     raise KokoroUnavailable("Kokoro worker did not become ready")
+                self._raise_if_cancelled(cancel_event)
                 return
             except KokoroUnavailable:
+                if process is None:
+                    raise
                 process_was_live = process.poll() is None
+                if self._is_cancelled(cancel_event):
+                    if self._process is process:
+                        self._cleanup_process(process)
+                    raise
                 self._cleanup_process(process)
                 if process_was_live:
                     raise
@@ -230,6 +290,10 @@ class KokoroWorkerClient:
                     raise KokoroUnavailable("Kokoro is unavailable for this session")
 
     def _cleanup_process(self, process) -> None:
+        with self._lifecycle_lock:
+            self._cleanup_process_locked(process)
+
+    def _cleanup_process_locked(self, process) -> None:
         try:
             if process.poll() is None:
                 try:
@@ -256,29 +320,31 @@ class KokoroWorkerClient:
                 self._inbox = None
 
     def shutdown(self) -> None:
-        if self._shutdown_complete:
-            return
-        self._shutdown_complete = True
-        process = self._process
-        if process is None:
-            return
-        try:
-            if process.poll() is None:
-                try:
-                    self._send({"type": "shutdown"})
-                except KokoroUnavailable:
-                    pass
-                try:
-                    process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
-        finally:
-            job = getattr(process, "_piper_kokoro_job", None)
-            if job is not None:
-                job.close()
-            self._process = None
-            self._inbox = None
+        self._shutdown_requested.set()
+        with self._lifecycle_lock:
+            if self._shutdown_complete:
+                return
+            self._shutdown_complete = True
+            process = self._process
+            if process is None:
+                return
+            try:
+                if process.poll() is None:
+                    try:
+                        self._send({"type": "shutdown"})
+                    except KokoroUnavailable:
+                        pass
+                    try:
+                        process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+            finally:
+                job = getattr(process, "_piper_kokoro_job", None)
+                if job is not None:
+                    job.close()
+                self._process = None
+                self._inbox = None
 
     def _record_terminal(self, request_id: int) -> None:
         if request_id in self._terminal_request_ids:

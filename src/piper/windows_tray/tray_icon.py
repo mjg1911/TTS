@@ -9,7 +9,9 @@ def _load_dependencies():
 
 
 class TrayIcon:
-    def __init__(self, icon_path, enqueue, snapshot_provider=None) -> None:
+    def __init__(
+        self, icon_path, enqueue, snapshot_provider=None, status="Piper is ready"
+    ) -> None:
         self._icon_path = icon_path
         self._enqueue = enqueue
         self._snapshot_provider = snapshot_provider or (
@@ -26,6 +28,7 @@ class TrayIcon:
         )
         self._icon = None
         self._running = False
+        self._status = status
 
     @property
     def running(self) -> bool:
@@ -37,7 +40,7 @@ class TrayIcon:
         return pystray.Icon(
             "Piper",
             image_api.open(self._icon_path),
-            "Piper",
+            self._status,
             menu=pystray.Menu(
                 pystray.MenuItem(
                     "Settings",
@@ -88,6 +91,12 @@ class TrayIcon:
 
     def set_snapshot_provider(self, snapshot_provider) -> None:
         self._snapshot_provider = snapshot_provider
+
+    def set_status(self, text: str) -> None:
+        self._status = text
+        if self._icon is not None:
+            self._icon.title = text
+            self.update_menu()
 
     def start(self) -> None:
         if self._running:
