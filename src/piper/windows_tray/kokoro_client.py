@@ -126,7 +126,7 @@ class KokoroWorkerClient:
             validate_synthesize(message)
         except (ProtocolError, UnicodeEncodeError) as error:
             raise KokoroUnavailable("invalid Kokoro synthesis request") from error
-        self.ensure_ready()
+        self.ensure_ready(cancel_event)
         self._send(
             message
         )

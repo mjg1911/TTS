@@ -521,6 +521,52 @@ def test_shutdown_during_restart_backoff_prevents_another_process_launch():
     assert processes == [dead_process]
 
 
+def test_synthesize_cancellation_during_restart_backoff_prevents_replacement_launch():
+    backoff_started = Event()
+    release_backoff = Event()
+    cancel_event = Event()
+    dead_process = ready_process()
+    dead_process.returncode = 1
+    replacement = ready_process({"type": "response_end", "request_id": 1})
+    processes = []
+
+    def process_factory(_config):
+        process = dead_process if not processes else replacement
+        processes.append(process)
+        return process
+
+    def sleep(_delay):
+        backoff_started.set()
+        assert release_backoff.wait(1.0)
+
+    client = KokoroWorkerClient(
+        KokoroWorkerConfig(Path("KokoroWorker.exe"), Path("Kokoro"), "a" * 64, "1", "0.9.4"),
+        "af_heart",
+        process_factory,
+        sleep=sleep,
+    )
+    errors = []
+
+    def synthesize():
+        try:
+            client.synthesize("hello", cancel_event)
+        except KokoroUnavailable as error:
+            errors.append(error)
+
+    request = Thread(target=synthesize, daemon=True)
+    request.start()
+    assert backoff_started.wait(1.0)
+
+    cancel_event.set()
+    release_backoff.set()
+    request.join(1.0)
+
+    assert not request.is_alive()
+    assert len(errors) == 1
+    assert "cancelled" in str(errors[0])
+    assert processes == [dead_process]
+
+
 def test_shutdown_kills_worker_after_timeout():
     class HangingProcess(FakeProcess):
         def wait(self, timeout=None):
