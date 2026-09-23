@@ -194,6 +194,7 @@ class FakeUi:
         self.settings_speak_text = None
         self.settings_verify_kokoro = None
         self.kokoro_verification_message = None
+        self.kokoro_verification_update_thread_id = None
 
     def choose_voice_model(self):
         return None
@@ -214,6 +215,7 @@ class FakeUi:
         self.events.append(("settings.last_text", text))
 
     def update_settings_kokoro_verification(self, message):
+        self.kokoro_verification_update_thread_id = threading.get_ident()
         self.kokoro_verification_message = message
 
     def prompt_pitch(self, _current):
@@ -525,6 +527,7 @@ def test_manual_kokoro_verification_flows_through_main_thread_pump(monkeypatch):
     )
 
     def mainloop():
+        mainloop_thread_id = threading.get_ident()
         ui.root.callbacks.pop(0)()
         tray_enqueue[0](Command(CommandKind.CONFIGURE_SETTINGS))
         ui.root.callbacks.pop(0)()
@@ -533,15 +536,15 @@ def test_manual_kokoro_verification_flows_through_main_thread_pump(monkeypatch):
         assert verified.wait(timeout=1)
 
         deadline = time.monotonic() + 1
-        while (
-            ui.kokoro_verification_message is None
-            and time.monotonic() < deadline
-        ):
+        while time.monotonic() < deadline:
             ui.root.callbacks.pop(0)()
+            if ui.kokoro_verification_message is not None:
+                break
 
         assert ui.kokoro_verification_message == (
             "Kokoro files verified successfully."
         )
+        assert ui.kokoro_verification_update_thread_id == mainloop_thread_id
 
         tray_enqueue[0](Command(CommandKind.EXIT))
         ui.root.callbacks.pop(0)()
