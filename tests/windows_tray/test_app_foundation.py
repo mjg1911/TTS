@@ -1,4 +1,6 @@
 from pathlib import Path
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -190,6 +192,8 @@ class FakeUi:
         self.statuses = []
         self.settings_apply = None
         self.settings_speak_text = None
+        self.settings_verify_kokoro = None
+        self.kokoro_verification_message = None
 
     def choose_voice_model(self):
         return None
@@ -200,13 +204,17 @@ class FakeUi:
     def show_last_text(self, _text):
         pass
 
-    def open_settings(self, snapshot, on_apply, on_speak_text):
+    def open_settings(self, snapshot, on_apply, on_speak_text, on_verify_kokoro):
         self.events.append(("settings.open", snapshot))
         self.settings_apply = on_apply
         self.settings_speak_text = on_speak_text
+        self.settings_verify_kokoro = on_verify_kokoro
 
     def update_settings_last_text(self, text):
         self.events.append(("settings.last_text", text))
+
+    def update_settings_kokoro_verification(self, message):
+        self.kokoro_verification_message = message
 
     def prompt_pitch(self, _current):
         return None
@@ -483,6 +491,58 @@ def test_tray_settings_opens_only_when_main_thread_pump_handles_command(monkeypa
             for event in ui.events
             if isinstance(event, tuple)
         )
+        tray_enqueue[0](Command(CommandKind.EXIT))
+        ui.root.callbacks.pop(0)()
+
+    ui.root.mainloop = mainloop
+
+    assert app.run_app([]) == 0
+
+
+def test_manual_kokoro_verification_flows_through_main_thread_pump(monkeypatch):
+    events = []
+    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
+    verified = threading.Event()
+    tray_enqueue = []
+    worker = RecordingSpeechWorker(events, tray)
+
+    monkeypatch.setattr(
+        app,
+        "_build_speech_worker",
+        lambda _controller, _voice_manager: worker,
+    )
+
+    monkeypatch.setattr(
+        app,
+        "TrayIcon",
+        lambda _path, enqueue: tray_enqueue.append(enqueue) or tray,
+    )
+    monkeypatch.setattr(app, "_kokoro_root", lambda: Path("Kokoro"))
+    monkeypatch.setattr(
+        app,
+        "verify_kokoro_installation",
+        lambda _root: verified.set() or object(),
+    )
+
+    def mainloop():
+        ui.root.callbacks.pop(0)()
+        tray_enqueue[0](Command(CommandKind.CONFIGURE_SETTINGS))
+        ui.root.callbacks.pop(0)()
+        assert ui.settings_verify_kokoro is not None
+        assert ui.settings_verify_kokoro() is True
+        assert verified.wait(timeout=1)
+
+        deadline = time.monotonic() + 1
+        while (
+            ui.kokoro_verification_message is None
+            and time.monotonic() < deadline
+        ):
+            ui.root.callbacks.pop(0)()
+
+        assert ui.kokoro_verification_message == (
+            "Kokoro files verified successfully."
+        )
+
         tray_enqueue[0](Command(CommandKind.EXIT))
         ui.root.callbacks.pop(0)()
 

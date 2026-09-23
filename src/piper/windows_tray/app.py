@@ -37,6 +37,7 @@ from piper.kokoro_assets import (
 from .kokoro_client import KokoroWorkerClient, KokoroWorkerConfig
 from .kokoro_payload import ensure_bundled_kokoro_payload
 from .kokoro_startup import KokoroStartupCoordinator
+from .kokoro_verification import KokoroVerificationCoordinator
 
 
 def TkUi():
@@ -141,6 +142,7 @@ def run_app(
     backend_manager = None
     backend_stopped = False
     kokoro_startup = None
+    kokoro_verification = None
     controller = None
     ui = None
     logger = None
@@ -279,6 +281,10 @@ def run_app(
         else:
             logger = configure_logging(effective_level)
         ui = TkUi()
+        kokoro_verification = KokoroVerificationCoordinator(
+            lambda: verify_kokoro_installation(_kokoro_root()),
+            logger,
+        )
         data_dirs = tuple(_voice_data_dirs())
         settings = settings_result.settings
         try:
@@ -427,6 +433,11 @@ def run_app(
                             startup_result.unavailable_reason
                             or "Kokoro is unavailable during startup."
                         )
+            verification_result = kokoro_verification.take_result()
+            if verification_result is not None:
+                ui.update_settings_kokoro_verification(
+                    verification_result.message
+                )
             command = controller.drain_once()
             if command is not None:
                 controller.handle(command)
@@ -449,6 +460,7 @@ def run_app(
                 snapshot,
                 controller.apply_settings,
                 controller.speak_manual_text,
+                kokoro_verification.start,
             ),
             update_settings_last_text=getattr(
                 ui, "update_settings_last_text", lambda _text: None
