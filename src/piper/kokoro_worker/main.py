@@ -26,7 +26,10 @@ KOKORO_VERSION = "0.9.4"
 def _read_messages(stdin, inbox: Queue) -> None:
     while True:
         try:
-            inbox.put(read_frame(stdin))
+            message = read_frame(stdin)
+            inbox.put(message)
+            if message.get("type") == "shutdown":
+                return
         except EOFError:
             inbox.put(None)
             return
@@ -103,9 +106,11 @@ def main(stdin=None, stdout=None, stderr=None, install_root: Optional[Path] = No
         try:
             message = _receive(inbox)
         except EOFError:
+            reader.join()
             return 0
         message_type = message.get("type")
         if message_type == "shutdown":
+            reader.join()
             return 0
         if message_type == "initialize":
             validate_initialize(message)
