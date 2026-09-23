@@ -30,8 +30,10 @@ class SpeechEventKind(Enum):
 class SpeechPurpose(Enum):
     FOREGROUND = auto()
     ERROR = auto()
+    BROWSER = auto()
     CODEX = auto()
     WELCOME = auto()
+    STARTUP_STATUS = auto()
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class SpeechRequest:
     generation: int
     text: str
     purpose: SpeechPurpose = SpeechPurpose.FOREGROUND
+    backend_override: object | None = None
 
 
 @dataclass(frozen=True)
@@ -65,8 +68,10 @@ class SpeechWorker:
         self._condition = threading.Condition()
         self._pending_foreground: Optional[SpeechRequest] = None
         self._pending_errors = deque()  # type: deque[SpeechRequest]
+        self._pending_browser: Optional[SpeechRequest] = None
         self._pending_codex: Optional[SpeechRequest] = None
         self._pending_welcome: Optional[SpeechRequest] = None
+        self._pending_startup_status: Optional[SpeechRequest] = None
         self._active_request: Optional[SpeechRequest] = None
         self._active_cancel_event: Optional[threading.Event] = None
         self._cancel_event_factory = threading.Event
@@ -83,6 +88,7 @@ class SpeechWorker:
         cancel_active = False
         player = None
         cancel_event = None
+        evicted_startup_status = None
 
         with self._condition:
             if self._shutdown:
@@ -96,20 +102,27 @@ class SpeechWorker:
             if request.purpose is SpeechPurpose.FOREGROUND:
                 self._pending_foreground = request
                 self._pending_errors.clear()
+                self._pending_browser = None
                 self._pending_codex = None
                 self._pending_welcome = None
+                evicted_startup_status = self._pending_startup_status
+                self._pending_startup_status = None
                 cancel_active = (
                     active_purpose is not None
                     and active_purpose is not SpeechPurpose.FOREGROUND
                 )
             elif request.purpose is SpeechPurpose.ERROR:
                 self._pending_errors.append(request)
+                self._pending_browser = None
                 self._pending_codex = None
+                evicted_startup_status = self._pending_startup_status
+                self._pending_startup_status = None
                 cancel_active = active_purpose in {
                     SpeechPurpose.CODEX,
                     SpeechPurpose.WELCOME,
+                    SpeechPurpose.STARTUP_STATUS,
                 }
-            elif request.purpose is SpeechPurpose.CODEX:
+            elif request.purpose is SpeechPurpose.BROWSER:
                 higher_pending = (
                     self._pending_foreground is not None
                     or bool(self._pending_errors)
@@ -120,14 +133,45 @@ class SpeechWorker:
                 }
                 if higher_pending or higher_active:
                     return False
-                self._pending_codex = request
+                self._pending_browser = request
+                self._pending_codex = None
                 self._pending_welcome = None
+                evicted_startup_status = self._pending_startup_status
+                self._pending_startup_status = None
                 cancel_active = active_purpose in {
                     SpeechPurpose.CODEX,
                     SpeechPurpose.WELCOME,
+                    SpeechPurpose.STARTUP_STATUS,
                 }
-            else:
+            elif request.purpose is SpeechPurpose.CODEX:
+                higher_pending = (
+                    self._pending_foreground is not None
+                    or bool(self._pending_errors)
+                    or self._pending_browser is not None
+                )
+                higher_active = active_purpose in {
+                    SpeechPurpose.FOREGROUND,
+                    SpeechPurpose.ERROR,
+                    SpeechPurpose.BROWSER,
+                }
+                if higher_pending or higher_active:
+                    return False
+                self._pending_codex = request
+                self._pending_welcome = None
+                evicted_startup_status = self._pending_startup_status
+                self._pending_startup_status = None
+                cancel_active = active_purpose in {
+                    SpeechPurpose.CODEX,
+                    SpeechPurpose.WELCOME,
+                    SpeechPurpose.STARTUP_STATUS,
+                }
+            elif request.purpose is SpeechPurpose.WELCOME:
                 self._pending_welcome = request
+                evicted_startup_status = self._pending_startup_status
+                self._pending_startup_status = None
+            else:
+                evicted_startup_status = self._pending_startup_status
+                self._pending_startup_status = request
 
             if cancel_active:
                 player = self._active_player
@@ -135,6 +179,14 @@ class SpeechWorker:
             self._condition.notify()
 
         self._cancel_outside_condition(cancel_event, player)
+        if evicted_startup_status is not None:
+            self._on_event(
+                SpeechEvent(
+                    SpeechEventKind.CANCELLED,
+                    evicted_startup_status.generation,
+                    purpose=SpeechPurpose.STARTUP_STATUS,
+                )
+            )
         return True
 
     def _cancel_outside_condition(self, cancel_event, player) -> None:
@@ -178,19 +230,44 @@ class SpeechWorker:
         """Cancel active and pending error or welcome speech."""
         player = None
         cancel_event = None
+        evicted_startup_status = None
         with self._condition:
             self._pending_errors.clear()
+            self._pending_browser = None
             self._pending_codex = None
             self._pending_welcome = None
+            evicted_startup_status = self._pending_startup_status
+            self._pending_startup_status = None
             active = self._active_request
             if (
-                active is None
-                or active.purpose is SpeechPurpose.FOREGROUND
+                active is not None
+                and active.purpose is not SpeechPurpose.FOREGROUND
             ):
+                player = self._active_player
+                cancel_event = self._active_cancel_event
+
+        if cancel_event is not None or player is not None:
+            self._cancel_outside_condition(cancel_event, player)
+        if evicted_startup_status is not None:
+            self._on_event(
+                SpeechEvent(
+                    SpeechEventKind.CANCELLED,
+                    evicted_startup_status.generation,
+                    purpose=SpeechPurpose.STARTUP_STATUS,
+                )
+            )
+
+    def cancel_browser(self) -> None:
+        """Cancel active and pending browser speech only."""
+        player = None
+        cancel_event = None
+        with self._condition:
+            self._pending_browser = None
+            active = self._active_request
+            if active is None or active.purpose is not SpeechPurpose.BROWSER:
                 return
             player = self._active_player
             cancel_event = self._active_cancel_event
-
         self._cancel_outside_condition(cancel_event, player)
 
     def cancel_codex(self) -> None:
@@ -212,8 +289,10 @@ class SpeechWorker:
             self._shutdown = True
             self._pending_foreground = None
             self._pending_errors.clear()
+            self._pending_browser = None
             self._pending_codex = None
             self._pending_welcome = None
+            self._pending_startup_status = None
             player = self._active_player
             cancel_event = self._active_cancel_event
             self._condition.notify_all()
@@ -259,8 +338,10 @@ class SpeechWorker:
         return (
             self._pending_foreground is not None
             or bool(self._pending_errors)
+            or self._pending_browser is not None
             or self._pending_codex is not None
             or self._pending_welcome is not None
+            or self._pending_startup_status is not None
         )
 
     def _take_next_locked(self) -> SpeechRequest:
@@ -272,6 +353,11 @@ class SpeechWorker:
         if self._pending_errors:
             return self._pending_errors.popleft()
 
+        if self._pending_browser is not None:
+            request = self._pending_browser
+            self._pending_browser = None
+            return request
+
         if self._pending_codex is not None:
             request = self._pending_codex
             self._pending_codex = None
@@ -279,10 +365,13 @@ class SpeechWorker:
 
         request = self._pending_welcome
         self._pending_welcome = None
+        if request is not None:
+            return request
+
+        request = self._pending_startup_status
+        self._pending_startup_status = None
         if request is None:
-            raise RuntimeError(
-                "speech scheduler woke without pending work"
-            )
+            raise RuntimeError("speech scheduler woke without pending work")
         return request
 
     def _speak(
@@ -303,9 +392,28 @@ class SpeechWorker:
         failure: BaseException | None = None
         phase = "synthesis"
         synthesis_seconds = 0.0
+        release_backend = None
         try:
-            voice = self._voice_provider()
-            sample_rate = voice.config.sample_rate
+            if request.backend_override is not None:
+                backend = request.backend_override
+            else:
+                provided_backend = self._voice_provider()
+                if (
+                    isinstance(provided_backend, tuple)
+                    and len(provided_backend) == 2
+                    and callable(provided_backend[1])
+                ):
+                    backend, release_backend = provided_backend
+                else:
+                    backend = provided_backend
+            is_piper_voice = hasattr(backend, "config")
+            sample_rate = backend.config.sample_rate if is_piper_voice else None
+            if not is_piper_voice:
+                result = backend.synthesize(request.text, cancel_event)
+                sample_rate = result.sample_rate
+                audio_chunks = iter(result.chunks)
+            else:
+                audio_chunks = iter(backend.synthesize(request.text))
             phase = "playback"
             player_context = self._player_factory(sample_rate)
             with player_context as player:
@@ -316,7 +424,6 @@ class SpeechWorker:
                     player.stop()
 
                 phase = "synthesis"
-                audio_chunks = iter(voice.synthesize(request.text))
                 while True:
                     phase = "synthesis"
                     if cancel_event.is_set():
@@ -336,7 +443,9 @@ class SpeechWorker:
                     if cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
-                    audio_bytes = chunk.audio_int16_bytes
+                    audio_bytes = (
+                        chunk.audio_int16_bytes if is_piper_voice else chunk
+                    )
                     if cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
@@ -362,6 +471,9 @@ class SpeechWorker:
                     if phase == "playback"
                     else "Speech synthesis failed."
                 )
+        finally:
+            if release_backend is not None:
+                release_backend()
 
         with self._decision_boundary:
             if cancel_event.is_set():

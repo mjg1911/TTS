@@ -40,7 +40,11 @@ def test_build_extra_contains_pyinstaller_without_changing_tray_runtime_extra() 
     extras = _extras_require()
 
     assert extras["windows-tray-build"] == ["pyinstaller>=6,<7"]
-    assert extras["windows-tray"] == ["pystray>=0.19.5,<1", "Pillow>=10,<12"]
+    assert extras["windows-tray"] == [
+        "pystray>=0.19.5,<1",
+        "Pillow>=10,<12",
+        "websockets>=15,<16",
+    ]
     assert not any(
         dependency.lower().startswith("pyinstaller")
         for dependency in _install_requires()
@@ -94,11 +98,14 @@ def test_spec_places_tcl_tk_data_where_pyinstaller_runtime_hook_expects_it() -> 
     assert '"_tk_data"' in text
 
 
-def test_spec_builds_one_file_executable() -> None:
+def test_spec_builds_one_folder_distribution() -> None:
     text = (ROOT / "script" / "piper_tray.spec").read_text(encoding="utf-8")
-    assert "COLLECT(" not in text
-    assert "a.binaries" in text
-    assert "a.datas" in text
+    assert "exclude_binaries=True" in text
+    assert "coll = COLLECT(" in text
+    assert "a.binaries," in text
+    assert "a.datas," in text
+    assert 'name="PiperTray"' in text
+    assert "kokoro_payload_datas" in text
 
 
 def test_ffmpeg_and_ffplay_remain_external_to_frozen_bundle() -> None:
@@ -254,3 +261,26 @@ def test_windows_workflow_provisions_pinned_smoke_voice() -> None:
     assert "Download frozen smoke voice" in text
     assert "piper-voices/resolve/v1.0.0" in text
     assert "PIPER_SMOKE_VOICE_DIR" in text
+
+
+def test_build_and_smoke_use_one_folder_executable() -> None:
+    build = (ROOT / "script" / "build_windows_tray.ps1").read_text(encoding="utf-8")
+    smoke = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(encoding="utf-8")
+    acceptance = (ROOT / "script" / "accept_windows_kokoro_offline.ps1").read_text(encoding="utf-8")
+    assert '$DistDir = Join-Path $Root "dist\\PiperTray"' in build
+    assert '$Exe = Join-Path $DistDir "PiperTray.exe"' in build
+    assert 'Join-Path $DistDir "_internal\\kokoro_payload\\manifest.json"' in build
+    assert '$Exe = Join-Path $Root "dist\\PiperTray\\PiperTray.exe"' in smoke
+    assert '[string]$TrayExe = "dist/PiperTray/PiperTray.exe"' in acceptance
+
+
+def test_installer_and_ci_ship_entire_one_folder_tree() -> None:
+    builder = (ROOT / "script" / "build_windows_installer.ps1").read_text(encoding="utf-8")
+    installer = (ROOT / "script" / "piper_tray_installer.iss").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "windows-tray.yml").read_text(encoding="utf-8")
+    assert '"dist/PiperTray/PiperTray.exe"' in builder
+    assert '"dist/PiperTray/_internal/kokoro_payload/manifest.json"' in builder
+    assert 'Source: "..\\dist\\PiperTray\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs' in installer
+    assert 'dist/PiperTray/' in workflow
+    assert 'dist/PiperTray/_internal/kokoro_payload/manifest.json' in workflow
+    assert 'dist/PiperTray/_internal/kokoro_payload/worker/KokoroWorker.exe' in workflow

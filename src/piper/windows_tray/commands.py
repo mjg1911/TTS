@@ -37,3 +37,5 @@ CommandValue = Any
 class Command:
     kind: CommandKind
     value: Optional[CommandValue] = None
+    capture_is_startup_status: Optional[bool] = None
+    capture_status_backend: Optional[object] = None

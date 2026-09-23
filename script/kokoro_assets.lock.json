@@ -1,0 +1,9 @@
+{
+  "repository": "hexgrad/Kokoro-82M",
+  "revision": "c3327e9bac3dbe55779397bfa82de0f8806fb3bc",
+  "files": {
+    "config.json": "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f",
+    "kokoro-v1_0.pth": "496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4",
+    "voices/af_heart.pt": "0ab5709b8ffab19bfd849cd11d98f75b60af7733253ad0d67b12382a102cb4ff"
+  }
+}

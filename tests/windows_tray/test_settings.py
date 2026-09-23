@@ -30,6 +30,59 @@ def _write_v1_settings(path: Path, **overrides) -> None:
     path.write_text(json.dumps(settings), encoding="utf-8")
 
 
+def test_v1_settings_migrate_to_v2_without_corrupt_rename(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "voice": "en_GB-alba-medium",
+                "hotkey": "alt+backtick",
+                "log_level": "DEBUG",
+                "error_sounds": True,
+                "codex_enabled": True,
+                "pitch_percent": 10,
+                "speed_percent": -5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_settings(path)
+
+    assert result.source == "loaded"
+    assert result.settings.schema_version == 2
+    assert result.settings.engine == "Piper"
+    assert result.settings.piper_voice == "en_GB-alba-medium"
+    assert result.settings.kokoro_voice == "af_heart"
+    assert not path.with_name("settings.json.corrupt").exists()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["schema_version"] == 2
+    assert "voice" not in saved
+
+
+def test_future_schema_is_still_corrupt(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 99,
+                "engine": "Piper",
+                "piper_voice": "en_GB-alba-medium",
+                "kokoro_voice": "af_heart",
+                "hotkey": "alt+backtick",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_settings(path)
+
+    assert result.source == "corrupt"
+    assert not path.exists()
+    assert path.with_name("settings.json.corrupt").exists()
+
+
 def test_missing_settings_use_safe_defaults(tmp_path: Path) -> None:
     result = load_settings(tmp_path / "settings.json")
     assert result.settings == TraySettings()
@@ -40,6 +93,29 @@ def test_old_settings_default_codex_enabled_to_false(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     _write_v1_settings(path)
     assert load_settings(path).settings.codex_enabled is False
+
+
+def test_old_settings_default_browser_chatgpt_enabled_to_false(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path)
+    result = load_settings(path)
+    assert result.settings.browser_chatgpt_enabled is False
+    assert result.source == "loaded"
+
+
+def test_browser_chatgpt_enabled_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    save_settings(TraySettings(browser_chatgpt_enabled=True), path)
+    assert load_settings(path).settings.browser_chatgpt_enabled is True
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", "false", [], {}])
+def test_invalid_browser_chatgpt_enabled_is_corrupt(tmp_path: Path, value) -> None:
+    path = tmp_path / "settings.json"
+    _write_v1_settings(path, browser_chatgpt_enabled=value)
+    result = load_settings(path)
+    assert result.settings == TraySettings()
+    assert result.source == "corrupt"
 
 
 def test_codex_enabled_round_trip(tmp_path: Path) -> None:
@@ -157,7 +233,7 @@ def test_save_settings_uses_replace_and_writes_schema_version(
     save_settings(TraySettings(), path)
 
     assert replacements and replacements[0][1] == path
-    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
+    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 2
 
 
 def test_old_settings_default_error_sounds_to_false(tmp_path: Path) -> None:
@@ -285,11 +361,11 @@ def test_unhashable_log_level_is_preserved_as_corrupt(
     assert list(tmp_path.glob("settings.json.corrupt*"))
 
 
-def test_save_settings_rejects_non_v1_schema_version(tmp_path: Path) -> None:
+def test_save_settings_rejects_non_v2_schema_version(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
 
     with pytest.raises(ValueError, match="unsupported settings schema"):
-        save_settings(TraySettings(schema_version=2), path)
+        save_settings(TraySettings(schema_version=1), path)
 
     assert not path.exists()
 

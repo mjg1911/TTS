@@ -1,0 +1,13 @@
+kokoro==0.9.4
+misaki[en]==0.9.4
+numpy>=2,<3
+torch>=2,<3
+transformers>=4,<6
+huggingface-hub>=0.28,<1
+loguru>=0.7,<1
+num2words>=0.5,<1
+spacy>=3.8,<3.9
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+spacy-curated-transformers>=0.3,<1
+phonemizer-fork>=3,<4
+espeakng-loader>=0.2,<1

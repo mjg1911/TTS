@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from piper.windows_tray.controller import Controller
+from piper.windows_tray.controller import Controller, KokoroStartupState
+from piper.windows_tray.backend_manager import BackendCandidate, BackendManager
+from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.settings import TraySettings, save_settings
 
 
@@ -51,6 +53,11 @@ class TransactionalFakeHotkeys(FakeHotkeys):
 
 
 def make_controller(settings=None, hotkeys=None, save_settings=None):
+    backend_manager = BackendManager(
+        object(),
+        lambda: None,
+        lambda engine, voice_id: BackendCandidate(engine, voice_id, object()),
+    )
     return Controller(
         settings=settings
         or TraySettings(
@@ -61,6 +68,26 @@ def make_controller(settings=None, hotkeys=None, save_settings=None):
         ),
         save_settings=save_settings or (lambda _settings: None),
         hotkeys=hotkeys or FakeHotkeys(),
+        backend_manager=backend_manager,
+    )
+
+
+def apply_settings(
+    controller,
+    hotkey,
+    pitch_text,
+    speed_text,
+    piper_voice_path=None,
+    engine="Piper",
+    kokoro_voice="af_heart",
+):
+    return controller.apply_settings(
+        engine,
+        hotkey,
+        pitch_text,
+        speed_text,
+        piper_voice_path,
+        kokoro_voice,
     )
 
 
@@ -74,11 +101,12 @@ def test_apply_settings_collects_scalar_errors_before_side_effects():
         or (Path(reference), object())
     )
 
-    result = controller.apply_settings(
+    result = apply_settings(
+        controller,
         hotkey="not-a-hotkey",
         pitch_text="101",
         speed_text="-51",
-        voice_path=Path("new.onnx"),
+        piper_voice_path=Path("new.onnx"),
     )
 
     assert result.applied is False
@@ -100,8 +128,9 @@ def test_apply_settings_accepts_percent_boundaries(field, value):
     values = {"pitch_text": "26", "speed_text": "0"}
     values[f"{field}_text"] = value
 
-    result = controller.apply_settings(
-        hotkey="alt+backtick", voice_path=None, **values
+    result = apply_settings(
+        controller,
+        hotkey="alt+backtick", piper_voice_path=None, **values
     )
 
     assert result.applied is True
@@ -114,8 +143,9 @@ def test_apply_settings_rejects_invalid_percent_text(field, value):
     values = {"pitch_text": "26", "speed_text": "0"}
     values[f"{field}_text"] = value
 
-    result = controller.apply_settings(
-        hotkey="alt+backtick", voice_path=None, **values
+    result = apply_settings(
+        controller,
+        hotkey="alt+backtick", piper_voice_path=None, **values
     )
 
     assert result.applied is False
@@ -135,12 +165,7 @@ def test_apply_settings_loads_voice_before_rebind_and_commits_after_save():
     )
     controller.set_voice(Path("old.onnx"), old_voice)
 
-    class FakeVoiceManager:
-        def replace(self, voice):
-            events.append(("replace", voice))
-
     controller.configure_runtime(
-        voice_manager=FakeVoiceManager(),
         load_voice=lambda reference: events.append(("load", reference))
         or (Path(reference), new_voice),
     )
@@ -160,11 +185,12 @@ def test_apply_settings_loads_voice_before_rebind_and_commits_after_save():
 
     hotkeys.commit_rebind = recording_commit
 
-    result = controller.apply_settings(
+    result = apply_settings(
+        controller,
         hotkey="Ctrl + Q",
         pitch_text="-10",
         speed_text="50",
-        voice_path=Path("new.onnx"),
+        piper_voice_path=Path("new.onnx"),
     )
 
     assert result.applied is True
@@ -175,7 +201,6 @@ def test_apply_settings_loads_voice_before_rebind_and_commits_after_save():
         "prepare",
         "save",
         "commit",
-        "replace",
     ]
     assert controller.state.settings == TraySettings(
         voice="new.onnx",
@@ -194,11 +219,12 @@ def test_apply_settings_unchanged_voice_and_hotkey_still_saves_scalars():
     controller = make_controller(hotkeys=hotkeys, save_settings=saved.append)
     controller.configure_runtime(load_voice=lambda reference: loaded.append(reference))
 
-    result = controller.apply_settings(
+    result = apply_settings(
+        controller,
         hotkey="Alt + Backtick",
         pitch_text="-10",
         speed_text="50",
-        voice_path=None,
+        piper_voice_path=None,
     )
 
     assert result.applied is True
@@ -207,6 +233,87 @@ def test_apply_settings_unchanged_voice_and_hotkey_still_saves_scalars():
     assert saved == [controller.state.settings]
     assert controller.state.settings.pitch_percent == -10
     assert controller.state.settings.speed_percent == 50
+
+
+@pytest.mark.parametrize("stale_result", ["success", "failure"])
+def test_settings_engine_switch_invalidates_in_flight_kokoro_startup(stale_result):
+    tray_statuses = []
+    settings = TraySettings(engine="Kokoro", kokoro_voice="af_heart")
+    controller = make_controller(
+        settings=settings,
+        hotkeys=FakeHotkeys(),
+        save_settings=lambda _settings: None,
+    )
+    controller.configure_runtime(set_tray_status=tray_statuses.append)
+    statuses = []
+    controller.configure_runtime(show_status=statuses.append)
+    capture_jobs = []
+    controller.configure_runtime(capture_submit=capture_jobs.append)
+    controller.begin_kokoro_startup()
+    stale_candidate = BackendCandidate("Kokoro", "af_heart", object())
+
+    result = apply_settings(
+        controller,
+        hotkey=settings.hotkey,
+        pitch_text=str(settings.pitch_percent),
+        speed_text=str(settings.speed_percent),
+        piper_voice_path=None,
+        engine="Piper",
+    )
+    assert result.applied is True
+
+    selected_backend = controller._backend_manager.current()
+    assert controller.state.settings.engine == "Piper"
+    assert tray_statuses[-1] == "Piper is ready"
+    controller.handle(Command(CommandKind.CAPTURE_REQUEST))
+    assert len(capture_jobs) == 1
+    status_count = len(tray_statuses)
+
+    if stale_result == "success":
+        controller.complete_kokoro_startup(stale_candidate, ["af_heart"])
+    else:
+        controller.fail_kokoro_startup("stale Kokoro startup failure")
+
+    assert controller.state.settings.engine == "Piper"
+    assert controller._backend_manager.current() is selected_backend
+    assert statuses == []
+    if stale_result == "success":
+        assert stale_candidate._released is True
+    assert len(tray_statuses) == status_count
+
+
+def test_apply_kokoro_settings_during_startup_does_not_prepare_second_backend():
+    settings = TraySettings(engine="Kokoro", kokoro_voice="af_heart")
+    saved = []
+    controller = make_controller(
+        settings=settings,
+        hotkeys=FakeHotkeys(),
+        save_settings=saved.append,
+    )
+    preparations = []
+    original_prepare = controller._backend_manager.prepare
+    controller._backend_manager.prepare = lambda engine, voice: preparations.append(
+        (engine, voice)
+    ) or original_prepare(engine, voice)
+    controller.begin_kokoro_startup()
+
+    result = apply_settings(
+        controller,
+        hotkey=settings.hotkey,
+        pitch_text=str(settings.pitch_percent),
+        speed_text=str(settings.speed_percent),
+        piper_voice_path=None,
+        engine="Kokoro",
+    )
+
+    assert result.applied is False
+    assert result.error_map() == {
+        "engine": "Kokoro is still starting. Wait for startup to finish before applying Kokoro settings."
+    }
+    assert preparations == []
+    assert saved == []
+    assert controller.state.settings is settings
+    assert controller.kokoro_startup_state is KokoroStartupState.LOADING
 
 
 def test_voice_load_failure_keeps_all_prior_state_and_skips_rebind_and_save():
@@ -221,11 +328,17 @@ def test_voice_load_failure_keeps_all_prior_state_and_skips_rebind_and_save():
         load_voice=lambda _reference: (_ for _ in ()).throw(OSError("bad model"))
     )
 
-    result = controller.apply_settings("ctrl+q", "26", "0", Path("new.onnx"))
+    result = apply_settings(
+        controller,
+        "ctrl+q",
+        "26",
+        "0",
+        Path("new.onnx"),
+    )
 
     assert result.applied is False
     assert result.error_map() == {
-        "voice": (
+        "piper_voice": (
             "The selected voice could not be loaded. "
             "The previous voice is still active."
         )
@@ -250,7 +363,13 @@ def test_hotkey_conflict_keeps_prior_settings_and_loaded_voice_uncommitted():
         load_voice=lambda _reference: (Path("new.onnx"), new_voice)
     )
 
-    result = controller.apply_settings("ctrl+q", "26", "0", Path("new.onnx"))
+    result = apply_settings(
+        controller,
+        "ctrl+q",
+        "26",
+        "0",
+        Path("new.onnx"),
+    )
 
     assert result.applied is False
     assert result.error_map() == {
@@ -279,7 +398,13 @@ def test_save_failure_restores_old_hotkey_and_keeps_old_voice_and_settings():
         load_voice=lambda _reference: (Path("new.onnx"), new_voice)
     )
 
-    result = controller.apply_settings("ctrl+q", "26", "0", Path("new.onnx"))
+    result = apply_settings(
+        controller,
+        "ctrl+q",
+        "26",
+        "0",
+        Path("new.onnx"),
+    )
 
     assert result.applied is False
     assert result.error_map() == {"general": "Piper settings could not be saved."}
@@ -301,11 +426,20 @@ def test_save_failure_reports_when_pending_hotkey_cannot_be_removed():
     controller = make_controller(hotkeys=hotkeys, save_settings=fail_save)
     controller.configure_runtime(log_error=errors.append)
 
-    result = controller.apply_settings("ctrl+q", "26", "0", None)
+    result = apply_settings(
+        controller,
+        "ctrl+q",
+        "26",
+        "0",
+        None,
+    )
 
     assert result.applied is False
     assert result.error_map() == {
-        "general": "Piper settings could not be saved."
+        "general": (
+            "Settings state is uncertain. Restart Piper Tray before changing "
+            "settings again."
+        )
     }
 
 
@@ -321,7 +455,13 @@ def test_save_failure_rolls_back_candidate_without_rebinding_old_hotkey():
         settings=original, hotkeys=hotkeys, save_settings=fail_save
     )
 
-    result = controller.apply_settings("ctrl+q", "26", "0", None)
+    result = apply_settings(
+        controller,
+        "ctrl+q",
+        "26",
+        "0",
+        None,
+    )
 
     assert result.applied is False
     assert hotkeys.calls == ["prepare", "rollback"]
@@ -341,7 +481,13 @@ def test_commit_failure_restores_old_settings_after_new_settings_were_saved():
         settings=original, hotkeys=hotkeys, save_settings=record_save
     )
 
-    result = controller.apply_settings("ctrl+q", "26", "0", None)
+    result = apply_settings(
+        controller,
+        "ctrl+q",
+        "26",
+        "0",
+        None,
+    )
 
     assert result.applied is False
     assert hotkeys.calls == ["prepare", "commit", "rollback"]
@@ -368,18 +514,18 @@ def test_settings_window_snapshot_copies_committed_editor_state():
 
 def test_apply_settings_never_persists_last_captured_text(tmp_path):
     path = tmp_path / "settings.json"
-    controller = Controller(
+    controller = make_controller(
         settings=TraySettings(),
         save_settings=lambda settings: save_settings(settings, path),
-        hotkeys=FakeHotkeys(),
     )
     controller.state.last_text = "private captured text"
 
-    result = controller.apply_settings(
+    result = apply_settings(
+        controller,
         hotkey="alt+backtick",
         pitch_text="26",
         speed_text="0",
-        voice_path=None,
+        piper_voice_path=None,
     )
 
     assert result.applied is True

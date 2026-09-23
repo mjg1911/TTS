@@ -279,6 +279,9 @@ class FakeTray:
     def stop(self):
         self.events.append("stop")
 
+    def set_status(self, _text):
+        pass
+
     def ensure_visible(self):
         self.events.append("ensure")
 
@@ -343,6 +346,7 @@ def _patch_primary_app(monkeypatch, events):
         warning=lambda *_args: None,
         error=lambda *_args: None,
         exception=lambda *_args: None,
+        info=lambda *_args: None,
     ))
     ui = FakeUi(events)
     monkeypatch.setattr(app, "TkUi", lambda: events.append("ui") or ui)
@@ -361,6 +365,33 @@ def _patch_primary_app(monkeypatch, events):
     monkeypatch.setattr(app, "TrayIcon", lambda path, enqueue: events.append("tray") or tray)
     monkeypatch.setattr(app, "PowerBroadcastListener", FakePowerListener)
     return app, instance, ui, tray
+
+
+def test_bundled_kokoro_deploy_failure_does_not_block_piper_startup(monkeypatch):
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    controllers = []
+    original_controller = app.Controller
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: controllers.append(
+            original_controller(*args, **kwargs)
+        )
+        or controllers[-1],
+    )
+    ui.root.mainloop = lambda: None
+    monkeypatch.setattr(
+        app,
+        "ensure_bundled_kokoro_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read-only disk")),
+    )
+    monkeypatch.setattr(app, "_bundled_kokoro_root", lambda: Path("bundle"))
+    assert app.run_app([]) == 0
+    assert "voice" in events
+    snapshot = controllers[0].settings_window_snapshot()
+    assert snapshot.kokoro_available is False
+    assert snapshot.kokoro_unavailable_reason is None
 
 
 def test_power_resume_callback_enqueues_system_resume_and_stops(monkeypatch):
@@ -407,8 +438,8 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
         "settings",
         "logging",
         "ui",
-        "controller",
         "voice",
+        "controller",
         "tray",
         "watch",
     ]
@@ -893,11 +924,26 @@ def test_primary_pre_tray_failures_close_instance(monkeypatch, failure_stage) ->
             lambda _level: (_ for _ in ()).throw(OSError("logging")),
         )
     else:
-        monkeypatch.setattr(app, "configure_logging", lambda _level: SimpleNamespace(exception=lambda *_args: None))
+        monkeypatch.setattr(
+            app,
+            "configure_logging",
+            lambda _level: SimpleNamespace(
+                warning=lambda *_args: None,
+                error=lambda *_args: None,
+                exception=lambda *_args: None,
+                info=lambda *_args: None,
+            ),
+        )
     if failure_stage == "ui":
         monkeypatch.setattr(app, "TkUi", lambda: (_ for _ in ()).throw(RuntimeError("ui")))
     else:
         monkeypatch.setattr(app, "TkUi", lambda: FakeUi(events))
+    if failure_stage == "controller":
+        monkeypatch.setattr(
+            app,
+            "_load_configured_voice",
+            lambda _settings, _dirs: (Path("voice.onnx"), object()),
+        )
     if failure_stage == "controller":
         monkeypatch.setattr(
             app,
@@ -937,6 +983,17 @@ def test_tk_thread_dispatches_activation_and_exit(monkeypatch) -> None:
     events = []
     app, instance, ui, tray = _patch_primary_app(monkeypatch, events)
     controller = Controller()
+    logs = []
+    monkeypatch.setattr(
+        app,
+        "configure_logging",
+        lambda _level: SimpleNamespace(
+            warning=lambda *_args: None,
+            error=lambda *_args: None,
+            exception=lambda *_args: None,
+            info=lambda message, *args: logs.append(message % args if args else message),
+        ),
+    )
     monkeypatch.setattr(app, "Controller", lambda *args, **kwargs: controller)
 
     class CancelHotkeyRegistrationError(OSError):
@@ -971,6 +1028,8 @@ def test_tk_thread_dispatches_activation_and_exit(monkeypatch) -> None:
     assert tray.events == ["start", "stop"]
     assert events.count("instance.close") == 1
     assert "quit" in events
+    assert not any("stage=tray_hotkey_ready" in entry for entry in logs)
+    assert any("stage=tray_hotkey_failed" in entry for entry in logs)
 
 
 def test_failed_voice_candidate_does_not_persist_settings(monkeypatch) -> None:
@@ -1016,6 +1075,54 @@ def test_successful_first_run_voice_is_persisted_after_load(monkeypatch) -> None
 
     assert app.run_app([]) == 0
     assert saved and saved[0].voice == str(loaded_path)
+
+
+def test_piper_voice_load_timing_excludes_dialog_and_settings_save(monkeypatch) -> None:
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    logs = []
+    monkeypatch.setattr(
+        app,
+        "configure_logging",
+        lambda _level: SimpleNamespace(
+            warning=lambda *_args: None,
+            error=lambda *_args: None,
+            exception=lambda *_args: None,
+            info=lambda message, *args: logs.append(message % args if args else message),
+        ),
+    )
+    real_monotonic = app.time.monotonic
+    elapsed = [0.0]
+    monkeypatch.setattr(app.time, "monotonic", lambda: real_monotonic() + elapsed[0])
+
+    def fail_configured_load(_settings, _dirs):
+        elapsed[0] += 2.0
+        raise FileNotFoundError("configured voice")
+
+    monkeypatch.setattr(app, "_load_configured_voice", fail_configured_load)
+
+    def choose_voice():
+        elapsed[0] += 30.0
+        return Path("chosen.onnx")
+
+    ui.choose_voice_model = choose_voice
+
+    def load_candidate(_reference, _dirs):
+        elapsed[0] += 3.0
+        return Path("chosen.onnx").resolve(), object()
+
+    monkeypatch.setattr(app, "load_voice_candidate", load_candidate)
+
+    def save(_settings):
+        elapsed[0] += 40.0
+
+    monkeypatch.setattr(app, "save_settings", save)
+    ui.root.mainloop = lambda: None
+
+    assert app.run_app([]) == 0
+
+    timing = next(entry for entry in logs if "stage=piper_voice_load" in entry)
+    assert "duration_seconds=2.000" in timing
 
 
 def test_secondary_process_closes_without_loading_or_creating_ui(monkeypatch) -> None:

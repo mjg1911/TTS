@@ -5,9 +5,10 @@ import logging
 from queue import Empty, Queue
 from pathlib import Path
 import threading
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
 from .capture import CaptureResult, CaptureStatus
+from .backend_manager import BackendManager, BackendPreparationError
 from .codex_history import CodexCompletedResponse, CodexResponseId
 from .codex_monitor import CodexMonitorStatus
 from .codex_text import prepare_codex_speech
@@ -53,6 +54,12 @@ class PlaybackState(Enum):
     SHUTTING_DOWN = auto()
 
 
+class KokoroStartupState(Enum):
+    LOADING = auto()
+    READY = auto()
+    UNAVAILABLE = auto()
+
+
 @dataclass
 class AppState:
     last_text: Optional[str] = None
@@ -68,6 +75,8 @@ class AppState:
     settings: Optional[TraySettings] = None
     voice_path: Optional[Path] = None
     voice: Optional[object] = None
+    settings_recovery_required: bool = False
+    kokoro_startup_state: KokoroStartupState = KokoroStartupState.READY
 
     @property
     def auxiliary_active(self) -> bool:
@@ -105,13 +114,58 @@ class TraySnapshot:
     codex_enabled: bool
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class SettingsWindowSnapshot:
-    voice_path: Optional[Path]
+    engine: str
+    piper_voice_path: Optional[Path]
+    piper_voice_reference: str
+    kokoro_voice: str
+    kokoro_voices: Sequence[str]
+    kokoro_available: bool
+    kokoro_unavailable_reason: Optional[str]
     hotkey: str
     pitch_percent: float
     speed_percent: float
     last_text: Optional[str]
+
+    def __init__(
+        self,
+        engine: str = "Piper",
+        piper_voice_path: Optional[Path] = None,
+        piper_voice_reference: str = "",
+        kokoro_voice: str = "af_heart",
+        kokoro_voices: Sequence[str] = (),
+        kokoro_available: bool = False,
+        kokoro_unavailable_reason: Optional[str] = None,
+        hotkey: str = "alt+backtick",
+        pitch_percent: float = 26.0,
+        speed_percent: float = 0.0,
+        last_text: Optional[str] = None,
+        *,
+        voice_path: Optional[Path] = None,
+    ) -> None:
+        if voice_path is not None and piper_voice_path is None:
+            piper_voice_path = voice_path
+        values = {
+            "engine": engine,
+            "piper_voice_path": piper_voice_path,
+            "piper_voice_reference": piper_voice_reference,
+            "kokoro_voice": kokoro_voice,
+            "kokoro_voices": tuple(kokoro_voices),
+            "kokoro_available": kokoro_available,
+            "kokoro_unavailable_reason": kokoro_unavailable_reason,
+            "hotkey": hotkey,
+            "pitch_percent": pitch_percent,
+            "speed_percent": speed_percent,
+            "last_text": last_text,
+        }
+        for name, value in values.items():
+            object.__setattr__(self, name, value)
+
+    @property
+    def voice_path(self) -> Optional[Path]:
+        """Compatibility alias for integrations predating engine switching."""
+        return self.piper_voice_path
 
 
 @dataclass(frozen=True)
@@ -150,6 +204,9 @@ class Controller:
         hotkeys: Optional[object] = None,
         speech_worker: Optional[object] = None,
         voice_manager: Optional[VoiceManager] = None,
+        backend_manager: Optional[BackendManager] = None,
+        kokoro_voice_ids: Sequence[str] = (),
+        kokoro_unavailable_reason: Optional[str] = None,
     ) -> None:
         self.state = AppState(settings=settings)
         self._commands = Queue()  # type: Queue[Command]
@@ -161,6 +218,7 @@ class Controller:
             )
         )
         self._show_status: Callable[[str], None] = lambda _message: None
+        self._set_tray_status: Callable[[str], None] = lambda _message: None
         self._show_notification: Callable[[str], None] = lambda _message: None
         self._log_error: Callable[[str], None] = lambda _message: None
         self._open_log: Callable[[], None] = lambda: None
@@ -193,13 +251,92 @@ class Controller:
         self._codex_monitor_epoch = 0
         self._capture_replaced_speech = False
         self._voice_manager = voice_manager
+        self._backend_manager = backend_manager
+        self._kokoro_voice_ids = tuple(sorted(kokoro_voice_ids))
+        self._kokoro_unavailable_reason = kokoro_unavailable_reason
+        self._startup_piper_backend = None
+        self._startup_status_pending_or_active = False
+        self._startup_status_generation: Optional[int] = None
         self._state_lock = threading.RLock()
+
+    @property
+    def kokoro_startup_state(self) -> KokoroStartupState:
+        with self._state_lock:
+            return self.state.kokoro_startup_state
+
+    def set_kokoro_voice_ids(self, voice_ids: Sequence[str]) -> None:
+        with self._state_lock:
+            self._kokoro_voice_ids = tuple(sorted(voice_ids))
+
+    def begin_kokoro_startup(self) -> None:
+        with self._state_lock:
+            if self.state.shutting_down:
+                return
+            self.state.kokoro_startup_state = KokoroStartupState.LOADING
+            self._startup_status_pending_or_active = False
+            self._startup_status_generation = None
+            self._startup_piper_backend = (
+                self._backend_manager.current()
+                if self._backend_manager is not None
+                else self.state.voice
+            )
+            self._set_tray_status("Kokoro is loading")
+
+    def complete_kokoro_startup(
+        self, candidate: object, voice_ids: Sequence[str]
+    ) -> None:
+        with self._state_lock:
+            if (
+                self.state.shutting_down
+                or self.state.kokoro_startup_state is not KokoroStartupState.LOADING
+            ):
+                if self._backend_manager is not None:
+                    try:
+                        self._backend_manager.discard(candidate)
+                    except Exception:
+                        pass
+                return
+            try:
+                if self._backend_manager is None:
+                    raise RuntimeError("backend manager is not configured")
+                self._backend_manager.commit(candidate)
+            except Exception as error:
+                if self._backend_manager is not None:
+                    try:
+                        self._backend_manager.discard(candidate)
+                    except Exception:
+                        pass
+                self.fail_kokoro_startup(str(error))
+                return
+            self._kokoro_voice_ids = tuple(sorted(voice_ids))
+            self._kokoro_unavailable_reason = None
+            self._startup_piper_backend = None
+            self._startup_status_pending_or_active = False
+            self._startup_status_generation = None
+            self.state.kokoro_startup_state = KokoroStartupState.READY
+            self._set_tray_status("Kokoro is ready")
+
+    def fail_kokoro_startup(self, reason: str) -> None:
+        with self._state_lock:
+            if (
+                self.state.shutting_down
+                or self.state.kokoro_startup_state is not KokoroStartupState.LOADING
+            ):
+                return
+            self._kokoro_unavailable_reason = reason
+            self._startup_piper_backend = None
+            self._startup_status_pending_or_active = False
+            self._startup_status_generation = None
+            self.state.kokoro_startup_state = KokoroStartupState.UNAVAILABLE
+            self._set_tray_status("Kokoro unavailable; Piper is ready")
+            self._show_status("Kokoro is unavailable. Piper will continue to be used.")
 
     def configure_runtime(
         self,
         choose_voice: Optional[Callable[[], Optional[Path]]] = None,
         load_voice: Optional[Callable[[str], Tuple[Path, object]]] = None,
         show_status: Optional[Callable[[str], None]] = None,
+        set_tray_status: Optional[Callable[[str], None]] = None,
         show_notification: Optional[Callable[[str], None]] = None,
         log_error: Optional[Callable[[str], None]] = None,
         open_log: Optional[Callable[[], None]] = None,
@@ -226,6 +363,8 @@ class Controller:
             self._load_voice = load_voice
         if show_status is not None:
             self._show_status = show_status
+        if set_tray_status is not None:
+            self._set_tray_status = set_tray_status
         if show_notification is not None:
             self._show_notification = show_notification
         if log_error is not None:
@@ -290,7 +429,7 @@ class Controller:
             if persist:
                 if next_settings is None or self._save_settings is None:
                     raise RuntimeError("settings persistence is not configured")
-                next_settings = replace(next_settings, voice=str(path))
+                next_settings = replace(next_settings, piper_voice=str(path))
                 try:
                     self._save_settings(next_settings)
                 except (OSError, ValueError) as error:
@@ -302,7 +441,22 @@ class Controller:
             return True
 
     def enqueue(self, command: Command) -> None:
-        self._commands.put(command)
+        with self._state_lock:
+            if (
+                command.kind is CommandKind.CAPTURE_REQUEST
+                and command.capture_is_startup_status is None
+            ):
+                loading = (
+                    self.state.kokoro_startup_state is KokoroStartupState.LOADING
+                )
+                command = replace(
+                    command,
+                    capture_is_startup_status=loading,
+                    capture_status_backend=(
+                        self._startup_piper_backend if loading else None
+                    ),
+                )
+            self._commands.put(command)
 
     def tray_snapshot(self) -> TraySnapshot:
         with self._state_lock:
@@ -435,7 +589,21 @@ class Controller:
             self._stop_speech()
             self.install_voice(candidate_path, candidate_voice, persist=True)
         elif command.kind is CommandKind.CAPTURE_REQUEST:
-            self._request_capture()
+            capture_is_startup_status = getattr(
+                command, "capture_is_startup_status", None
+            )
+            capture_status_was_pinned = capture_is_startup_status is True
+            if capture_is_startup_status is None:
+                capture_is_startup_status = (
+                    self.state.kokoro_startup_state is KokoroStartupState.LOADING
+                )
+            if capture_is_startup_status:
+                self._announce_kokoro_loading(
+                    getattr(command, "capture_status_backend", None),
+                    backend_is_pinned=capture_status_was_pinned,
+                )
+            else:
+                self._request_capture()
         elif command.kind in (CommandKind.CAPTURE_SUCCEEDED, CommandKind.CAPTURE_FAILED):
             self._complete_capture(command)
         elif command.kind is CommandKind.SHOW_LAST_TEXT:
@@ -833,6 +1001,33 @@ class Controller:
             )
         )
 
+    def _announce_kokoro_loading(
+        self, backend_override=None, *, backend_is_pinned: bool = False
+    ) -> None:
+        if (
+            self.state.shutting_down
+            or self._speech_worker is None
+            or self._startup_status_pending_or_active
+        ):
+            return
+        self.state.auxiliary_generation += 1
+        generation = self.state.auxiliary_generation
+        submitted = self._speech_worker.submit(
+            SpeechRequest(
+                generation,
+                "Kokoro is loading, please wait.",
+                SpeechPurpose.STARTUP_STATUS,
+                backend_override=(
+                    backend_override
+                    if backend_is_pinned
+                    else self._startup_piper_backend
+                ),
+            )
+        )
+        if submitted is not False:
+            self._startup_status_pending_or_active = True
+            self._startup_status_generation = generation
+
     def _handle_voice_switch(self, event: object) -> None:
         if not isinstance(event, VoiceSwitchEvent):
             return
@@ -901,7 +1096,13 @@ class Controller:
             if settings is None:
                 return None
             return SettingsWindowSnapshot(
-                voice_path=self.state.voice_path,
+                engine=settings.engine,
+                piper_voice_path=self.state.voice_path,
+                piper_voice_reference=settings.piper_voice,
+                kokoro_voice=settings.kokoro_voice,
+                kokoro_voices=self._kokoro_voice_ids,
+                kokoro_available=bool(self._kokoro_voice_ids),
+                kokoro_unavailable_reason=self._kokoro_unavailable_reason,
                 hotkey=settings.hotkey,
                 pitch_percent=settings.pitch_percent,
                 speed_percent=settings.speed_percent,
@@ -910,35 +1111,27 @@ class Controller:
 
     def apply_settings(
         self,
+        engine: str,
         hotkey: str,
         pitch_text: str,
         speed_text: str,
-        voice_path: Optional[Path],
+        piper_voice_path: Optional[Path],
+        kokoro_voice: str,
     ) -> SettingsApplyResult:
-        errors = []
+        if self.state.settings_recovery_required:
+            return SettingsApplyResult(
+                False,
+                ((
+                    "general",
+                    "Settings state is uncertain. Restart Piper Tray before changing settings again.",
+                ),),
+            )
+        if not isinstance(engine, str) or engine not in {"Piper", "Kokoro"}:
+            return SettingsApplyResult(False, (("engine", "Choose Piper or Kokoro."),))
 
-        try:
-            candidate_hotkey = parse_hotkey(hotkey)
-        except ValueError:
-            candidate_hotkey = None
-            errors.append(("hotkey", user_message(UserError.HOTKEY_INVALID)))
-
-        pitch_percent, pitch_error = _parse_percent_text(
-            pitch_text,
-            validate_pitch_percent,
-            "Pitch must be between -50% and 100%.",
+        candidate_hotkey, pitch_percent, speed_percent, errors = (
+            self._validate_settings_scalars(hotkey, pitch_text, speed_text)
         )
-        if pitch_error is not None:
-            errors.append(("pitch", pitch_error))
-
-        speed_percent, speed_error = _parse_percent_text(
-            speed_text,
-            validate_speed_percent,
-            "Speed must be between -50% and 100%.",
-        )
-        if speed_error is not None:
-            errors.append(("speed", speed_error))
-
         if errors:
             return SettingsApplyResult(False, tuple(errors))
 
@@ -951,18 +1144,30 @@ class Controller:
                 or candidate_hotkey is None
                 or pitch_percent is None
                 or speed_percent is None
+                or self._backend_manager is None
             ):
                 return SettingsApplyResult(
                     False,
                     (("general", "Piper settings are not available."),),
                 )
 
-            candidate_voice_path = None
-            candidate_voice = None
-            if voice_path is not None:
+            if (
+                engine == "Kokoro"
+                and self.state.kokoro_startup_state is KokoroStartupState.LOADING
+            ):
+                return SettingsApplyResult(
+                    False,
+                    ((
+                        "engine",
+                        "Kokoro is still starting. Wait for startup to finish before applying Kokoro settings.",
+                    ),),
+                )
+
+            piper_reference = current.piper_voice
+            if piper_voice_path is not None:
                 try:
-                    candidate_voice_path, candidate_voice = self._load_voice(
-                        str(voice_path)
+                    resolved_path, _candidate_voice = self._load_voice(
+                        str(piper_voice_path)
                     )
                 except VOICE_SETUP_ERRORS as error:
                     self._log_error(
@@ -972,72 +1177,143 @@ class Controller:
                         False,
                         (
                             (
-                                "voice",
+                                "piper_voice",
                                 user_message(UserError.VOICE_LOAD_REPLACEMENT),
                             ),
                         ),
                     )
 
-            next_settings = replace(
-                current,
-                hotkey=candidate_hotkey.canonical,
-                pitch_percent=pitch_percent,
-                speed_percent=speed_percent,
-                voice=(
-                    str(candidate_voice_path)
-                    if candidate_voice_path is not None
-                    else current.voice
-                ),
-            )
-
-            hotkey_changed = candidate_hotkey.canonical != current.hotkey
-            hotkey_prepared = False
-            if hotkey_changed and not self._hotkeys.prepare_rebind(candidate_hotkey):
+                piper_reference = str(resolved_path)
+            if (
+                engine == "Kokoro"
+                and self._kokoro_voice_ids
+                and kokoro_voice not in self._kokoro_voice_ids
+            ):
                 return SettingsApplyResult(
                     False,
-                    (("hotkey", user_message(UserError.HOTKEY_CONFLICT)),),
+                    (("kokoro_voice", "The selected Kokoro voice is not installed."),),
                 )
-            hotkey_prepared = hotkey_changed
 
+            active_voice = piper_reference if engine == "Piper" else kokoro_voice
             try:
-                self._save_settings(next_settings)
-            except (OSError, ValueError) as error:
-                self._log_error("Could not save Piper settings: %s" % error)
-                if hotkey_prepared and not self._hotkeys.rollback_rebind():
-                    self._log_error("Could not remove the pending Piper hotkey")
-                return SettingsApplyResult(
-                    False,
-                    (("general", "Piper settings could not be saved."),),
-                )
+                candidate = self._backend_manager.prepare(engine, active_voice)
+            except BackendPreparationError:
+                return SettingsApplyResult(False, (("engine", "%s is not available." % engine),))
 
-            if hotkey_prepared and not self._hotkeys.commit_rebind():
-                if not self._hotkeys.rollback_rebind():
-                    self._log_error("Could not remove the pending Piper hotkey")
-                try:
-                    self._save_settings(current)
-                except (OSError, ValueError) as error:
-                    self._log_error(
-                        "Could not restore Piper settings after hotkey commit failure: %s"
-                        % error
+            committed = False
+            hotkey_changed = candidate_hotkey.canonical != current.hotkey
+            try:
+                if hotkey_changed and not self._hotkeys.prepare_rebind(candidate_hotkey):
+                    return SettingsApplyResult(
+                        False,
+                        (("hotkey", user_message(UserError.HOTKEY_CONFLICT)),),
                     )
-                return SettingsApplyResult(
-                    False,
-                    (("general", "Piper settings could not be applied."),),
-                )
 
-            self.state.settings = next_settings
-            if candidate_voice_path is not None and candidate_voice is not None:
-                self.set_voice(candidate_voice_path, candidate_voice)
-            return SettingsApplyResult(
-                True,
-                snapshot=self.settings_window_snapshot(),
-            )
+                next_settings = replace(
+                    current,
+                    engine=engine,
+                    piper_voice=piper_reference,
+                    kokoro_voice=kokoro_voice,
+                    hotkey=candidate_hotkey.canonical,
+                    pitch_percent=pitch_percent,
+                    speed_percent=speed_percent,
+                )
+                try:
+                    self._save_settings(next_settings)
+                except (OSError, ValueError):
+                    rollback_failed = False
+                    if hotkey_changed:
+                        try:
+                            rollback_result = self._hotkeys.rollback_rebind()
+                            rollback_failed = rollback_result is False
+                        except (OSError, RuntimeError):
+                            rollback_failed = True
+                    if rollback_failed:
+                        self.state.settings_recovery_required = True
+                        return SettingsApplyResult(
+                            False,
+                            ((
+                                "general",
+                                "Settings state is uncertain. Restart Piper Tray before changing settings again.",
+                            ),),
+                        )
+                    return SettingsApplyResult(False, (("general", "Piper settings could not be saved."),))
+
+                if hotkey_changed and not self._hotkeys.commit_rebind():
+                    compensation_failed = False
+                    try:
+                        rollback_result = self._hotkeys.rollback_rebind()
+                        compensation_failed = rollback_result is False
+                    except (OSError, RuntimeError):
+                        compensation_failed = True
+                    try:
+                        self._save_settings(current)
+                    except (OSError, ValueError):
+                        compensation_failed = True
+                    if compensation_failed:
+                        self.state.settings_recovery_required = True
+                        return SettingsApplyResult(
+                            False,
+                            ((
+                                "general",
+                                "Settings state is uncertain. Restart Piper Tray before changing settings again.",
+                            ),),
+                        )
+                    return SettingsApplyResult(False, (("general", "Piper settings could not be applied."),))
+
+                self._backend_manager.commit(candidate)
+                committed = True
+                self.state.settings = next_settings
+                if engine == "Piper" and piper_voice_path is not None:
+                    self.set_voice(resolved_path, _candidate_voice)
+                if self.state.kokoro_startup_state is KokoroStartupState.LOADING:
+                    self.state.kokoro_startup_state = KokoroStartupState.READY
+                    self._startup_piper_backend = None
+                    self._startup_status_pending_or_active = False
+                    self._startup_status_generation = None
+                    self._set_tray_status(
+                        "Piper is ready" if engine == "Piper" else "Kokoro is ready"
+                    )
+                return SettingsApplyResult(True, snapshot=self.settings_window_snapshot())
+            finally:
+                if not committed:
+                    self._backend_manager.discard(candidate)
+
+    def _validate_settings_scalars(self, hotkey, pitch_text, speed_text):
+        errors = []
+        try:
+            candidate_hotkey = parse_hotkey(hotkey)
+        except ValueError:
+            candidate_hotkey = None
+            errors.append(("hotkey", user_message(UserError.HOTKEY_INVALID)))
+        pitch_percent, pitch_error = _parse_percent_text(
+            pitch_text, validate_pitch_percent, "Pitch must be between -50% and 100%."
+        )
+        if pitch_error is not None:
+            errors.append(("pitch", pitch_error))
+        speed_percent, speed_error = _parse_percent_text(
+            speed_text, validate_speed_percent, "Speed must be between -50% and 100%."
+        )
+        if speed_error is not None:
+            errors.append(("speed", speed_error))
+        return candidate_hotkey, pitch_percent, speed_percent, errors
 
     def _handle_worker_event(self, event: object) -> None:
         if not isinstance(event, SpeechEvent):
             return
         if self.state.shutting_down:
             return
+        if (
+            event.purpose is SpeechPurpose.STARTUP_STATUS
+            and event.generation == self._startup_status_generation
+            and event.kind in {
+                SpeechEventKind.FINISHED,
+                SpeechEventKind.CANCELLED,
+                SpeechEventKind.FAILED,
+            }
+        ):
+            self._startup_status_pending_or_active = False
+            self._startup_status_generation = None
         if event.purpose is not SpeechPurpose.FOREGROUND:
             if event.kind is SpeechEventKind.STARTED:
                 self.state.auxiliary_active_generation = event.generation

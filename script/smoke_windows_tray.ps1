@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
-$Exe = Join-Path $Root "dist\PiperTray.exe"
+$Exe = Join-Path $Root "dist\PiperTray\PiperTray.exe"
 if (-not (Test-Path $Exe)) {
     throw "Missing packaged executable: $Exe"
 }
@@ -89,6 +89,54 @@ try {
     }
 
     Write-Host "Frozen-runtime smoke passed: tray runtime reached its event loop from an isolated environment."
+
+    $originalLocalAppData = $env:LOCALAPPDATA
+    $originalAppData = $env:APPDATA
+    $testLocalAppData = Join-Path $env:TEMP "PiperTray-KokoroBlocked-Local-$PID"
+    $testAppData = Join-Path $env:TEMP "PiperTray-KokoroBlocked-Roaming-$PID"
+    $BlockedProcess = $null
+    try {
+        if ($null -ne $Process) {
+            $Process.Refresh()
+            if (-not $Process.HasExited) {
+                & taskkill.exe /PID $Process.Id /T /F | Out-Null
+            }
+            $Process.WaitForExit(10000) | Out-Null
+            $Process = $null
+        }
+
+        $env:LOCALAPPDATA = $testLocalAppData
+        $env:APPDATA = $testAppData
+        $testPiperLocalRoot = Join-Path $testLocalAppData "Piper"
+        $testPiperRoamingRoot = Join-Path $testAppData "Piper"
+        New-Item -ItemType Directory -Force $testPiperLocalRoot | Out-Null
+        New-Item -ItemType Directory -Force $testPiperRoamingRoot | Out-Null
+        Copy-Item (Join-Path $SmokeVoice "en_GB-alba-medium.onnx") $testPiperLocalRoot
+        Copy-Item (Join-Path $SmokeVoice "en_GB-alba-medium.onnx.json") $testPiperLocalRoot
+        Copy-Item (Join-Path $SmokeAppData "Piper\settings.json") $testPiperRoamingRoot
+        $blockedRoot = Join-Path $testPiperLocalRoot "Kokoro"
+        [IO.File]::WriteAllText($blockedRoot, "deployment intentionally blocked")
+
+        $BlockedProcess = Start-Process -FilePath $Exe -PassThru
+        Start-Sleep -Seconds 3
+        if ($BlockedProcess.HasExited) {
+            throw "PiperTray exited when Kokoro deployment target was unavailable"
+        }
+    } finally {
+        if ($null -ne $BlockedProcess) {
+            $BlockedProcess.Refresh()
+            if (-not $BlockedProcess.HasExited) {
+                & taskkill.exe /PID $BlockedProcess.Id /T /F | Out-Null
+            }
+            $BlockedProcess.WaitForExit(10000) | Out-Null
+        }
+        $env:LOCALAPPDATA = $originalLocalAppData
+        $env:APPDATA = $originalAppData
+        Remove-Item $testLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item $testAppData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host "Blocked Kokoro deployment-target smoke passed: tray remained alive."
 }
 finally {
     try {

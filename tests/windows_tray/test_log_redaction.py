@@ -4,6 +4,7 @@ from piper.windows_tray.logging_setup import (
     log_capture_result,
     log_codex_result,
     log_exception_safe,
+    log_browser_status,
 )
 
 
@@ -62,3 +63,21 @@ def test_codex_diagnostic_never_accepts_response_text(caplog) -> None:
     assert "conversation-1" in caplog.text
     assert "turn-1" in caplog.text
     assert f"character_count={len(secret)}" in caplog.text
+
+
+def test_browser_status_logging_is_metadata_only(caplog) -> None:
+    secret = "browser-secret-token-value"
+    text = "PRIVATE BROWSER RESPONSE TEXT"
+    logger = logging.getLogger("browser-redaction-test")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        log_browser_status(
+            logger,
+            status="CONNECTED",
+            queue_size=2,
+            outcome="duplicate_ignored",
+        )
+
+    assert secret not in caplog.text
+    assert text not in caplog.text
+    assert "browser_tts status=CONNECTED queue_size=2 outcome=duplicate_ignored" in caplog.text

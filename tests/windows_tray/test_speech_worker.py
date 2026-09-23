@@ -100,6 +100,85 @@ def make_worker(voice, events, played, entered):
     )
 
 
+def test_browser_is_rejected_while_foreground_or_error_is_active() -> None:
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=lambda _text: []
+    )
+    worker = make_worker(voice, [], [], threading.Event())
+    try:
+        with worker._condition:
+            worker._active_request = SpeechRequest(
+                1, "foreground", SpeechPurpose.FOREGROUND
+            )
+        assert worker.submit(SpeechRequest(2, "browser", SpeechPurpose.BROWSER)) is False
+        with worker._condition:
+            worker._active_request = SpeechRequest(3, "error", SpeechPurpose.ERROR)
+        assert worker.submit(SpeechRequest(4, "browser", SpeechPurpose.BROWSER)) is False
+    finally:
+        worker.shutdown()
+
+
+def test_browser_replaces_pending_welcome_and_codex() -> None:
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=lambda _text: []
+    )
+    worker = make_worker(voice, [], [], threading.Event())
+    try:
+        with worker._condition:
+            worker._active_request = SpeechRequest(0, "codex", SpeechPurpose.CODEX)
+        assert worker.submit(SpeechRequest(1, "welcome", SpeechPurpose.WELCOME))
+        assert worker.submit(SpeechRequest(2, "browser", SpeechPurpose.BROWSER))
+        with worker._condition:
+            assert worker._pending_browser.generation == 2
+            assert worker._pending_codex is None
+            assert worker._pending_welcome is None
+    finally:
+        worker.shutdown()
+
+
+def test_foreground_and_error_clear_pending_browser() -> None:
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=lambda _text: []
+    )
+    worker = make_worker(voice, [], [], threading.Event())
+    try:
+        with worker._condition:
+            worker._active_request = SpeechRequest(0, "codex", SpeechPurpose.CODEX)
+        assert worker.submit(SpeechRequest(1, "browser", SpeechPurpose.BROWSER))
+        assert worker.submit(SpeechRequest(2, "foreground", SpeechPurpose.FOREGROUND))
+        with worker._condition:
+            assert worker._pending_browser is None
+            worker._pending_foreground = None
+        assert worker.submit(SpeechRequest(3, "browser", SpeechPurpose.BROWSER))
+        assert worker.submit(SpeechRequest(4, "error", SpeechPurpose.ERROR))
+        with worker._condition:
+            assert worker._pending_browser is None
+    finally:
+        worker.shutdown()
+
+
+def test_cancel_browser_does_not_cancel_foreground_or_error() -> None:
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=lambda _text: []
+    )
+    worker = make_worker(voice, [], [], threading.Event())
+    try:
+        with worker._condition:
+            worker._active_request = SpeechRequest(
+                1, "foreground", SpeechPurpose.FOREGROUND
+            )
+        worker.cancel_browser()
+        with worker._condition:
+            assert worker._active_request.purpose is SpeechPurpose.FOREGROUND
+        with worker._condition:
+            worker._active_request = SpeechRequest(2, "error", SpeechPurpose.ERROR)
+        worker.cancel_browser()
+        with worker._condition:
+            assert worker._active_request.purpose is SpeechPurpose.ERROR
+    finally:
+        worker.shutdown()
+
+
 def test_multi_chunk_request_creates_one_playback_pipeline() -> None:
     events = []
     played = []
@@ -741,6 +820,155 @@ def test_latest_pending_request_replaces_older_pending_request():
         assert not any(event.generation == 6 for event in events)
     finally:
         release.set()
+        worker.shutdown()
+
+
+def test_backend_override_bypasses_voice_provider_and_lease_release():
+    events = []
+    played = []
+    entered = threading.Event()
+    piper_voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda text: [Chunk(text.encode())],
+    )
+    provider_calls = []
+
+    def provider():
+        provider_calls.append(True)
+        raise AssertionError("pinned startup speech must not acquire a backend")
+
+    worker = SpeechWorker(
+        provider,
+        events.append,
+        player_factory=lambda _sample_rate: FakePlayer(played, entered),
+    )
+
+    try:
+        worker.submit(
+            SpeechRequest(
+                120,
+                "loading status",
+                SpeechPurpose.STARTUP_STATUS,
+                backend_override=piper_voice,
+            )
+        )
+        wait_for_event(events, SpeechEventKind.FINISHED, 120)
+        assert played == [b"loading status"]
+        assert provider_calls == []
+    finally:
+        worker.shutdown()
+
+
+def test_startup_status_uses_single_replaceable_pending_slot():
+    events = []
+    played = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def synthesize(text):
+        if text == "active":
+            entered.set()
+            release.wait(timeout=2)
+        yield Chunk(text.encode())
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=synthesize
+    )
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: FakePlayer(played, entered),
+    )
+
+    try:
+        worker.submit(SpeechRequest(121, "active"))
+        assert entered.wait(timeout=1)
+        worker.submit(
+            SpeechRequest(122, "old status", SpeechPurpose.STARTUP_STATUS)
+        )
+        worker.submit(
+            SpeechRequest(123, "latest status", SpeechPurpose.STARTUP_STATUS)
+        )
+        with worker._condition:
+            assert worker._pending_startup_status.generation == 123
+        release.set()
+        wait_for_event(events, SpeechEventKind.FINISHED, 123)
+        assert b"latest status" in played
+        assert b"old status" not in played
+    finally:
+        release.set()
+        worker.shutdown()
+
+
+def test_higher_priority_request_reports_evicted_startup_status_cancelled():
+    events = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def synthesize(text):
+        if text == "active":
+            entered.set()
+            release.wait(timeout=2)
+        yield Chunk(text.encode())
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=synthesize
+    )
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: FakePlayer([], entered),
+    )
+
+    try:
+        worker.submit(SpeechRequest(124, "active"))
+        assert entered.wait(timeout=1)
+        worker.submit(
+            SpeechRequest(125, "loading", SpeechPurpose.STARTUP_STATUS)
+        )
+        worker.submit(SpeechRequest(126, "foreground replacement"))
+
+        cancellation = next(
+            event
+            for event in events
+            if event.generation == 125
+            and event.kind is SpeechEventKind.CANCELLED
+        )
+        assert cancellation.purpose is SpeechPurpose.STARTUP_STATUS
+    finally:
+        release.set()
+        worker.shutdown()
+
+
+def test_cancel_auxiliary_reports_evicted_startup_status_cancelled():
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=lambda text: [Chunk(text.encode())],
+    )
+    events = []
+    worker = SpeechWorker(
+        lambda: voice,
+        events.append,
+        player_factory=lambda _sample_rate: FakePlayer([], threading.Event()),
+    )
+
+    try:
+        with worker._condition:
+            worker._active_request = SpeechRequest(127, "active")
+            worker._pending_startup_status = SpeechRequest(
+                128, "loading", SpeechPurpose.STARTUP_STATUS
+            )
+
+        worker.cancel_auxiliary()
+
+        cancellation = next(
+            event
+            for event in events
+            if event.generation == 128
+            and event.kind is SpeechEventKind.CANCELLED
+        )
+        assert cancellation.purpose is SpeechPurpose.STARTUP_STATUS
+    finally:
         worker.shutdown()
 
 

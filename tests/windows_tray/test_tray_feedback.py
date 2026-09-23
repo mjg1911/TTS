@@ -9,17 +9,36 @@ import piper.windows_tray.tray_icon as tray_icon
 
 def install_fake_pystray(monkeypatch, icon):
     class FakeIcon:
-        def __init__(self, _name, _image, _title, menu):
+        def __init__(self, _name, _image, title, menu):
+            self.external = icon
             if isinstance(icon, dict):
                 icon["menu"] = menu
+                icon["updates"] = 0
             else:
                 icon.menu = menu
+                icon.updates = 0
+            self.title = title
+
+        @property
+        def title(self):
+            return self._title
+
+        @title.setter
+        def title(self, value):
+            self._title = value
+            if isinstance(self.external, dict):
+                self.external["title"] = value
+            else:
+                self.external.title = value
 
         def run_detached(self):
             pass
 
         def stop(self):
             pass
+
+        def update_menu(self):
+            icon["updates"] += 1 if isinstance(icon, dict) else 0
 
         def notify(self, message, title):
             return icon.notify(message, title)
@@ -116,3 +135,41 @@ def test_show_notification_propagates_native_failure(monkeypatch, tmp_path: Path
 
     with pytest.raises(OSError, match="notification failed"):
         tray.show_notification("Test notification")
+
+
+def test_default_title_reports_piper_ready(monkeypatch, tmp_path: Path):
+    icon = {}
+    install_fake_pystray(monkeypatch, icon)
+    tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
+
+    tray.start()
+
+    assert icon["title"] == "Piper is ready"
+
+
+@pytest.mark.parametrize("when", ["before_start", "after_start"])
+def test_set_status_updates_title_and_refreshes_menu(monkeypatch, tmp_path: Path, when):
+    icon = {}
+    install_fake_pystray(monkeypatch, icon)
+    tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
+
+    if when == "after_start":
+        tray.start()
+    tray.set_status("Kokoro is loading")
+
+    if when == "before_start":
+        tray.start()
+    assert icon["title"] == "Kokoro is loading"
+    assert icon["updates"] == (1 if when == "after_start" else 0)
+
+
+def test_set_status_after_start_refreshes_menu_and_uses_unavailable_title(monkeypatch, tmp_path: Path):
+    icon = {}
+    install_fake_pystray(monkeypatch, icon)
+    tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
+    tray.start()
+
+    tray.set_status("Kokoro unavailable; Piper is ready")
+
+    assert icon["title"] == "Kokoro unavailable; Piper is ready"
+    assert icon["updates"] == 1
