@@ -74,8 +74,8 @@ def test_begin_kokoro_startup_marks_loading():
     assert controller.kokoro_startup_state is controller_module.KokoroStartupState.LOADING
 
 
-def test_startup_transitions_update_tray_status():
-    controller, _speech, _manager, _piper, _statuses = make_controller()
+def test_startup_transitions_update_tray_status_and_failure_guidance():
+    controller, _speech, _manager, _piper, statuses = make_controller()
     tray_statuses = []
     controller.configure_runtime(set_tray_status=tray_statuses.append)
 
@@ -90,6 +90,10 @@ def test_startup_transitions_update_tray_status():
         "Kokoro is loading",
         "Kokoro unavailable; Piper is ready",
     ]
+    assert statuses[-1] == (
+        "Kokoro is unavailable. Piper will continue to be used. "
+        "Open Settings and run Verify Kokoro files."
+    )
 
 
 def test_startup_result_cannot_commit_after_shutdown_begins():

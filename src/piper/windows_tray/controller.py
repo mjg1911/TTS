@@ -329,7 +329,10 @@ class Controller:
             self._startup_status_generation = None
             self.state.kokoro_startup_state = KokoroStartupState.UNAVAILABLE
             self._set_tray_status("Kokoro unavailable; Piper is ready")
-            self._show_status("Kokoro is unavailable. Piper will continue to be used.")
+            self._show_status(
+                "Kokoro is unavailable. Piper will continue to be used. "
+                "Open Settings and run Verify Kokoro files."
+            )
 
     def configure_runtime(
         self,
