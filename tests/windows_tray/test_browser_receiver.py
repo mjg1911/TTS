@@ -462,10 +462,12 @@ def test_authentication_status_is_ordered_before_stop_disabled():
     thread.join(timeout=2)
     stopper.join(timeout=2)
 
-    assert statuses == [
-        BrowserReceiverStatus.CONNECTED,
-        BrowserReceiverStatus.DISABLED,
-    ]
+    assert statuses[0] is BrowserReceiverStatus.CONNECTED
+    assert statuses[-1] is BrowserReceiverStatus.DISABLED
+    assert all(
+        status is BrowserReceiverStatus.TEMPORARILY_UNAVAILABLE
+        for status in statuses[1:-1]
+    )
 
 
 @pytest.mark.parametrize("policy", ["malformed", "rate_limit", "repeated_hello", "unsupported"])

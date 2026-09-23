@@ -5,7 +5,7 @@ from piper.windows_tray.controller import CaptureCompletion, Controller, Playbac
 from piper.windows_tray.errors import UserError, user_message
 from piper.windows_tray.speech import SpeechEvent, SpeechEventKind
 from piper.windows_tray.speech import SpeechPurpose
-from piper.windows_tray.voice_manager import VoiceManager
+from piper.windows_tray.backend_manager import BackendCandidate, BackendManager
 from piper.windows_tray.settings import TraySettings
 
 
@@ -146,7 +146,13 @@ def test_app_speech_worker_reads_voice_manager_current_and_enqueues_events():
 
     first_voice = object()
     second_voice = object()
-    manager = VoiceManager(first_voice, lambda _reference: (Path("unused"), second_voice))
+    manager = BackendManager(
+        first_voice,
+        lambda: None,
+        lambda _engine, _voice_id: BackendCandidate(
+            "Piper", "second", second_voice
+        ),
+    )
     controller = Controller()
     captured = {}
 
@@ -161,13 +167,18 @@ def test_app_speech_worker_reads_voice_manager_current_and_enqueues_events():
     original = app.SpeechWorker
     app.SpeechWorker = FakeWorker
     try:
-        app._build_speech_worker(controller, manager)
+        app._build_speech_worker(controller, manager.acquire)
     finally:
         app.SpeechWorker = original
 
-    assert captured["voice_provider"]() is first_voice
-    manager.replace(second_voice)
-    assert captured["voice_provider"]() is second_voice
+    backend, release = captured["voice_provider"]()
+    assert backend is first_voice
+    release()
+    candidate = manager.prepare("Piper", "second")
+    manager.commit(candidate)
+    backend, release = captured["voice_provider"]()
+    assert backend is second_voice
+    release()
     captured["on_event"](SpeechEvent(SpeechEventKind.FINISHED, 4))
     assert controller.drain_once() == Command(
         CommandKind.WORKER_EVENT,

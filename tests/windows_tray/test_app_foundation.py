@@ -366,6 +366,16 @@ def _patch_primary_app(monkeypatch, events):
 def test_bundled_kokoro_deploy_failure_does_not_block_piper_startup(monkeypatch):
     events = []
     app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    controllers = []
+    original_controller = app.Controller
+    monkeypatch.setattr(
+        app,
+        "Controller",
+        lambda *args, **kwargs: controllers.append(
+            original_controller(*args, **kwargs)
+        )
+        or controllers[-1],
+    )
     ui.root.mainloop = lambda: None
     monkeypatch.setattr(
         app,
@@ -375,7 +385,9 @@ def test_bundled_kokoro_deploy_failure_does_not_block_piper_startup(monkeypatch)
     monkeypatch.setattr(app, "_bundled_kokoro_root", lambda: Path("bundle"))
     assert app.run_app([]) == 0
     assert "voice" in events
-    assert any("Kokoro" in message for message in ui.statuses)
+    snapshot = controllers[0].settings_window_snapshot()
+    assert snapshot.kokoro_available is False
+    assert snapshot.kokoro_unavailable_reason is not None
 
 
 def test_power_resume_callback_enqueues_system_resume_and_stops(monkeypatch):
@@ -422,8 +434,8 @@ def test_primary_bootstrap_orders_resources_and_exit_cleanup(monkeypatch) -> Non
         "settings",
         "logging",
         "ui",
-        "controller",
         "voice",
+        "controller",
         "tray",
         "watch",
     ]
@@ -908,11 +920,25 @@ def test_primary_pre_tray_failures_close_instance(monkeypatch, failure_stage) ->
             lambda _level: (_ for _ in ()).throw(OSError("logging")),
         )
     else:
-        monkeypatch.setattr(app, "configure_logging", lambda _level: SimpleNamespace(exception=lambda *_args: None))
+        monkeypatch.setattr(
+            app,
+            "configure_logging",
+            lambda _level: SimpleNamespace(
+                warning=lambda *_args: None,
+                error=lambda *_args: None,
+                exception=lambda *_args: None,
+            ),
+        )
     if failure_stage == "ui":
         monkeypatch.setattr(app, "TkUi", lambda: (_ for _ in ()).throw(RuntimeError("ui")))
     else:
         monkeypatch.setattr(app, "TkUi", lambda: FakeUi(events))
+    if failure_stage == "controller":
+        monkeypatch.setattr(
+            app,
+            "_load_configured_voice",
+            lambda _settings, _dirs: (Path("voice.onnx"), object()),
+        )
     if failure_stage == "controller":
         monkeypatch.setattr(
             app,

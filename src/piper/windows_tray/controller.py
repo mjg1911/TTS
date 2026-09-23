@@ -1029,8 +1029,8 @@ class Controller:
                         ),
                     )
 
-                    piper_reference = str(resolved_path)
-            if kokoro_voice not in self._kokoro_voice_ids:
+                piper_reference = str(resolved_path)
+            if engine == "Kokoro" and kokoro_voice not in self._kokoro_voice_ids:
                 return SettingsApplyResult(
                     False,
                     (("kokoro_voice", "The selected Kokoro voice is not installed."),),

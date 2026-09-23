@@ -348,8 +348,17 @@ class SpeechWorker:
         failure: BaseException | None = None
         phase = "synthesis"
         synthesis_seconds = 0.0
+        release_backend = None
         try:
-            backend = self._voice_provider()
+            provided_backend = self._voice_provider()
+            if (
+                isinstance(provided_backend, tuple)
+                and len(provided_backend) == 2
+                and callable(provided_backend[1])
+            ):
+                backend, release_backend = provided_backend
+            else:
+                backend = provided_backend
             is_piper_voice = hasattr(backend, "config")
             sample_rate = backend.config.sample_rate if is_piper_voice else None
             if not is_piper_voice:
@@ -415,6 +424,9 @@ class SpeechWorker:
                     if phase == "playback"
                     else "Speech synthesis failed."
                 )
+        finally:
+            if release_backend is not None:
+                release_backend()
 
         with self._decision_boundary:
             if cancel_event.is_set():

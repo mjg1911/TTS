@@ -148,7 +148,7 @@ def make_snapshot(**overrides):
     return SettingsWindowSnapshot(**values)
 
 
-def test_window_builds_all_five_sections_with_initial_values(monkeypatch):
+def test_window_builds_engine_and_five_settings_sections_with_initial_values(monkeypatch):
     built_frames = []
     settings_window = install_fake_tk(monkeypatch, built_frames)
     snapshot = make_snapshot()
@@ -162,7 +162,9 @@ def test_window_builds_all_five_sections_with_initial_values(monkeypatch):
     )
 
     assert [frame.text for frame in built_frames] == [
-        "Voice model",
+        "Speech engine",
+        "Piper voice model",
+        "Kokoro voice",
         "Last captured text",
         "Hotkey settings",
         "Pitch settings",
@@ -223,7 +225,7 @@ def test_apply_failure_renders_voice_error_in_voice_section(monkeypatch):
     settings_window = install_fake_tk(monkeypatch, [])
     result = SettingsApplyResult(
         False,
-        (("voice", "The selected voice could not be loaded."),),
+        (("piper_voice", "The selected voice could not be loaded."),),
     )
     window = settings_window.SettingsWindow(
         parent=object(),
@@ -236,8 +238,8 @@ def test_apply_failure_renders_voice_error_in_voice_section(monkeypatch):
     window._apply()
 
     assert window.window.exists is True
-    assert window.error_text("voice") == "The selected voice could not be loaded."
-    assert window.voice_error_label.kwargs["textvariable"] is window._error_vars["voice"]
+    assert window.error_text("piper_voice") == "The selected voice could not be loaded."
+    assert window.voice_error_label.kwargs["textvariable"] is window._error_vars["piper_voice"]
 
 
 def test_apply_success_closes_window(monkeypatch):
@@ -257,7 +259,9 @@ def test_apply_success_closes_window(monkeypatch):
 
     window._apply()
 
-    assert apply_calls == [("ctrl+q", "-10", "25", Path("new.onnx"))]
+    assert apply_calls == [
+        ("Piper", "ctrl+q", "-10", "25", Path("new.onnx"), "af_heart")
+    ]
     assert window.window.exists is False
 
 

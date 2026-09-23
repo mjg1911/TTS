@@ -40,7 +40,11 @@ def test_build_extra_contains_pyinstaller_without_changing_tray_runtime_extra() 
     extras = _extras_require()
 
     assert extras["windows-tray-build"] == ["pyinstaller>=6,<7"]
-    assert extras["windows-tray"] == ["pystray>=0.19.5,<1", "Pillow>=10,<12"]
+    assert extras["windows-tray"] == [
+        "pystray>=0.19.5,<1",
+        "Pillow>=10,<12",
+        "websockets>=15,<16",
+    ]
     assert not any(
         dependency.lower().startswith("pyinstaller")
         for dependency in _install_requires()

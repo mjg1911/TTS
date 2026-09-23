@@ -367,7 +367,7 @@ def run_app(
             controller.state.voice,
             lambda reference: load_voice_candidate(reference, data_dirs),
         )
-        speech_worker = _build_speech_worker(controller, backend_manager.current)
+        speech_worker = _build_speech_worker(controller, backend_manager.acquire)
 
         clipboard = Win32Clipboard()
         capture = SelectionCapture(clipboard, clipboard.send_ctrl_c)

@@ -66,6 +66,37 @@ def test_commit_transfers_candidate_ownership_and_closes_old_backend():
     assert prepared_backend.shutdown_calls == 0
 
 
+def test_commit_defers_closing_backend_until_lease_is_released():
+    current = FakeBackend()
+    prepared_backend = FakeBackend()
+    manager = BackendManager(
+        current,
+        current.shutdown,
+        lambda engine, voice: BackendCandidate(
+            engine, voice, prepared_backend, prepared_backend.shutdown
+        ),
+    )
+    leased_backend, release = manager.acquire()
+    manager.commit(manager.prepare("Kokoro", "af_heart"))
+
+    assert leased_backend is current
+    assert current.shutdown_calls == 0
+    release()
+    assert current.shutdown_calls == 1
+
+
+def test_shutdown_defers_closing_backend_until_lease_is_released():
+    current = FakeBackend()
+    manager = BackendManager(current, current.shutdown, lambda *_: None)
+    _backend, release = manager.acquire()
+
+    manager.shutdown()
+    manager.shutdown()
+    assert current.shutdown_calls == 0
+    release()
+    assert current.shutdown_calls == 1
+
+
 def test_candidate_cannot_be_committed_after_discard():
     current = FakeBackend()
     prepared_backend = FakeBackend()
