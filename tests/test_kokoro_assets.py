@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from piper.kokoro_assets import DEFAULT_KOKORO_VOICE, verify_kokoro_installation
+from piper.kokoro_assets import (
+    DEFAULT_KOKORO_VOICE,
+    inspect_kokoro_installation,
+    verify_kokoro_installation,
+)
 
 
 def _sha256(path: Path) -> str:
@@ -57,6 +61,53 @@ def test_valid_installation_returns_absolute_verified_paths(tmp_path):
     assert installation.worker_executable.is_absolute()
     assert DEFAULT_KOKORO_VOICE in installation.voices
     assert len(installation.manifest_sha256) == 64
+
+
+def test_inspection_returns_required_paths_without_hashing_payload_bytes(
+    monkeypatch, tmp_path
+):
+    make_installation(tmp_path)
+    (tmp_path / "voices/af_heart.pt").write_bytes(b"corrupt-but-present")
+    monkeypatch.setattr(
+        "piper.kokoro_assets._sha256",
+        lambda _path: (_ for _ in ()).throw(AssertionError("hashing is not inspection")),
+    )
+
+    installation = inspect_kokoro_installation(tmp_path)
+
+    assert installation.root == tmp_path.resolve()
+    assert installation.worker_executable == (
+        tmp_path / "worker/KokoroWorker.exe"
+    ).resolve()
+    assert installation.model_path == (
+        tmp_path / "model/kokoro-v1_0.pth"
+    ).resolve()
+    assert installation.voices["af_heart"].path == (
+        tmp_path / "voices/af_heart.pt"
+    ).resolve()
+    assert len(installation.manifest_sha256) == 64
+
+
+def test_inspection_rejects_missing_required_file(tmp_path):
+    make_installation(tmp_path)
+    (tmp_path / "model/kokoro-v1_0.pth").unlink()
+
+    with pytest.raises(FileNotFoundError):
+        inspect_kokoro_installation(tmp_path)
+
+
+def test_inspection_rejects_missing_required_resource_directory(tmp_path):
+    make_installation(tmp_path)
+    resource = tmp_path / "worker/_internal/espeakng_loader"
+    for path in sorted(resource.rglob("*"), reverse=True):
+        if path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            path.rmdir()
+    resource.rmdir()
+
+    with pytest.raises(ValueError, match="resource group is not a directory"):
+        inspect_kokoro_installation(tmp_path)
 
 
 def test_missing_hashed_file_is_rejected(tmp_path):
