@@ -46,7 +46,7 @@ def make_payload(root: Path, marker: bytes = b"v1") -> Path:
     return root
 
 
-def test_missing_target_is_bootstrapped_and_verified(tmp_path):
+def test_missing_target_is_bootstrapped_and_inspected(tmp_path):
     bundle = make_payload(tmp_path / "bundle")
     install = tmp_path / "installed"
     result = ensure_bundled_kokoro_payload(bundle, install)
@@ -54,9 +54,13 @@ def test_missing_target_is_bootstrapped_and_verified(tmp_path):
     assert (install / "voices/af_heart.pt").is_file()
 
 
-def test_identical_valid_manifest_is_noop(monkeypatch, tmp_path):
+def test_identical_manifest_is_noop_without_hashing(monkeypatch, tmp_path):
     bundle = make_payload(tmp_path / "bundle")
     install = make_payload(tmp_path / "installed")
+    monkeypatch.setattr(
+        "piper.kokoro_assets._sha256",
+        lambda _path: (_ for _ in ()).throw(AssertionError("startup must not hash")),
+    )
     monkeypatch.setattr(
         "piper.windows_tray.kokoro_payload.shutil.copytree",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("copy not expected")),
@@ -71,20 +75,24 @@ def test_different_but_valid_existing_payload_is_upgraded(tmp_path):
     assert (install / "model/kokoro-v1_0.pth").read_bytes() == b"modelnew"
 
 
-def test_corrupt_existing_target_is_not_repaired(tmp_path):
-    bundle = make_payload(tmp_path / "bundle", b"new")
-    install = make_payload(tmp_path / "installed", b"old")
-    (install / "model/kokoro-v1_0.pth").write_bytes(b"corrupt")
-    with pytest.raises(ValueError, match="hash mismatch"):
-        ensure_bundled_kokoro_payload(bundle, install)
+def test_same_manifest_corrupt_bytes_are_left_for_manual_verification(tmp_path):
+    bundle = make_payload(tmp_path / "bundle")
+    install = make_payload(tmp_path / "installed")
+    corrupt_path = install / "model/kokoro-v1_0.pth"
+    corrupt_path.write_bytes(b"corrupt")
+
+    result = ensure_bundled_kokoro_payload(bundle, install)
+
+    assert result.root == install.resolve()
+    assert corrupt_path.read_bytes() == b"corrupt"
 
 
-def test_invalid_bundle_leaves_previous_verified_install_untouched(tmp_path):
+def test_bundle_missing_required_file_leaves_existing_install_untouched(tmp_path):
     install = make_payload(tmp_path / "installed", b"old")
     before = (install / "manifest.json").read_bytes()
     bundle = make_payload(tmp_path / "bundle", b"new")
-    (bundle / "voices/af_heart.pt").write_bytes(b"corrupt")
-    with pytest.raises((FileNotFoundError, ValueError)):
+    (bundle / "model/kokoro-v1_0.pth").unlink()
+    with pytest.raises(FileNotFoundError):
         ensure_bundled_kokoro_payload(bundle, install)
     assert (install / "manifest.json").read_bytes() == before
 

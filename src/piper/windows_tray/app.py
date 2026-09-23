@@ -30,7 +30,10 @@ from .single_instance import InstanceRole, SingleInstance
 from .tray_icon import TrayIcon
 from .voice_manager import VoiceManager
 from .codex_monitor import CodexMonitor, codex_sessions_dir
-from piper.kokoro_assets import verify_kokoro_installation
+from piper.kokoro_assets import (
+    inspect_kokoro_installation,
+    verify_kokoro_installation,
+)
 from .kokoro_client import KokoroWorkerClient, KokoroWorkerConfig
 from .kokoro_payload import ensure_bundled_kokoro_payload
 from .kokoro_startup import KokoroStartupCoordinator
@@ -68,7 +71,7 @@ def _kokoro_root() -> Path:
 
 def _inspect_kokoro_installation():
     try:
-        return verify_kokoro_installation(_kokoro_root()), None
+        return inspect_kokoro_installation(_kokoro_root()), None
     except (FileNotFoundError, OSError, ValueError, KeyError) as error:
         return None, "Kokoro installation is unavailable: %s" % type(error).__name__
 
@@ -87,10 +90,10 @@ def _prepare_kokoro_installation(logger):
         bundle_root = _bundled_kokoro_root()
         if bundle_root is not None:
             return ensure_bundled_kokoro_payload(bundle_root, install_root), None
-        return verify_kokoro_installation(install_root), None
+        return inspect_kokoro_installation(install_root), None
     except (OSError, ValueError, KeyError) as error:
         logger.warning("Kokoro unavailable error_type=%s", type(error).__name__)
-        return None, "Kokoro is unavailable because its installed files could not be verified."
+        return None, "Kokoro is unavailable because required installed files could not be found or read."
 
 
 def _load_configured_voice(
