@@ -15,6 +15,7 @@ from piper.audio_playback import AudioPlayer
 
 from .logging_setup import log_exception_safe, log_synthesis_result
 from .pitch_playback import PlaybackPipeline
+from .sentence_splitter import split_speech_sentences
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -374,6 +375,27 @@ class SpeechWorker:
             raise RuntimeError("speech scheduler woke without pending work")
         return request
 
+    @staticmethod
+    def _streamed_backend_audio(backend, text, cancel_event):
+        sentences = split_speech_sentences(text) or (text,)
+        first_result = backend.synthesize(sentences[0], cancel_event)
+        sample_rate = first_result.sample_rate
+
+        def chunks():
+            result = first_result
+            for index, sentence in enumerate(sentences):
+                if index:
+                    if cancel_event.is_set():
+                        return
+                    result = backend.synthesize(sentence, cancel_event)
+                    if result.sample_rate != sample_rate:
+                        raise RuntimeError(
+                            "Speech backend changed sample rate during one request"
+                        )
+                yield from result.chunks
+
+        return sample_rate, chunks()
+
     def _speak(
         self,
         request: SpeechRequest,
@@ -409,9 +431,11 @@ class SpeechWorker:
             is_piper_voice = hasattr(backend, "config")
             sample_rate = backend.config.sample_rate if is_piper_voice else None
             if not is_piper_voice:
-                result = backend.synthesize(request.text, cancel_event)
-                sample_rate = result.sample_rate
-                audio_chunks = iter(result.chunks)
+                sample_rate, audio_chunks = self._streamed_backend_audio(
+                    backend,
+                    request.text,
+                    cancel_event,
+                )
             else:
                 audio_chunks = iter(backend.synthesize(request.text))
             phase = "playback"
