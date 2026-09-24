@@ -23,6 +23,7 @@ class SettingsWindow:
         on_apply: Callable[[str, str, str, str, Optional[Path], str], SettingsApplyResult],
         on_close: Callable[[], None],
         on_speak_text: Callable[[str], None],
+        on_verify_kokoro: Callable[[], bool],
     ) -> None:
         self.window = tk.Toplevel(parent)
         self.window.title("Piper Settings")
@@ -32,6 +33,7 @@ class SettingsWindow:
         self._on_apply = on_apply
         self._on_close = on_close
         self._on_speak_text = on_speak_text
+        self._on_verify_kokoro = on_verify_kokoro
         self._closed = False
         self.pending_voice_path: Optional[Path] = None
         self.displayed_voice_path = snapshot.piper_voice_path
@@ -41,6 +43,7 @@ class SettingsWindow:
         self.pitch_var = tk.StringVar(value=f"{snapshot.pitch_percent:g}")
         self.speed_var = tk.StringVar(value=f"{snapshot.speed_percent:g}")
         self.engine_status_var = tk.StringVar(value="")
+        self.kokoro_verify_status_var = tk.StringVar(value="")
         self._error_vars = {
             key: tk.StringVar(value="")
             for key in (
@@ -116,8 +119,31 @@ class SettingsWindow:
             self.engine_var.set("Piper")
         self._refresh_voice_controls()
 
+        maintenance_frame = ttk.LabelFrame(self.window, text="Kokoro maintenance")
+        maintenance_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=4)
+        maintenance_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            maintenance_frame,
+            text=(
+                "Check the installed Kokoro model and runtime files for missing or "
+                "corrupted data. This may take a few minutes."
+            ),
+            wraplength=420,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(6, 2))
+        self.kokoro_verify_button = ttk.Button(
+            maintenance_frame,
+            text="Verify Kokoro files",
+            command=self._verify_kokoro,
+        )
+        self.kokoro_verify_button.grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(
+            maintenance_frame,
+            textvariable=self.kokoro_verify_status_var,
+        ).grid(row=1, column=1, sticky="w", padx=6, pady=4)
+
         text_frame = ttk.LabelFrame(self.window, text="Last captured text")
-        text_frame.grid(row=2, column=0, sticky="nsew", padx=8, pady=4)
+        text_frame.grid(row=3, column=0, sticky="nsew", padx=8, pady=4)
         self.last_text = tk.Text(text_frame, width=60, height=8, wrap="word")
         self.last_text.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
         self.speak_text_button = ttk.Button(
@@ -130,19 +156,19 @@ class SettingsWindow:
         text_frame.rowconfigure(0, weight=1)
         self.update_last_text(snapshot.last_text)
         self._build_percent_section(
-            "Hotkey settings", 3, self.hotkey_var, self._error_vars["hotkey"], ""
+            "Hotkey settings", 4, self.hotkey_var, self._error_vars["hotkey"], ""
         )
         self._build_percent_section(
-            "Pitch settings", 4, self.pitch_var, self._error_vars["pitch"], "%"
+            "Pitch settings", 5, self.pitch_var, self._error_vars["pitch"], "%"
         )
         self._build_percent_section(
-            "Speed settings", 5, self.speed_var, self._error_vars["speed"], "%"
+            "Speed settings", 6, self.speed_var, self._error_vars["speed"], "%"
         )
         ttk.Label(self.window, textvariable=self._error_vars["general"]).grid(
-            row=6, column=0, sticky="w", padx=8, pady=4
+            row=7, column=0, sticky="w", padx=8, pady=4
         )
         buttons = ttk.Frame(self.window)
-        buttons.grid(row=7, column=0, sticky="e", padx=8, pady=8)
+        buttons.grid(row=8, column=0, sticky="e", padx=8, pady=8)
         ttk.Button(buttons, text="Save/Apply", command=self._apply).pack(
             side="left", padx=4
         )
@@ -246,6 +272,19 @@ class SettingsWindow:
         text = self.last_text.get("1.0", "end-1c")
         if text.strip():
             self._on_speak_text(text)
+
+    def _verify_kokoro(self) -> None:
+        self.kokoro_verify_status_var.set("Verifying Kokoro files...")
+        self.kokoro_verify_button.configure(state="disabled")
+        if not self._on_verify_kokoro():
+            self.kokoro_verify_status_var.set(
+                "Kokoro verification is already running."
+            )
+            self.kokoro_verify_button.configure(state="normal")
+
+    def update_kokoro_verification(self, message: str) -> None:
+        self.kokoro_verify_status_var.set(message)
+        self.kokoro_verify_button.configure(state="normal")
 
     def close(self) -> None:
         if self._closed:

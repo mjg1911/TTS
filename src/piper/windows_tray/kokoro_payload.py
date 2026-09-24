@@ -1,4 +1,4 @@
-"""Deploy and verify the Kokoro payload using only bundled local bytes."""
+"""Deploy the bundled Kokoro payload using lightweight structural checks."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from piper.kokoro_assets import KokoroInstallation, verify_kokoro_installation
+from piper.kokoro_assets import KokoroInstallation, inspect_kokoro_installation
 
 
-def _install_verified_bundle(
+def _install_bundled_payload(
     bundle_root: Path,
     install_root: Path,
-    replace_verified_existing: bool,
+    replace_existing: bool,
 ) -> KokoroInstallation:
     install_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
@@ -24,14 +24,14 @@ def _install_verified_bundle(
     try:
         shutil.rmtree(temporary)
         shutil.copytree(bundle_root, temporary)
-        verify_kokoro_installation(temporary)
+        inspect_kokoro_installation(temporary)
         if backup.exists():
             shutil.rmtree(backup)
-        if replace_verified_existing:
+        if replace_existing:
             os.replace(install_root, backup)
             moved_old = True
         os.replace(temporary, install_root)
-        installed = verify_kokoro_installation(install_root)
+        installed = inspect_kokoro_installation(install_root)
         if moved_old and backup.exists():
             shutil.rmtree(backup)
         return installed
@@ -53,23 +53,23 @@ def ensure_bundled_kokoro_payload(
     bundle_root = bundle_root.resolve()
     install_root = install_root.resolve()
 
-    verify_kokoro_installation(bundle_root)
+    inspect_kokoro_installation(bundle_root)
     bundle_manifest = (bundle_root / "manifest.json").read_bytes()
 
     if not install_root.exists():
-        return _install_verified_bundle(
+        return _install_bundled_payload(
             bundle_root,
             install_root,
-            replace_verified_existing=False,
+            replace_existing=False,
         )
 
-    installed = verify_kokoro_installation(install_root)
+    installed = inspect_kokoro_installation(install_root)
     installed_manifest = (install_root / "manifest.json").read_bytes()
     if installed_manifest == bundle_manifest:
         return installed
 
-    return _install_verified_bundle(
+    return _install_bundled_payload(
         bundle_root,
         install_root,
-        replace_verified_existing=True,
+        replace_existing=True,
     )

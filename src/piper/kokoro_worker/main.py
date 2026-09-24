@@ -6,7 +6,7 @@ import sys
 from threading import Thread
 from typing import Optional
 
-from piper.kokoro_assets import verify_kokoro_installation
+from piper.kokoro_assets import inspect_kokoro_installation
 from piper.windows_tray.kokoro_protocol import (
     PROTOCOL_VERSION,
     ProtocolError,
@@ -114,7 +114,7 @@ def main(stdin=None, stdout=None, stderr=None, install_root: Optional[Path] = No
             return 0
         if message_type == "initialize":
             validate_initialize(message)
-            installation = verify_kokoro_installation(root)
+            installation = inspect_kokoro_installation(root)
             if installation.manifest_sha256 != message["manifest_sha256"]:
                 raise ProtocolError("manifest fingerprint mismatch")
             runtime = KokoroRuntime(

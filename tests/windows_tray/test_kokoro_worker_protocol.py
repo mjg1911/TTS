@@ -64,7 +64,7 @@ def initialize_message():
 def test_worker_hello_ready_audio_end_and_shutdown(monkeypatch, tmp_path):
     FakeRuntime.instances.clear()
     monkeypatch.setattr(worker_main, "KokoroRuntime", FakeRuntime)
-    monkeypatch.setattr(worker_main, "verify_kokoro_installation", lambda root: fake_installation(root))
+    monkeypatch.setattr(worker_main, "inspect_kokoro_installation", lambda root: fake_installation(root))
     stdin = framed_input(
         initialize_message(),
         {"type": "synthesize", "request_id": 1, "text": "hello", "voice_id": "af_heart"},
@@ -83,14 +83,37 @@ def test_worker_hello_ready_audio_end_and_shutdown(monkeypatch, tmp_path):
     assert stderr.getvalue() == ""
 
 
+def test_worker_initialize_does_not_call_full_verifier(monkeypatch, tmp_path):
+    FakeRuntime.instances.clear()
+    monkeypatch.setattr(worker_main, "KokoroRuntime", FakeRuntime)
+    monkeypatch.setattr(
+        worker_main,
+        "inspect_kokoro_installation",
+        lambda root: fake_installation(root),
+    )
+    monkeypatch.setattr(
+        worker_main,
+        "verify_kokoro_installation",
+        lambda _root: (_ for _ in ()).throw(
+            AssertionError("worker initialization must not run full verification")
+        ),
+        raising=False,
+    )
+
+    stdin = framed_input(initialize_message(), {"type": "shutdown"})
+    assert worker_main.main(
+        stdin, io.BytesIO(), io.StringIO(), install_root=tmp_path
+    ) == 0
+
+
 def test_worker_rejects_manifest_fingerprint_mismatch(monkeypatch, tmp_path):
-    monkeypatch.setattr(worker_main, "verify_kokoro_installation", lambda root: fake_installation(root, "b" * 64))
+    monkeypatch.setattr(worker_main, "inspect_kokoro_installation", lambda root: fake_installation(root, "b" * 64))
     with pytest.raises(ProtocolError, match="manifest fingerprint mismatch"):
         worker_main.main(framed_input(initialize_message()), io.BytesIO(), io.StringIO(), install_root=tmp_path)
 
 
 def test_worker_rejects_protocol_supplied_asset_paths(monkeypatch, tmp_path):
-    monkeypatch.setattr(worker_main, "verify_kokoro_installation", lambda root: fake_installation(root))
+    monkeypatch.setattr(worker_main, "inspect_kokoro_installation", lambda root: fake_installation(root))
     malicious = {"type": "initialize", "manifest_sha256": "a" * 64, "model_path": r"C:\other\model.pth"}
     with pytest.raises(ProtocolError, match="unsupported fields"):
         worker_main.main(framed_input(malicious), io.BytesIO(), io.StringIO(), install_root=tmp_path)
@@ -98,7 +121,7 @@ def test_worker_rejects_protocol_supplied_asset_paths(monkeypatch, tmp_path):
 
 def test_worker_runtime_error_returns_category_without_text(monkeypatch, tmp_path):
     monkeypatch.setattr(worker_main, "KokoroRuntime", FakeRuntime)
-    monkeypatch.setattr(worker_main, "verify_kokoro_installation", lambda root: fake_installation(root))
+    monkeypatch.setattr(worker_main, "inspect_kokoro_installation", lambda root: fake_installation(root))
     stdin = framed_input(
         initialize_message(),
         {"type": "synthesize", "request_id": 2, "text": "explode", "voice_id": "af_heart"},
@@ -107,7 +130,10 @@ def test_worker_runtime_error_returns_category_without_text(monkeypatch, tmp_pat
     stdout = io.BytesIO()
     stderr = io.StringIO()
     assert worker_main.main(stdin, stdout, stderr, install_root=tmp_path) == 0
-    assert read_all(stdout)[-1] == {"type": "response_error", "request_id": 2, "category": "inference"}
+    error = read_all(stdout)[-1]
+    assert error["type"] == "response_error"
+    assert error["request_id"] == 2
+    assert error["category"] == "inference"
     assert "explode" not in stderr.getvalue()
     assert "SENTINEL_MUST_NOT_REACH_STDERR" not in stderr.getvalue()
 
@@ -122,7 +148,7 @@ def test_worker_runtime_failure_stderr_omits_source_text(monkeypatch, tmp_path):
     monkeypatch.setattr(worker_main, "KokoroRuntime", FailingRuntime)
     monkeypatch.setattr(
         worker_main,
-        "verify_kokoro_installation",
+        "inspect_kokoro_installation",
         lambda root: fake_installation(root),
     )
     stdin = framed_input(
@@ -139,7 +165,7 @@ def test_worker_runtime_failure_stderr_omits_source_text(monkeypatch, tmp_path):
 
 def test_worker_cancel_discards_segment_completed_after_cancel(monkeypatch, tmp_path):
     monkeypatch.setattr(worker_main, "KokoroRuntime", FakeRuntime)
-    monkeypatch.setattr(worker_main, "verify_kokoro_installation", lambda root: fake_installation(root))
+    monkeypatch.setattr(worker_main, "inspect_kokoro_installation", lambda root: fake_installation(root))
     stdin = framed_input(
         initialize_message(),
         {"type": "synthesize", "request_id": 3, "text": "hello", "voice_id": "af_heart"},

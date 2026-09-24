@@ -440,7 +440,7 @@ def test_kokoro_startup_keeps_tray_and_hotkeys_available_before_preparation(
     show_status = ui.show_status
 
     def record_failure_message_thread(message):
-        if message == "Kokoro is unavailable. Piper will continue to be used.":
+        if message.startswith("Kokoro is unavailable. Piper will continue to be used."):
             failure_message_threads.append(threading.current_thread())
         show_status(message)
 
@@ -551,7 +551,10 @@ def test_kokoro_startup_keeps_tray_and_hotkeys_available_before_preparation(
         assert controllers[0]._backend_manager.current() is piper_voice
         assert controllers[0].state.settings.engine == "Kokoro"
         assert controllers[0].state.settings.kokoro_voice == "af_heart"
-        assert "Kokoro is unavailable. Piper will continue to be used." in ui.statuses
+        assert (
+            "Kokoro is unavailable. Piper will continue to be used. "
+            "Open Settings and run Verify Kokoro files."
+        ) in ui.statuses
         if failure_stage in {"assets", "worker"}:
             assert failure_transition_threads == coordination_threads
             assert unavailable_status_threads == coordination_threads

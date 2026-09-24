@@ -30,10 +30,14 @@ from .single_instance import InstanceRole, SingleInstance
 from .tray_icon import TrayIcon
 from .voice_manager import VoiceManager
 from .codex_monitor import CodexMonitor, codex_sessions_dir
-from piper.kokoro_assets import verify_kokoro_installation
+from piper.kokoro_assets import (
+    inspect_kokoro_installation,
+    verify_kokoro_installation,
+)
 from .kokoro_client import KokoroWorkerClient, KokoroWorkerConfig
 from .kokoro_payload import ensure_bundled_kokoro_payload
 from .kokoro_startup import KokoroStartupCoordinator
+from .kokoro_verification import KokoroVerificationCoordinator
 
 
 def TkUi():
@@ -68,7 +72,7 @@ def _kokoro_root() -> Path:
 
 def _inspect_kokoro_installation():
     try:
-        return verify_kokoro_installation(_kokoro_root()), None
+        return inspect_kokoro_installation(_kokoro_root()), None
     except (FileNotFoundError, OSError, ValueError, KeyError) as error:
         return None, "Kokoro installation is unavailable: %s" % type(error).__name__
 
@@ -87,10 +91,10 @@ def _prepare_kokoro_installation(logger):
         bundle_root = _bundled_kokoro_root()
         if bundle_root is not None:
             return ensure_bundled_kokoro_payload(bundle_root, install_root), None
-        return verify_kokoro_installation(install_root), None
+        return inspect_kokoro_installation(install_root), None
     except (OSError, ValueError, KeyError) as error:
         logger.warning("Kokoro unavailable error_type=%s", type(error).__name__)
-        return None, "Kokoro is unavailable because its installed files could not be verified."
+        return None, "Kokoro is unavailable because required installed files could not be found or read."
 
 
 def _load_configured_voice(
@@ -138,6 +142,7 @@ def run_app(
     backend_manager = None
     backend_stopped = False
     kokoro_startup = None
+    kokoro_verification = None
     controller = None
     ui = None
     logger = None
@@ -276,6 +281,10 @@ def run_app(
         else:
             logger = configure_logging(effective_level)
         ui = TkUi()
+        kokoro_verification = KokoroVerificationCoordinator(
+            lambda: verify_kokoro_installation(_kokoro_root()),
+            logger,
+        )
         data_dirs = tuple(_voice_data_dirs())
         settings = settings_result.settings
         try:
@@ -424,6 +433,11 @@ def run_app(
                             startup_result.unavailable_reason
                             or "Kokoro is unavailable during startup."
                         )
+            verification_result = kokoro_verification.take_result()
+            if verification_result is not None:
+                ui.update_settings_kokoro_verification(
+                    verification_result.message
+                )
             command = controller.drain_once()
             if command is not None:
                 controller.handle(command)
@@ -446,6 +460,7 @@ def run_app(
                 snapshot,
                 controller.apply_settings,
                 controller.speak_manual_text,
+                kokoro_verification.start,
             ),
             update_settings_last_text=getattr(
                 ui, "update_settings_last_text", lambda _text: None
