@@ -1101,6 +1101,43 @@ def test_cancel_active_discards_matching_pending_request():
         worker.shutdown()
 
 
+def test_cancel_after_first_streamed_sentence_prevents_later_synthesis():
+    events = []
+    calls = []
+    played = []
+    entered = threading.Event()
+    worker_holder = {}
+
+    class Backend:
+        def synthesize(self, text, _cancel_event):
+            calls.append(text)
+            return SimpleNamespace(
+                sample_rate=24000,
+                chunks=[text.encode("utf-8")],
+            )
+
+    class CancellingPlayer(FakePlayer):
+        def play(self, data: bytes) -> None:
+            super().play(data)
+            worker_holder["worker"].cancel_active(305)
+
+    worker = SpeechWorker(
+        lambda: Backend(),
+        events.append,
+        player_factory=lambda _sample_rate: CancellingPlayer(played, entered),
+    )
+    worker_holder["worker"] = worker
+
+    try:
+        worker.submit(SpeechRequest(305, "First sentence. Second sentence."))
+        wait_for_event(events, SpeechEventKind.CANCELLED, 305)
+
+        assert calls == ["First sentence."]
+        assert played == [b"First sentence."]
+    finally:
+        worker.shutdown()
+
+
 def test_shutdown_stops_active_work_and_joins_worker():
     events = []
     played = []
