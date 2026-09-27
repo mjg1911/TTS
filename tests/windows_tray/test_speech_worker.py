@@ -203,6 +203,71 @@ def test_multi_chunk_request_creates_one_playback_pipeline() -> None:
         worker.shutdown()
 
 
+def test_streamed_backend_synthesizes_sentences_lazily_in_playback_order():
+    events = []
+    timeline = []
+    factory_rates = []
+    entered = threading.Event()
+
+    class Backend:
+        def synthesize(self, text, cancel_event):
+            assert not cancel_event.is_set()
+            timeline.append(("synthesize", text))
+            return SimpleNamespace(
+                sample_rate=24000,
+                chunks=[text.encode("utf-8")],
+            )
+
+    class TimelinePlayer(FakePlayer):
+        def play(self, data: bytes) -> None:
+            timeline.append(("play", data.decode("utf-8")))
+            super().play(data)
+
+    def player_factory(sample_rate):
+        factory_rates.append(sample_rate)
+        return TimelinePlayer([], entered)
+
+    worker = SpeechWorker(lambda: Backend(), events.append, player_factory)
+    try:
+        worker.submit(SpeechRequest(302, "First sentence. Second sentence."))
+        wait_for_event(events, SpeechEventKind.FINISHED, 302)
+
+        assert factory_rates == [24000]
+        assert timeline == [
+            ("synthesize", "First sentence."),
+            ("play", "First sentence."),
+            ("synthesize", "Second sentence."),
+            ("play", "Second sentence."),
+        ]
+    finally:
+        worker.shutdown()
+
+
+def test_piper_backend_still_receives_original_text_once():
+    events = []
+    calls = []
+    played = []
+    entered = threading.Event()
+
+    def synthesize(text):
+        calls.append(text)
+        return [Chunk(b"audio")]
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050),
+        synthesize=synthesize,
+    )
+    worker = make_worker(voice, events, played, entered)
+    try:
+        worker.submit(SpeechRequest(303, "First sentence. Second sentence."))
+        wait_for_event(events, SpeechEventKind.FINISHED, 303)
+
+        assert calls == ["First sentence. Second sentence."]
+        assert played == [b"audio"]
+    finally:
+        worker.shutdown()
+
+
 def test_pipeline_exit_failure_is_classified_as_playback_failure() -> None:
     events = []
 
@@ -688,6 +753,36 @@ def test_synthesis_failure_emits_generic_failed_event():
         worker.shutdown()
 
 
+def test_streamed_backend_later_sentence_failure_is_synthesis_failure():
+    events = []
+    played = []
+    entered = threading.Event()
+    calls = []
+
+    class Backend:
+        def synthesize(self, text, _cancel_event):
+            calls.append(text)
+            if text == "Second sentence.":
+                raise ValueError("second sentence failed")
+            return SimpleNamespace(sample_rate=24000, chunks=[b"first"])
+
+    worker = SpeechWorker(
+        lambda: Backend(),
+        events.append,
+        player_factory=lambda _sample_rate: FakePlayer(played, entered),
+    )
+    try:
+        worker.submit(SpeechRequest(304, "First sentence. Second sentence."))
+        terminal = wait_for_terminal_event(events, 304)
+
+        assert calls == ["First sentence.", "Second sentence."]
+        assert played == [b"first"]
+        assert terminal.kind is SpeechEventKind.FAILED
+        assert terminal.failure_phase == "synthesis"
+    finally:
+        worker.shutdown()
+
+
 def test_playback_failure_emits_generic_failed_event():
     events = []
     entered = threading.Event()
@@ -1003,6 +1098,43 @@ def test_cancel_active_discards_matching_pending_request():
         assert not any(event.generation == 15 for event in events)
     finally:
         release.set()
+        worker.shutdown()
+
+
+def test_cancel_after_first_streamed_sentence_prevents_later_synthesis():
+    events = []
+    calls = []
+    played = []
+    entered = threading.Event()
+    worker_holder = {}
+
+    class Backend:
+        def synthesize(self, text, _cancel_event):
+            calls.append(text)
+            return SimpleNamespace(
+                sample_rate=24000,
+                chunks=[text.encode("utf-8")],
+            )
+
+    class CancellingPlayer(FakePlayer):
+        def play(self, data: bytes) -> None:
+            super().play(data)
+            worker_holder["worker"].cancel_active(305)
+
+    worker = SpeechWorker(
+        lambda: Backend(),
+        events.append,
+        player_factory=lambda _sample_rate: CancellingPlayer(played, entered),
+    )
+    worker_holder["worker"] = worker
+
+    try:
+        worker.submit(SpeechRequest(305, "First sentence. Second sentence."))
+        wait_for_event(events, SpeechEventKind.CANCELLED, 305)
+
+        assert calls == ["First sentence."]
+        assert played == [b"First sentence."]
+    finally:
         worker.shutdown()
 
 
