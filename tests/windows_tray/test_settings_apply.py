@@ -59,22 +59,187 @@ def make_controller(settings=None, hotkeys=None, save_settings=None):
         pitch_percent=26,
         speed_percent=0,
     )
-    voice_id = (
-        settings.piper_voice if settings.engine == "Piper" else settings.kokoro_voice
-    )
     backend_manager = BackendManager(
-        settings.engine,
-        voice_id,
+        "Piper",
+        "old-voice",
         object(),
         lambda: None,
         lambda engine, voice_id: BackendCandidate(engine, voice_id, object()),
     )
-    return Controller(
+    controller = Controller(
         settings=settings,
         save_settings=save_settings or (lambda _settings: None),
         hotkeys=hotkeys or FakeHotkeys(),
         backend_manager=backend_manager,
     )
+    controller.configure_runtime(resolve_voice=lambda reference: Path(reference))
+    return controller
+
+
+def test_unchanged_piper_backend_is_not_prepared_again():
+    preparations = []
+    backend_manager = BackendManager(
+        "Piper",
+        "old-voice",
+        object(),
+        lambda: None,
+        lambda engine, voice_id: preparations.append((engine, voice_id))
+        or BackendCandidate(engine, voice_id, object()),
+    )
+    controller = Controller(
+        settings=TraySettings(
+            voice="old-voice",
+            engine="Piper",
+            hotkey="alt+backtick",
+            pitch_percent=26,
+            speed_percent=0,
+        ),
+        save_settings=lambda _settings: None,
+        hotkeys=FakeHotkeys(),
+        backend_manager=backend_manager,
+    )
+    controller.configure_runtime(
+        resolve_voice=lambda reference: Path(reference),
+    )
+
+    result = apply_settings(
+        controller,
+        hotkey="alt+backtick",
+        pitch_text="10",
+        speed_text="5",
+        piper_voice_path=None,
+        engine="Piper",
+    )
+
+    assert result.applied is True
+    assert preparations == []
+
+
+def test_changed_active_piper_voice_is_loaded_once_and_reused_as_candidate():
+    old_backend = object()
+    prepared_by_manager = []
+    backend_manager = BackendManager(
+        "Piper",
+        "old.onnx",
+        old_backend,
+        lambda: None,
+        lambda engine, voice_id: prepared_by_manager.append((engine, voice_id))
+        or BackendCandidate(engine, voice_id, object()),
+    )
+    controller = Controller(
+        settings=TraySettings(
+            voice="old.onnx",
+            engine="Piper",
+            hotkey="alt+backtick",
+        ),
+        save_settings=lambda _settings: None,
+        hotkeys=FakeHotkeys(),
+        backend_manager=backend_manager,
+    )
+    loaded_voice = object()
+    loads = []
+    controller.configure_runtime(
+        resolve_voice=lambda reference: Path(reference).resolve(),
+        load_voice=lambda reference: loads.append(reference)
+        or (Path("new.onnx").resolve(), loaded_voice),
+    )
+
+    result = apply_settings(
+        controller,
+        hotkey="alt+backtick",
+        pitch_text="26",
+        speed_text="0",
+        piper_voice_path=Path("new.onnx"),
+        engine="Piper",
+    )
+
+    assert result.applied is True
+    assert loads == [str(Path("new.onnx").resolve())]
+    assert prepared_by_manager == []
+    assert backend_manager.current() is loaded_voice
+    assert backend_manager.current_identity() == (
+        "Piper",
+        str(Path("new.onnx").resolve()),
+    )
+
+
+def test_kokoro_settings_resolve_piper_path_without_loading_piper():
+    kokoro_backend = object()
+    backend_manager = BackendManager(
+        "Kokoro",
+        "af_heart",
+        kokoro_backend,
+        lambda: None,
+        lambda engine, voice_id: BackendCandidate(engine, voice_id, object()),
+    )
+    controller = Controller(
+        settings=TraySettings(
+            voice="old.onnx",
+            engine="Kokoro",
+            kokoro_voice="af_heart",
+            hotkey="alt+backtick",
+        ),
+        save_settings=lambda _settings: None,
+        hotkeys=FakeHotkeys(),
+        backend_manager=backend_manager,
+        kokoro_voice_ids=("af_heart",),
+    )
+    resolved = Path("new.onnx").resolve()
+    load_calls = []
+    resolve_calls = []
+    controller.configure_runtime(
+        load_voice=lambda reference: load_calls.append(reference)
+        or (resolved, object()),
+        resolve_voice=lambda reference: resolve_calls.append(reference) or resolved,
+    )
+
+    result = apply_settings(
+        controller,
+        hotkey="alt+backtick",
+        pitch_text="26",
+        speed_text="0",
+        piper_voice_path=Path("new.onnx"),
+        engine="Kokoro",
+        kokoro_voice="af_heart",
+    )
+
+    assert result.applied is True
+    assert resolve_calls == ["new.onnx"]
+    assert load_calls == []
+    assert backend_manager.current() is kokoro_backend
+
+
+@pytest.mark.parametrize("reference", ["en_US-example-medium", "voices/example.onnx"])
+def test_stored_piper_reference_matches_canonical_active_identity(reference):
+    canonical = Path("voices/example.onnx").resolve()
+    active = object()
+    preparations = []
+    manager = BackendManager(
+        "Piper", str(canonical), active, lambda: None,
+        lambda engine, voice_id: preparations.append((engine, voice_id))
+        or BackendCandidate(engine, voice_id, object()),
+    )
+    controller = Controller(
+        settings=TraySettings(voice=reference, engine="Piper", hotkey="alt+backtick"),
+        save_settings=lambda _settings: None,
+        hotkeys=FakeHotkeys(),
+        backend_manager=manager,
+    )
+    resolved = []
+    controller.configure_runtime(
+        resolve_voice=lambda value: resolved.append(value) or canonical,
+        load_voice=lambda _value: pytest.fail("no-op save loaded Piper"),
+    )
+    for _ in range(2):
+        result = apply_settings(
+            controller, hotkey="alt+backtick", pitch_text="10", speed_text="5",
+            engine="Piper",
+        )
+        assert result.applied is True
+    assert resolved == [reference, str(canonical)]
+    assert preparations == []
+    assert manager.current() is active
+    assert controller.state.settings.piper_voice == str(canonical)
 
 
 def apply_settings(

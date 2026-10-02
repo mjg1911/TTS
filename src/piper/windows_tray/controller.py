@@ -8,7 +8,7 @@ import threading
 from typing import Callable, Optional, Sequence, Tuple
 
 from .capture import CaptureResult, CaptureStatus
-from .backend_manager import BackendManager, BackendPreparationError
+from .backend_manager import BackendCandidate, BackendManager, BackendPreparationError
 from .codex_history import CodexCompletedResponse, CodexResponseId
 from .codex_monitor import CodexMonitorStatus
 from .codex_text import prepare_codex_speech
@@ -243,6 +243,9 @@ class Controller:
                 RuntimeError("voice loader is not configured")
             )
         )
+        self._resolve_voice: Callable[[str], Path] = (
+            lambda reference: self._load_voice(reference)[0]
+        )
         self._show_status: Callable[[str], None] = lambda _message: None
         self._set_tray_status: Callable[[str], None] = lambda _message: None
         self._show_notification: Callable[[str], None] = lambda _message: None
@@ -364,6 +367,7 @@ class Controller:
         self,
         choose_voice: Optional[Callable[[], Optional[Path]]] = None,
         load_voice: Optional[Callable[[str], Tuple[Path, object]]] = None,
+        resolve_voice: Optional[Callable[[str], Path]] = None,
         show_status: Optional[Callable[[str], None]] = None,
         set_tray_status: Optional[Callable[[str], None]] = None,
         show_notification: Optional[Callable[[str], None]] = None,
@@ -390,6 +394,8 @@ class Controller:
             self._choose_voice = choose_voice
         if load_voice is not None:
             self._load_voice = load_voice
+        if resolve_voice is not None:
+            self._resolve_voice = resolve_voice
         if show_status is not None:
             self._show_status = show_status
         if set_tray_status is not None:
@@ -1215,12 +1221,16 @@ class Controller:
                     ),),
                 )
 
+            resolved_path: Optional[Path] = None
             piper_reference = current.piper_voice
-            if piper_voice_path is not None:
+            if engine == "Piper" or piper_voice_path is not None:
+                reference = (
+                    str(piper_voice_path)
+                    if piper_voice_path is not None
+                    else current.piper_voice
+                )
                 try:
-                    resolved_path, _candidate_voice = self._load_voice(
-                        str(piper_voice_path)
-                    )
+                    resolved_path = self._resolve_voice(reference)
                 except VOICE_SETUP_ERRORS as error:
                     self._log_error(
                         "Selected Piper voice could not be loaded: %s" % error
@@ -1247,12 +1257,48 @@ class Controller:
                 )
 
             active_voice = piper_reference if engine == "Piper" else kokoro_voice
-            try:
-                candidate = self._backend_manager.prepare(engine, active_voice)
-            except BackendPreparationError:
-                return SettingsApplyResult(False, (("engine", "%s is not available." % engine),))
+            desired_identity = (engine, active_voice)
+            current_identity = self._backend_manager.current_identity()
+            candidate = None
+            loaded_piper_voice = None
+            if desired_identity != current_identity:
+                if engine == "Piper" and piper_voice_path is not None:
+                    try:
+                        loaded_path, loaded_piper_voice = self._load_voice(
+                            piper_reference
+                        )
+                    except VOICE_SETUP_ERRORS as error:
+                        self._log_error(
+                            "Selected Piper voice could not be loaded: %s" % error
+                        )
+                        return SettingsApplyResult(
+                            False,
+                            (
+                                (
+                                    "piper_voice",
+                                    user_message(UserError.VOICE_LOAD_REPLACEMENT),
+                                ),
+                            ),
+                        )
 
-            committed = False
+                    resolved_path = loaded_path
+                    piper_reference = str(loaded_path)
+                    candidate = BackendCandidate(
+                        "Piper",
+                        piper_reference,
+                        loaded_piper_voice,
+                    )
+                else:
+                    try:
+                        candidate = self._backend_manager.prepare(
+                            engine, active_voice
+                        )
+                    except BackendPreparationError:
+                        return SettingsApplyResult(
+                            False, (("engine", "%s is not available." % engine),)
+                        )
+
+            committed = candidate is None
             hotkey_changed = candidate_hotkey.canonical != current.hotkey
             try:
                 if hotkey_changed and not self._hotkeys.prepare_rebind(candidate_hotkey):
@@ -1323,11 +1369,18 @@ class Controller:
                         )
                     return SettingsApplyResult(False, (("general", "Piper settings could not be applied."),))
 
-                self._backend_manager.commit(candidate)
-                committed = True
+                if candidate is not None:
+                    self._backend_manager.commit(candidate)
+                    committed = True
                 self.state.settings = next_settings
-                if engine == "Piper" and piper_voice_path is not None:
-                    self.set_voice(resolved_path, _candidate_voice)
+                if (
+                    engine == "Piper"
+                    and piper_voice_path is not None
+                    and loaded_piper_voice is not None
+                ):
+                    self.set_voice(resolved_path, loaded_piper_voice)
+                elif engine == "Piper" and piper_voice_path is not None:
+                    self.state.voice_path = resolved_path
                 if self.state.kokoro_startup_state is KokoroStartupState.LOADING:
                     self.state.kokoro_startup_state = KokoroStartupState.READY
                     self._startup_piper_backend = None
@@ -1338,7 +1391,7 @@ class Controller:
                     )
                 return SettingsApplyResult(True, snapshot=self.settings_window_snapshot())
             finally:
-                if not committed:
+                if candidate is not None and not committed:
                     self._backend_manager.discard(candidate)
 
     def _validate_settings_scalars(
