@@ -391,7 +391,9 @@ def run_app(
                 raise BackendPreparationError("Kokoro worker is unavailable") from error
             return BackendCandidate("Kokoro", voice_id, client, client.shutdown)
 
-        backend_manager = BackendManager(configured_voice, lambda: None, prepare_backend)
+        backend_manager = BackendManager(
+            "Piper", str(configured_path), configured_voice, lambda: None, prepare_backend
+        )
         controller = Controller(
             settings=settings,
             save_settings=save_settings,

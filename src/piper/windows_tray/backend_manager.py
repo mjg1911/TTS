@@ -44,10 +44,14 @@ class BackendCandidate:
 class BackendManager:
     def __init__(
         self,
+        engine: str,
+        voice_id: str,
         backend: object,
         close_backend: Callable[[], None],
         prepare_backend: Callable[[str, str], BackendCandidate],
     ) -> None:
+        self._engine = engine
+        self._voice_id = voice_id
         self._backend = backend
         self._close_backend = close_backend
         self._prepare_backend = prepare_backend
@@ -57,6 +61,10 @@ class BackendManager:
     def current(self) -> object:
         with self._lock:
             return self._backend
+
+    def current_identity(self) -> Tuple[str, str]:
+        with self._lock:
+            return self._engine, self._voice_id
 
     def acquire(self) -> Tuple[object, Callable[[], None]]:
         """Return the current backend and a release callback for its lease."""
@@ -75,6 +83,9 @@ class BackendManager:
                 if released:
                     return
                 released = True
+                entry = self._leases.get(key)
+                if entry is None:
+                    return
                 entry[1] -= 1
                 if entry[1] == 0:
                     close_backend = entry[2]
@@ -100,6 +111,8 @@ class BackendManager:
                 if entry[2] is None:
                     entry[2] = old_close
                 old_close = _noop
+            self._engine = candidate.engine
+            self._voice_id = candidate.voice_id
             self._backend = backend
             self._close_backend = close_backend
         _safe_close(old_close)

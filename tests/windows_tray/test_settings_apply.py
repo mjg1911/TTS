@@ -53,19 +53,24 @@ class TransactionalFakeHotkeys(FakeHotkeys):
 
 
 def make_controller(settings=None, hotkeys=None, save_settings=None):
+    settings = settings or TraySettings(
+        voice="old-voice",
+        hotkey="alt+backtick",
+        pitch_percent=26,
+        speed_percent=0,
+    )
+    voice_id = (
+        settings.piper_voice if settings.engine == "Piper" else settings.kokoro_voice
+    )
     backend_manager = BackendManager(
+        settings.engine,
+        voice_id,
         object(),
         lambda: None,
         lambda engine, voice_id: BackendCandidate(engine, voice_id, object()),
     )
     return Controller(
-        settings=settings
-        or TraySettings(
-            voice="old-voice",
-            hotkey="alt+backtick",
-            pitch_percent=26,
-            speed_percent=0,
-        ),
+        settings=settings,
         save_settings=save_settings or (lambda _settings: None),
         hotkeys=hotkeys or FakeHotkeys(),
         backend_manager=backend_manager,

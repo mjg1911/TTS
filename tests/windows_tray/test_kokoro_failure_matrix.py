@@ -42,7 +42,9 @@ def _controller_with_kokoro_prepare_failure(reason, kokoro_voice_ids=("af_heart"
         backend = MatrixBackend(engine)
         return BackendCandidate(engine, voice_id, backend, backend.shutdown)
 
-    manager = BackendManager(piper, piper.shutdown, prepare_backend)
+    manager = BackendManager(
+        "Piper", settings.piper_voice, piper, piper.shutdown, prepare_backend
+    )
     controller = Controller(
         settings=settings,
         save_settings=saved.append,

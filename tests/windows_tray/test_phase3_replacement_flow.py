@@ -147,6 +147,8 @@ def test_app_speech_worker_reads_voice_manager_current_and_enqueues_events():
     first_voice = object()
     second_voice = object()
     manager = BackendManager(
+        "Piper",
+        "old.onnx",
         first_voice,
         lambda: None,
         lambda _engine, _voice_id: BackendCandidate(
