@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import sys
 import threading
-from typing import Optional, Protocol
+from typing import Optional, Protocol, Union
 
 from piper.audio_playback import AudioPlayer
 
@@ -15,7 +15,7 @@ from .settings import validate_pitch_percent, validate_speed_percent
 class PlaybackPipeline(Protocol):
     def __enter__(self) -> "PlaybackPipeline": ...
     def __exit__(self, exc_type, exc_value, traceback) -> None: ...
-    def play(self, audio_bytes: bytes | bytearray) -> None: ...
+    def play(self, audio_bytes: Union[bytes, bytearray]) -> None: ...
     def stop(self) -> None: ...
 
 
@@ -168,7 +168,7 @@ class FfmpegPitchPipeline:
         if error is not None:
             raise RuntimeError(f"ffmpeg output forwarding failed: {error}") from error
 
-    def play(self, audio_bytes: bytes | bytearray) -> None:
+    def play(self, audio_bytes: Union[bytes, bytearray]) -> None:
         self._raise_reader_error()
         with self._lock:
             if self._stopped:
