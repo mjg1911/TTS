@@ -17,6 +17,7 @@ from .hotkey import parse_hotkey
 from .logging_setup import log_capture_result, log_exception_safe
 from .errors import UserError, user_message
 from .settings import (
+    DEFAULT_PIPER_SENTENCE_STREAMING_ENABLED,
     DEFAULT_PITCH_PERCENT,
     DEFAULT_SENTENCE_PAUSE_MS,
     DEFAULT_SPEED_PERCENT,
@@ -130,6 +131,7 @@ class SettingsWindowSnapshot:
     speed_percent: float
     sentence_pause_ms: int
     last_text: Optional[str]
+    piper_sentence_streaming_enabled: bool
 
     def __init__(
         self,
@@ -145,6 +147,7 @@ class SettingsWindowSnapshot:
         speed_percent: float = 0.0,
         sentence_pause_ms: int = DEFAULT_SENTENCE_PAUSE_MS,
         last_text: Optional[str] = None,
+        piper_sentence_streaming_enabled: bool = True,
         *,
         voice_path: Optional[Path] = None,
     ) -> None:
@@ -163,6 +166,7 @@ class SettingsWindowSnapshot:
             "speed_percent": speed_percent,
             "sentence_pause_ms": sentence_pause_ms,
             "last_text": last_text,
+            "piper_sentence_streaming_enabled": piper_sentence_streaming_enabled,
         }
         for name, value in values.items():
             object.__setattr__(self, name, value)
@@ -1133,6 +1137,9 @@ class Controller:
                 speed_percent=settings.speed_percent,
                 sentence_pause_ms=settings.sentence_pause_ms,
                 last_text=self.state.last_text,
+                piper_sentence_streaming_enabled=(
+                    settings.piper_sentence_streaming_enabled
+                ),
             )
 
     def apply_settings(
@@ -1144,7 +1151,19 @@ class Controller:
         piper_voice_path: Optional[Path],
         kokoro_voice: str,
         sentence_pause_text: Optional[str] = None,
+        piper_sentence_streaming_enabled: Optional[bool] = None,
     ) -> SettingsApplyResult:
+        if (
+            piper_sentence_streaming_enabled is not None
+            and type(piper_sentence_streaming_enabled) is not bool
+        ):
+            return SettingsApplyResult(
+                False,
+                ((
+                    "piper_sentence_streaming",
+                    "Piper sentence streaming must be enabled or disabled.",
+                ),),
+            )
         if self.state.settings_recovery_required:
             return SettingsApplyResult(
                 False,
@@ -1254,6 +1273,11 @@ class Controller:
                         current.sentence_pause_ms
                         if sentence_pause_ms is None
                         else sentence_pause_ms
+                    ),
+                    piper_sentence_streaming_enabled=(
+                        current.piper_sentence_streaming_enabled
+                        if piper_sentence_streaming_enabled is None
+                        else piper_sentence_streaming_enabled
                     ),
                 )
                 try:
@@ -1485,6 +1509,13 @@ class Controller:
             if settings is None:
                 return DEFAULT_SENTENCE_PAUSE_MS
             return settings.sentence_pause_ms
+
+    def current_piper_sentence_streaming_enabled(self) -> bool:
+        with self._state_lock:
+            settings = self.state.settings
+            if settings is None:
+                return DEFAULT_PIPER_SENTENCE_STREAMING_ENABLED
+            return settings.piper_sentence_streaming_enabled
 
     def request_pitch_change(self, value: object) -> bool:
         with self._state_lock:

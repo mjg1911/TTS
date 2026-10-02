@@ -127,6 +127,7 @@ def install_fake_tk(monkeypatch, built_frames):
         LabelFrame=FakeLabelFrame,
         Frame=FakeWidget,
         Button=FakeButton,
+        Checkbutton=FakeButton,
         Entry=FakeEntry,
         Label=FakeLabel,
     )
@@ -266,7 +267,7 @@ def test_apply_success_closes_window(monkeypatch):
     window._apply()
 
     assert apply_calls == [
-        ("Piper", "ctrl+q", "-10", "25", Path("new.onnx"), "af_heart", "180")
+        ("Piper", "ctrl+q", "-10", "25", Path("new.onnx"), "af_heart", "180", True)
     ]
     assert window.window.exists is False
 
