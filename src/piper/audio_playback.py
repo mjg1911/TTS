@@ -83,7 +83,7 @@ class AudioPlayer:
                     self._proc = None
                 self._closing = False
 
-    def play(self, audio_bytes: bytes) -> None:
+    def play(self, audio_bytes: bytes | bytearray) -> None:
         """Play raw audio and report unexpected ffplay failures."""
         with self._lock:
             proc = self._proc

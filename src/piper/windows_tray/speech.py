@@ -395,7 +395,7 @@ class SpeechWorker:
     @staticmethod
     def _piper_audio(
         voice, text, cancel_event, sentence_streaming_enabled
-    ) -> Iterator[bytes]:
+    ) -> Iterator[bytes | bytearray]:
         if not sentence_streaming_enabled:
             if cancel_event.is_set():
                 return
@@ -405,7 +405,7 @@ class SpeechWorker:
                     return
                 audio_buffer.extend(chunk.audio_int16_bytes)
             if not cancel_event.is_set() and audio_buffer:
-                yield bytes(audio_buffer)
+                yield audio_buffer
             return
 
         # eSpeak can ignore periods followed by lowercase text. Split first so
@@ -535,7 +535,7 @@ class SpeechWorker:
                             pause_frames = round(
                                 sample_rate * sentence_pause_ms / 1000 * speed
                             )
-                            audio_bytes = bytes(pause_frames * 2) + audio_bytes
+                            audio_bytes = bytes(pause_frames * 2) + bytes(audio_bytes)
                         is_nonempty_streamed_piper_audio = True
                     else:
                         is_nonempty_streamed_piper_audio = False
