@@ -377,6 +377,15 @@ class SpeechWorker:
         return request
 
     @staticmethod
+    def _piper_audio(voice, text, cancel_event):
+        # eSpeak can ignore periods followed by lowercase text. Split first so
+        # those boundaries still produce separate audio chunks and pauses.
+        for sentence in split_speech_sentences(text) or (text,):
+            if cancel_event.is_set():
+                return
+            yield from voice.synthesize(sentence)
+
+    @staticmethod
     def _streamed_backend_audio(backend, text, cancel_event):
         sentences = split_speech_sentences(text) or (text,)
         first_result = backend.synthesize(sentences[0], cancel_event)
@@ -438,7 +447,7 @@ class SpeechWorker:
                     cancel_event,
                 )
             else:
-                audio_chunks = iter(backend.synthesize(request.text))
+                audio_chunks = self._piper_audio(backend, request.text, cancel_event)
             phase = "playback"
             player_context = self._player_factory(sample_rate)
             with player_context as player:
