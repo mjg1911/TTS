@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import sys
 import threading
-from typing import Optional
+from typing import Optional, Union
 
 
 class AudioPlayer:
@@ -83,7 +83,7 @@ class AudioPlayer:
                     self._proc = None
                 self._closing = False
 
-    def play(self, audio_bytes: bytes) -> None:
+    def play(self, audio_bytes: Union[bytes, bytearray]) -> None:
         """Play raw audio and report unexpected ffplay failures."""
         with self._lock:
             proc = self._proc

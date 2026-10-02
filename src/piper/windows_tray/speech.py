@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum, auto
 import logging
@@ -16,6 +16,7 @@ from piper.audio_playback import AudioPlayer
 from .logging_setup import log_exception_safe, log_synthesis_result
 from .pitch_playback import PlaybackPipeline
 from .sentence_splitter import split_speech_sentences
+from .settings import DEFAULT_SENTENCE_PAUSE_MS
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,6 +67,10 @@ class SpeechWorker:
         self._voice_provider = voice_provider
         self._on_event = on_event
         self._player_factory = player_factory
+        self._sentence_pause_provider: Callable[[], int] = (
+            lambda: DEFAULT_SENTENCE_PAUSE_MS
+        )
+        self._piper_sentence_streaming_provider: Callable[[], bool] = lambda: True
         self._condition = threading.Condition()
         self._pending_foreground: Optional[SpeechRequest] = None
         self._pending_errors = deque()  # type: deque[SpeechRequest]
@@ -83,6 +88,18 @@ class SpeechWorker:
             target=self._run, name="piper-speech", daemon=True
         )
         self._thread.start()
+
+    def set_sentence_pause_provider(
+        self, provider: Callable[[], int]
+    ) -> None:
+        """Set the live Piper sentence-pause setting source."""
+        self._sentence_pause_provider = provider
+
+    def set_piper_sentence_streaming_provider(
+        self, provider: Callable[[], bool]
+    ) -> None:
+        """Set the live Piper sentence-streaming setting source."""
+        self._piper_sentence_streaming_provider = provider
 
     def submit(self, request: SpeechRequest) -> bool:
         """Queue a request according to its speech purpose."""
@@ -376,6 +393,32 @@ class SpeechWorker:
         return request
 
     @staticmethod
+    def _piper_audio(
+        voice, text, cancel_event, sentence_streaming_enabled
+    ) -> Iterator[bytes | bytearray]:
+        if not sentence_streaming_enabled:
+            if cancel_event.is_set():
+                return
+            audio_buffer = bytearray()
+            for chunk in voice.synthesize(text):
+                if cancel_event.is_set():
+                    return
+                audio_buffer.extend(chunk.audio_int16_bytes)
+            if not cancel_event.is_set() and audio_buffer:
+                yield audio_buffer
+            return
+
+        # eSpeak can ignore periods followed by lowercase text. Split first so
+        # those boundaries still produce separate audio chunks and pauses.
+        for sentence in split_speech_sentences(text) or (text,):
+            if cancel_event.is_set():
+                return
+            for chunk in voice.synthesize(sentence):
+                if cancel_event.is_set():
+                    return
+                yield chunk.audio_int16_bytes
+
+    @staticmethod
     def _streamed_backend_audio(backend, text, cancel_event):
         sentences = split_speech_sentences(text) or (text,)
         first_result = backend.synthesize(sentences[0], cancel_event)
@@ -430,6 +473,7 @@ class SpeechWorker:
                     backend = provided_backend
             is_piper_voice = hasattr(backend, "config")
             sample_rate = backend.config.sample_rate if is_piper_voice else None
+            sentence_streaming_enabled = False
             if not is_piper_voice:
                 sample_rate, audio_chunks = self._streamed_backend_audio(
                     backend,
@@ -437,7 +481,15 @@ class SpeechWorker:
                     cancel_event,
                 )
             else:
-                audio_chunks = iter(backend.synthesize(request.text))
+                sentence_streaming_enabled = (
+                    self._piper_sentence_streaming_provider()
+                )
+                audio_chunks = self._piper_audio(
+                    backend,
+                    request.text,
+                    cancel_event,
+                    sentence_streaming_enabled,
+                )
             phase = "playback"
             player_context = self._player_factory(sample_rate)
             with player_context as player:
@@ -447,6 +499,7 @@ class SpeechWorker:
                 if cancelled:
                     player.stop()
 
+                played_piper_sentence = False
                 phase = "synthesis"
                 while True:
                     phase = "synthesis"
@@ -467,9 +520,25 @@ class SpeechWorker:
                     if cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
-                    audio_bytes = (
-                        chunk.audio_int16_bytes if is_piper_voice else chunk
-                    )
+                    audio_bytes = chunk
+                    if (
+                        is_piper_voice
+                        and sentence_streaming_enabled
+                        and audio_bytes
+                    ):
+                        if played_piper_sentence:
+                            # Piper yields one sentence per chunk. Queue PCM silence
+                            # to preserve the audible boundary in streaming mode.
+                            # The pitch pipeline applies tempo to silence too.
+                            speed = 1 + getattr(player, "speed_percent", 0) / 100
+                            sentence_pause_ms = self._sentence_pause_provider()
+                            pause_frames = round(
+                                sample_rate * sentence_pause_ms / 1000 * speed
+                            )
+                            audio_bytes = bytes(pause_frames * 2) + bytes(audio_bytes)
+                        is_nonempty_streamed_piper_audio = True
+                    else:
+                        is_nonempty_streamed_piper_audio = False
                     if cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
@@ -479,6 +548,8 @@ class SpeechWorker:
                             break
                         phase = "playback"
                         player.play(audio_bytes)
+                        if is_nonempty_streamed_piper_audio:
+                            played_piper_sentence = True
 
                 if cancel_event.is_set():
                     terminal_kind = SpeechEventKind.CANCELLED

@@ -198,7 +198,7 @@ def test_multi_chunk_request_creates_one_playback_pipeline() -> None:
         worker.submit(SpeechRequest(301, "hello"))
         wait_for_event(events, SpeechEventKind.FINISHED, 301)
         assert factory_calls == [22050]
-        assert played == [b"one", b"two"]
+        assert played == [b"one", bytes(7938) + b"two"]
     finally:
         worker.shutdown()
 
@@ -243,7 +243,7 @@ def test_streamed_backend_synthesizes_sentences_lazily_in_playback_order():
         worker.shutdown()
 
 
-def test_piper_backend_still_receives_original_text_once():
+def test_piper_backend_receives_single_sentence_once():
     events = []
     calls = []
     played = []
@@ -259,11 +259,86 @@ def test_piper_backend_still_receives_original_text_once():
     )
     worker = make_worker(voice, events, played, entered)
     try:
-        worker.submit(SpeechRequest(303, "First sentence. Second sentence."))
+        worker.submit(SpeechRequest(303, "this is a test to check what it sounds like"))
         wait_for_event(events, SpeechEventKind.FINISHED, 303)
 
-        assert calls == ["First sentence. Second sentence."]
+        assert calls == ["this is a test to check what it sounds like"]
         assert played == [b"audio"]
+    finally:
+        worker.shutdown()
+
+
+@pytest.mark.parametrize("sample_rate", [16000, 22050, 24000])
+@pytest.mark.parametrize("speed_percent", [-50, 0, 100])
+def test_piper_sentence_audio_has_180ms_gaps_only_between_sentences(
+    sample_rate, speed_percent
+):
+    events = []
+    played = []
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=sample_rate),
+        synthesize=lambda text: [
+            Chunk(
+                {"First.": b"\x01\x00", "Second?": b"\x02\x00", "Third!": b"\x03\x00"}[text]
+            )
+        ],
+    )
+    player = FakePlayer(played, threading.Event())
+    player.speed_percent = speed_percent
+    worker = SpeechWorker(lambda: voice, events.append, lambda _rate: player)
+    try:
+        worker.submit(SpeechRequest(306, "First. Second? Third!"))
+        wait_for_event(events, SpeechEventKind.FINISHED, 306)
+        pause_frames = round(sample_rate * 0.180 * (1 + speed_percent / 100))
+        silence = bytes(pause_frames * 2)
+        assert b"".join(played) == (
+            b"\x01\x00" + silence + b"\x02\x00" + silence + b"\x03\x00"
+        )
+    finally:
+        worker.shutdown()
+
+
+@pytest.mark.parametrize("cancel_after_first", [False, True])
+def test_piper_lowercase_sentence_boundaries_are_synthesized_lazily(cancel_after_first):
+    timeline = []
+    events = []
+    played = []
+
+    def synthesize(text):
+        timeline.append(("synthesize", text))
+        return [Chunk(b"\x01\x00")]
+
+    class Player(FakePlayer):
+        def play(self, data):
+            super().play(data)
+            timeline.append(("play", data))
+            if cancel_after_first:
+                worker.cancel_active(307)
+
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=22050), synthesize=synthesize
+    )
+    worker = SpeechWorker(
+        lambda: voice, events.append, lambda _rate: Player(played, threading.Event())
+    )
+    try:
+        worker.submit(SpeechRequest(307, "this. is a test. to check what. it sounds like"))
+        terminal = wait_for_terminal_event(events, 307)
+        sentences = ["this.", "is a test.", "to check what.", "it sounds like"]
+        if cancel_after_first:
+            sentences = sentences[:1]
+        expected = []
+        for index, sentence in enumerate(sentences):
+            expected.extend(
+                [
+                    ("synthesize", sentence),
+                    ("play", (bytes(7938) if index else b"") + b"\x01\x00"),
+                ]
+            )
+        assert timeline == expected
+        assert terminal.kind is (
+            SpeechEventKind.CANCELLED if cancel_after_first else SpeechEventKind.FINISHED
+        )
     finally:
         worker.shutdown()
 
