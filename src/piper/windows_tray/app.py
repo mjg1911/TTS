@@ -121,6 +121,13 @@ def _build_speech_worker(controller: Controller, backend_provider) -> SpeechWork
     set_pause_provider = getattr(worker, "set_sentence_pause_provider", None)
     if set_pause_provider is not None:
         set_pause_provider(controller.current_sentence_pause_ms)
+    set_streaming_provider = getattr(
+        worker, "set_piper_sentence_streaming_provider", None
+    )
+    if set_streaming_provider is not None:
+        set_streaming_provider(
+            controller.current_piper_sentence_streaming_enabled
+        )
     return worker
 
 
