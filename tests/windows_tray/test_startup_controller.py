@@ -1,10 +1,13 @@
+from pathlib import Path
 import threading
 from types import SimpleNamespace
 
+from piper.windows_tray.backend_manager import BackendCandidate
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray import controller as controller_module
 from piper.windows_tray.controller import Controller
 from piper.windows_tray.settings import TraySettings
+from piper.windows_tray.voice_manager import VoiceManager
 from piper.windows_tray.speech import (
     SpeechEvent,
     SpeechEventKind,
@@ -30,15 +33,22 @@ class RecordingBackendManager:
     def __init__(self, piper):
         self.piper = piper
         self.current_backend = piper
+        self.current_engine = "Piper"
+        self.current_voice_id = "old.onnx"
         self.commits = []
         self.discards = []
 
     def current(self):
         return self.current_backend
 
+    def current_identity(self):
+        return self.current_engine, self.current_voice_id
+
     def commit(self, candidate):
         self.commits.append(candidate)
         self.current_backend = candidate.backend
+        self.current_engine = candidate.engine
+        self.current_voice_id = candidate.voice_id
 
     def discard(self, candidate):
         self.discards.append(candidate)
@@ -80,7 +90,9 @@ def test_startup_transitions_update_tray_status_and_failure_guidance():
     controller.configure_runtime(set_tray_status=tray_statuses.append)
 
     controller.begin_kokoro_startup()
-    controller.complete_kokoro_startup(SimpleNamespace(backend=object()), ["af_heart"])
+    controller.complete_kokoro_startup(
+        BackendCandidate("Kokoro", "af_heart", object()), ["af_heart"]
+    )
     controller.begin_kokoro_startup()
     controller.fail_kokoro_startup("unavailable")
 
@@ -98,7 +110,7 @@ def test_startup_transitions_update_tray_status_and_failure_guidance():
 
 def test_startup_result_cannot_commit_after_shutdown_begins():
     controller, _speech, manager, _piper, _statuses = make_controller()
-    candidate = SimpleNamespace(backend=object())
+    candidate = BackendCandidate("Kokoro", "af_heart", object())
     controller.begin_kokoro_startup()
     controller.handle(Command(CommandKind.EXIT))
 
@@ -136,7 +148,7 @@ def test_capture_enqueued_while_loading_stays_status_request_after_readiness():
 
     controller.enqueue(Command(CommandKind.CAPTURE_REQUEST))
     queued_capture = controller.drain_once()
-    candidate = SimpleNamespace(backend=object())
+    candidate = BackendCandidate("Kokoro", "af_heart", object())
     controller.complete_kokoro_startup(candidate, ["af_heart"])
     controller.handle(queued_capture)
 
@@ -237,7 +249,7 @@ def test_cancel_auxiliary_eviction_allows_another_loading_hotkey():
 
 def test_successful_startup_commits_candidate_and_voice_ids():
     controller, _speech, manager, _piper, _statuses = make_controller()
-    candidate = SimpleNamespace(backend=object())
+    candidate = BackendCandidate("Kokoro", "af_heart", object())
 
     controller.begin_kokoro_startup()
     controller.complete_kokoro_startup(candidate, ["af_heart", "am_adam"])
@@ -251,7 +263,7 @@ def test_hotkey_after_startup_readiness_requests_capture_with_kokoro_active():
     controller, _speech, manager, _piper, _statuses = make_controller(
         TraySettings(engine="Kokoro", kokoro_voice="af_heart")
     )
-    candidate = SimpleNamespace(backend=object())
+    candidate = BackendCandidate("Kokoro", "af_heart", object())
     capture_jobs = []
     controller.configure_runtime(
         capture=lambda: None,
@@ -265,6 +277,27 @@ def test_hotkey_after_startup_readiness_requests_capture_with_kokoro_active():
     assert manager.current() is candidate.backend
     assert len(capture_jobs) == 1
     assert controller.kokoro_startup_state is controller_module.KokoroStartupState.READY
+
+
+def test_successful_kokoro_startup_clears_live_piper_references():
+    controller, _speech, manager, piper, _statuses = make_controller(
+        TraySettings(engine="Kokoro", kokoro_voice="af_heart")
+    )
+    voice_manager = VoiceManager(piper, lambda _reference: None)
+    controller.configure_runtime(voice_manager=voice_manager)
+    controller.set_voice(Path("old.onnx"), piper)
+    candidate = BackendCandidate("Kokoro", "af_heart", object())
+
+    controller.begin_kokoro_startup()
+    assert controller._startup_piper_backend is piper
+
+    controller.complete_kokoro_startup(candidate, ["af_heart"])
+
+    assert manager.current() is candidate.backend
+    assert controller.state.voice is None
+    assert voice_manager.current() is None
+    assert controller._startup_piper_backend is None
+    assert controller.state.voice_path == Path("old.onnx")
 
 
 def test_failed_startup_keeps_piper_and_saved_settings():

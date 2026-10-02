@@ -337,9 +337,10 @@ class Controller:
                         pass
                 self.fail_kokoro_startup(str(error))
                 return
+            self.clear_voice_backend()
+            self._startup_piper_backend = None
             self._kokoro_voice_ids = tuple(sorted(voice_ids))
             self._kokoro_unavailable_reason = None
-            self._startup_piper_backend = None
             self._startup_status_pending_or_active = False
             self._startup_status_generation = None
             self.state.kokoro_startup_state = KokoroStartupState.READY
@@ -457,6 +458,16 @@ class Controller:
             self.state.voice = voice
             if self._voice_manager is not None:
                 self._voice_manager.replace(voice)
+
+    def set_piper_voice_path(self, path: Path) -> None:
+        with self._state_lock:
+            self.state.voice_path = path
+
+    def clear_voice_backend(self) -> None:
+        with self._state_lock:
+            self.state.voice = None
+            if self._voice_manager is not None:
+                self._voice_manager.clear()
 
     def install_voice(self, path: Path, voice: object, persist: bool = False) -> bool:
         with self._state_lock:
@@ -1373,14 +1384,14 @@ class Controller:
                     self._backend_manager.commit(candidate)
                     committed = True
                 self.state.settings = next_settings
-                if (
-                    engine == "Piper"
-                    and piper_voice_path is not None
-                    and loaded_piper_voice is not None
-                ):
-                    self.set_voice(resolved_path, loaded_piper_voice)
-                elif engine == "Piper" and piper_voice_path is not None:
-                    self.state.voice_path = resolved_path
+                if resolved_path is not None:
+                    self.set_piper_voice_path(resolved_path)
+
+                if engine == "Piper":
+                    if candidate is not None:
+                        self.set_voice(Path(candidate.voice_id), candidate.backend)
+                else:
+                    self.clear_voice_backend()
                 if self.state.kokoro_startup_state is KokoroStartupState.LOADING:
                     self.state.kokoro_startup_state = KokoroStartupState.READY
                     self._startup_piper_backend = None

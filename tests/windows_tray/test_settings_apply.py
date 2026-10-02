@@ -7,6 +7,7 @@ from piper.windows_tray.controller import Controller, KokoroStartupState
 from piper.windows_tray.backend_manager import BackendCandidate, BackendManager
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.settings import TraySettings, save_settings
+from piper.windows_tray.voice_manager import VoiceManager
 
 
 class FakeHotkeys:
@@ -207,6 +208,43 @@ def test_kokoro_settings_resolve_piper_path_without_loading_piper():
     assert resolve_calls == ["new.onnx"]
     assert load_calls == []
     assert backend_manager.current() is kokoro_backend
+
+
+def test_applying_kokoro_settings_clears_live_piper_references():
+    piper = object()
+    backend_manager = BackendManager(
+        "Piper",
+        "old.onnx",
+        piper,
+        lambda: None,
+        lambda engine, voice_id: BackendCandidate(engine, voice_id, object()),
+    )
+    controller = Controller(
+        settings=TraySettings(engine="Piper", piper_voice="old.onnx"),
+        save_settings=lambda _settings: None,
+        hotkeys=FakeHotkeys(),
+        backend_manager=backend_manager,
+    )
+    voice_manager = VoiceManager(piper, lambda _reference: None)
+    controller.configure_runtime(
+        voice_manager=voice_manager,
+        resolve_voice=lambda reference: Path(reference),
+    )
+    controller.set_voice(Path("old.onnx"), piper)
+
+    result = apply_settings(
+        controller,
+        hotkey="alt+backtick",
+        pitch_text="26",
+        speed_text="0",
+        piper_voice_path=None,
+        engine="Kokoro",
+    )
+
+    assert result.applied is True
+    assert controller.state.voice is None
+    assert voice_manager.current() is None
+    assert controller.state.voice_path == Path("old.onnx")
 
 
 @pytest.mark.parametrize("reference", ["en_US-example-medium", "voices/example.onnx"])

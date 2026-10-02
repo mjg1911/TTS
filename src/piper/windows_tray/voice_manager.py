@@ -28,13 +28,16 @@ class VoiceManager:
         self._lock = threading.Lock()
         self._threads = []
 
-    def current(self) -> object:
+    def current(self) -> Optional[object]:
         with self._lock:
             return self._voice
 
-    def replace(self, voice: object) -> None:
+    def replace(self, voice: Optional[object]) -> None:
         with self._lock:
             self._voice = voice
+
+    def clear(self) -> None:
+        self.replace(None)
 
     def begin_switch(
         self,

@@ -80,3 +80,12 @@ def test_controller_stops_active_speech_before_starting_voice_switch() -> None:
     assert worker.cancelled == [8]
     assert controller.state.playback is PlaybackState.STOPPED
     assert controller.state.speech_generation == 9
+
+
+def test_clear_releases_current_voice_reference() -> None:
+    voice = object()
+    manager = VoiceManager(voice, FakeLoader())
+
+    manager.clear()
+
+    assert manager.current() is None

@@ -1,3 +1,6 @@
+import gc
+import weakref
+
 import pytest
 
 from piper.windows_tray.backend_manager import (
@@ -155,3 +158,29 @@ def test_shutdown_closes_active_backend_once():
     manager.shutdown()
     manager.shutdown()
     assert current.shutdown_calls == 1
+
+
+def test_replaced_backend_is_collectible_after_last_lease_releases():
+    current = FakeBackend()
+    current_ref = weakref.ref(current)
+    replacement = FakeBackend()
+    manager = BackendManager(
+        "Piper",
+        "old.onnx",
+        current,
+        lambda: None,
+        lambda engine, voice: BackendCandidate(
+            engine, voice, replacement, replacement.shutdown
+        ),
+    )
+    leased, release = manager.acquire()
+    manager.commit(manager.prepare("Kokoro", "af_heart"))
+
+    del current
+    gc.collect()
+    assert current_ref() is leased
+
+    del leased
+    release()
+    gc.collect()
+    assert current_ref() is None
