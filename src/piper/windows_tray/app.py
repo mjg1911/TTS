@@ -347,6 +347,7 @@ def run_app(
             except (OSError, ValueError):
                 return 1
             configured_path, configured_voice = selected_path, selected_voice
+            del selected_voice
 
         kokoro_installation = None
         kokoro_unavailable_reason = None
@@ -359,7 +360,7 @@ def run_app(
                 path, voice = _load_configured_voice(
                     replace(settings, piper_voice=voice_id), data_dirs
                 )
-                return BackendCandidate("Piper", voice_id, voice)
+                return BackendCandidate("Piper", str(path), voice)
             if engine != "Kokoro":
                 raise BackendPreparationError("Kokoro is unavailable")
             if not kokoro_preparation_attempted:
@@ -404,6 +405,7 @@ def run_app(
         if settings.engine == "Kokoro":
             controller.begin_kokoro_startup()
         controller.set_voice(configured_path, configured_voice)
+        del configured_voice
         codex_monitor = CodexMonitor(
             codex_sessions_dir(),
             controller.enqueue_codex_response,
@@ -462,6 +464,9 @@ def run_app(
         controller.configure_runtime(
             choose_voice=ui.choose_voice_model,
             load_voice=lambda reference: load_voice_candidate(reference, data_dirs),
+            resolve_voice=lambda reference: resolve_voice_reference(
+                reference, data_dirs
+            ),
             voice_manager=voice_manager,
             speech_worker=speech_worker,
             show_status=ui.show_status,
