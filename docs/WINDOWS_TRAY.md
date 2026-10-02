@@ -57,8 +57,18 @@ The window contains:
 - Voice model: shows the current model and provides `Choose voice...`.
 - Last captured text: read-only and refreshed after each successful capture.
 - Hotkey settings: edits the capture hotkey.
+- Piper sentence pause: configures the pause between streamed Piper sentences.
+- Stream Piper sentences: enabled by default; controls whether Piper plays
+  sentences as they are synthesized or buffers the full request first.
 - Pitch settings: accepts `-50%` through `100%`.
 - Speed settings: accepts `-50%` through `100%`.
+
+With `Stream Piper sentences` enabled, Piper begins playing each synthesized
+sentence while it synthesizes the rest of the text. The configured Piper
+sentence pause applies between sentences. When streaming is disabled, Piper
+waits for the full request to be synthesized, then plays the buffered audio
+continuously. This delays the first audio and can use more memory for long
+requests. The setting applies to Piper only and has no effect on Kokoro.
 
 `Save/Apply` validates the editable settings together. A changed voice is loaded
 before Piper commits it. The candidate hotkey is registered and the complete
