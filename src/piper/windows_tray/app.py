@@ -113,11 +113,15 @@ def _build_speech_worker(controller: Controller, backend_provider) -> SpeechWork
         pitch_percent, speed_percent = controller.current_pitch_and_speed_percent()
         return create_playback_pipeline(sample_rate, pitch_percent, speed_percent)
 
-    return SpeechWorker(
+    worker = SpeechWorker(
         backend_provider,
         controller.enqueue_worker_event,
         player_factory,
     )
+    set_pause_provider = getattr(worker, "set_sentence_pause_provider", None)
+    if set_pause_provider is not None:
+        set_pause_provider(controller.current_sentence_pause_ms)
+    return worker
 
 
 def run_app(

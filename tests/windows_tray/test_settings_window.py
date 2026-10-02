@@ -266,7 +266,7 @@ def test_apply_success_closes_window(monkeypatch):
     window._apply()
 
     assert apply_calls == [
-        ("Piper", "ctrl+q", "-10", "25", Path("new.onnx"), "af_heart")
+        ("Piper", "ctrl+q", "-10", "25", Path("new.onnx"), "af_heart", "180")
     ]
     assert window.window.exists is False
 

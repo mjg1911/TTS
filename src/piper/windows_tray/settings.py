@@ -20,6 +20,9 @@ MAX_PITCH_PERCENT: float = 100.0
 DEFAULT_SPEED_PERCENT: float = 0.0
 MIN_SPEED_PERCENT: float = -50.0
 MAX_SPEED_PERCENT: float = 100.0
+DEFAULT_SENTENCE_PAUSE_MS: int = 180
+MIN_SENTENCE_PAUSE_MS: int = 0
+MAX_SENTENCE_PAUSE_MS: int = 2000
 
 
 def validate_pitch_percent(value: object) -> float:
@@ -44,6 +47,15 @@ def validate_speed_percent(value: object) -> float:
     return speed_percent
 
 
+def validate_sentence_pause_ms(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+        raise ValueError("sentence_pause_ms must be a whole number")
+    sentence_pause_ms = int(value)
+    if not MIN_SENTENCE_PAUSE_MS <= sentence_pause_ms <= MAX_SENTENCE_PAUSE_MS:
+        raise ValueError("sentence_pause_ms is out of range")
+    return sentence_pause_ms
+
+
 @dataclass(frozen=True, init=False)
 class TraySettings:
     schema_version: int = SETTINGS_SCHEMA_VERSION
@@ -57,6 +69,7 @@ class TraySettings:
     browser_chatgpt_enabled: bool = False
     pitch_percent: float = DEFAULT_PITCH_PERCENT
     speed_percent: float = DEFAULT_SPEED_PERCENT
+    sentence_pause_ms: int = DEFAULT_SENTENCE_PAUSE_MS
 
     def __init__(
         self,
@@ -71,6 +84,7 @@ class TraySettings:
         browser_chatgpt_enabled: bool = False,
         pitch_percent: float = DEFAULT_PITCH_PERCENT,
         speed_percent: float = DEFAULT_SPEED_PERCENT,
+        sentence_pause_ms: int = DEFAULT_SENTENCE_PAUSE_MS,
         *,
         voice: Optional[str] = None,
     ) -> None:
@@ -120,6 +134,9 @@ def _validated(data: object) -> TraySettings:
     speed_percent = validate_speed_percent(
         data.get("speed_percent", DEFAULT_SPEED_PERCENT)
     )
+    sentence_pause_ms = validate_sentence_pause_ms(
+        data.get("sentence_pause_ms", DEFAULT_SENTENCE_PAUSE_MS)
+    )
     if not isinstance(engine, str) or engine not in {"Piper", "Kokoro"}:
         raise ValueError("invalid engine")
     if not isinstance(piper_voice, str) or not piper_voice.strip():
@@ -152,6 +169,7 @@ def _validated(data: object) -> TraySettings:
         browser_chatgpt_enabled=browser_chatgpt_enabled,
         pitch_percent=pitch_percent,
         speed_percent=speed_percent,
+        sentence_pause_ms=sentence_pause_ms,
     )
 
 

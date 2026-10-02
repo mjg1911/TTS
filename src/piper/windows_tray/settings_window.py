@@ -20,7 +20,9 @@ class SettingsWindow:
         self,
         parent: tk.Misc,
         snapshot: SettingsWindowSnapshot,
-        on_apply: Callable[[str, str, str, str, Optional[Path], str], SettingsApplyResult],
+        on_apply: Callable[
+            [str, str, str, str, Optional[Path], str, str], SettingsApplyResult
+        ],
         on_close: Callable[[], None],
         on_speak_text: Callable[[str], None],
         on_verify_kokoro: Callable[[], bool],
@@ -42,13 +44,23 @@ class SettingsWindow:
         self.hotkey_var = tk.StringVar(value=snapshot.hotkey)
         self.pitch_var = tk.StringVar(value=f"{snapshot.pitch_percent:g}")
         self.speed_var = tk.StringVar(value=f"{snapshot.speed_percent:g}")
+        self.sentence_pause_var = tk.StringVar(
+            value=str(snapshot.sentence_pause_ms)
+        )
         self.engine_status_var = tk.StringVar(value="")
         self.kokoro_verify_status_var = tk.StringVar(value="")
         self._error_vars = {
             key: tk.StringVar(value="")
             for key in (
-                "engine", "hotkey", "pitch", "speed", "piper_voice",
-                "kokoro_voice", "voice", "general",
+                "engine",
+                "hotkey",
+                "pitch",
+                "speed",
+                "sentence_pause",
+                "piper_voice",
+                "kokoro_voice",
+                "voice",
+                "general",
             )
         }
         self._build(snapshot)
@@ -161,9 +173,26 @@ class SettingsWindow:
         self._build_percent_section(
             "Pitch settings", 5, self.pitch_var, self._error_vars["pitch"], "%"
         )
-        self._build_percent_section(
+        speed_frame = self._build_percent_section(
             "Speed settings", 6, self.speed_var, self._error_vars["speed"], "%"
         )
+        pause_frame = ttk.Frame(speed_frame)
+        pause_frame.grid(
+            row=1, column=0, columnspan=3, sticky="ew", padx=6, pady=(0, 4)
+        )
+        pause_frame.columnconfigure(1, weight=1)
+        ttk.Label(pause_frame, text="Piper sentence pause").grid(
+            row=0, column=0, sticky="w", padx=(0, 6), pady=4
+        )
+        ttk.Entry(pause_frame, textvariable=self.sentence_pause_var).grid(
+            row=0, column=1, sticky="ew", pady=4
+        )
+        ttk.Label(pause_frame, text="ms").grid(
+            row=0, column=2, padx=(6, 0), pady=4
+        )
+        ttk.Label(
+            pause_frame, textvariable=self._error_vars["sentence_pause"]
+        ).grid(row=0, column=3, sticky="w", padx=(6, 0), pady=4)
         ttk.Label(self.window, textvariable=self._error_vars["general"]).grid(
             row=7, column=0, sticky="w", padx=8, pady=4
         )
@@ -205,6 +234,7 @@ class SettingsWindow:
         ttk.Label(frame, textvariable=error_var).grid(
             row=0, column=2, sticky="w", padx=(0, 6), pady=4
         )
+        return frame
 
     def _set_voice_label(self, path: Optional[Path]) -> None:
         self.voice_label.configure(text=str(path) if path else "No voice loaded")
@@ -231,6 +261,7 @@ class SettingsWindow:
             self.speed_var.get(),
             self.pending_voice_path,
             self.kokoro_voice_var.get(),
+            self.sentence_pause_var.get(),
         )
         if not result.applied:
             for key, message in result.errors:
@@ -250,6 +281,7 @@ class SettingsWindow:
         self.hotkey_var.set(snapshot.hotkey)
         self.pitch_var.set(f"{snapshot.pitch_percent:g}")
         self.speed_var.set(f"{snapshot.speed_percent:g}")
+        self.sentence_pause_var.set(str(snapshot.sentence_pause_ms))
         self._set_voice_label(snapshot.piper_voice_path)
         self.update_last_text(snapshot.last_text)
         self._refresh_voice_controls()

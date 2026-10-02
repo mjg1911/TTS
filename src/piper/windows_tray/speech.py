@@ -16,10 +16,10 @@ from piper.audio_playback import AudioPlayer
 from .logging_setup import log_exception_safe, log_synthesis_result
 from .pitch_playback import PlaybackPipeline
 from .sentence_splitter import split_speech_sentences
+from .settings import DEFAULT_SENTENCE_PAUSE_MS
 
 
 _LOGGER = logging.getLogger(__name__)
-_PIPER_SENTENCE_PAUSE_MS = 180
 
 
 class SpeechEventKind(Enum):
@@ -67,6 +67,9 @@ class SpeechWorker:
         self._voice_provider = voice_provider
         self._on_event = on_event
         self._player_factory = player_factory
+        self._sentence_pause_provider: Callable[[], int] = (
+            lambda: DEFAULT_SENTENCE_PAUSE_MS
+        )
         self._condition = threading.Condition()
         self._pending_foreground: Optional[SpeechRequest] = None
         self._pending_errors = deque()  # type: deque[SpeechRequest]
@@ -84,6 +87,12 @@ class SpeechWorker:
             target=self._run, name="piper-speech", daemon=True
         )
         self._thread.start()
+
+    def set_sentence_pause_provider(
+        self, provider: Callable[[], int]
+    ) -> None:
+        """Set the live Piper sentence-pause setting source."""
+        self._sentence_pause_provider = provider
 
     def submit(self, request: SpeechRequest) -> bool:
         """Queue a request according to its speech purpose."""
@@ -487,8 +496,9 @@ class SpeechWorker:
                             # so buffered playback preserves the audible boundary.
                             # The pitch pipeline applies tempo to silence too.
                             speed = 1 + getattr(player, "speed_percent", 0) / 100
+                            sentence_pause_ms = self._sentence_pause_provider()
                             pause_frames = round(
-                                sample_rate * _PIPER_SENTENCE_PAUSE_MS / 1000 * speed
+                                sample_rate * sentence_pause_ms / 1000 * speed
                             )
                             audio_bytes = bytes(pause_frames * 2) + audio_bytes
                         played_piper_sentence = True

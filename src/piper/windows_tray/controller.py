@@ -18,9 +18,11 @@ from .logging_setup import log_capture_result, log_exception_safe
 from .errors import UserError, user_message
 from .settings import (
     DEFAULT_PITCH_PERCENT,
+    DEFAULT_SENTENCE_PAUSE_MS,
     DEFAULT_SPEED_PERCENT,
     TraySettings,
     validate_pitch_percent,
+    validate_sentence_pause_ms,
     validate_speed_percent,
 )
 from .speech import SpeechEvent, SpeechEventKind, SpeechPurpose, SpeechRequest
@@ -126,6 +128,7 @@ class SettingsWindowSnapshot:
     hotkey: str
     pitch_percent: float
     speed_percent: float
+    sentence_pause_ms: int
     last_text: Optional[str]
 
     def __init__(
@@ -140,6 +143,7 @@ class SettingsWindowSnapshot:
         hotkey: str = "alt+backtick",
         pitch_percent: float = 26.0,
         speed_percent: float = 0.0,
+        sentence_pause_ms: int = DEFAULT_SENTENCE_PAUSE_MS,
         last_text: Optional[str] = None,
         *,
         voice_path: Optional[Path] = None,
@@ -157,6 +161,7 @@ class SettingsWindowSnapshot:
             "hotkey": hotkey,
             "pitch_percent": pitch_percent,
             "speed_percent": speed_percent,
+            "sentence_pause_ms": sentence_pause_ms,
             "last_text": last_text,
         }
         for name, value in values.items():
@@ -188,6 +193,23 @@ def _parse_percent_text(
         return validator(parsed), None
     except (ValueError, OverflowError):
         return None, message
+
+
+def _parse_sentence_pause_text(
+    value: Optional[str],
+) -> Tuple[Optional[int], Optional[str]]:
+    if value is None:
+        return None, None
+    error_message = "Sentence pause must be a whole number from 0 to 2000 ms."
+    if not isinstance(value, str):
+        return None, error_message
+    try:
+        text = value.strip()
+        if not text.isdecimal():
+            raise ValueError("sentence pause must be a whole number")
+        return validate_sentence_pause_ms(int(text)), None
+    except (ValueError, OverflowError):
+        return None, error_message
 
 
 def _start_daemon_job(job: Callable[[], None]) -> None:
@@ -1109,6 +1131,7 @@ class Controller:
                 hotkey=settings.hotkey,
                 pitch_percent=settings.pitch_percent,
                 speed_percent=settings.speed_percent,
+                sentence_pause_ms=settings.sentence_pause_ms,
                 last_text=self.state.last_text,
             )
 
@@ -1120,6 +1143,7 @@ class Controller:
         speed_text: str,
         piper_voice_path: Optional[Path],
         kokoro_voice: str,
+        sentence_pause_text: Optional[str] = None,
     ) -> SettingsApplyResult:
         if self.state.settings_recovery_required:
             return SettingsApplyResult(
@@ -1132,8 +1156,14 @@ class Controller:
         if not isinstance(engine, str) or engine not in {"Piper", "Kokoro"}:
             return SettingsApplyResult(False, (("engine", "Choose Piper or Kokoro."),))
 
-        candidate_hotkey, pitch_percent, speed_percent, errors = (
-            self._validate_settings_scalars(hotkey, pitch_text, speed_text)
+        (
+            candidate_hotkey,
+            pitch_percent,
+            speed_percent,
+            sentence_pause_ms,
+            errors,
+        ) = self._validate_settings_scalars(
+            hotkey, pitch_text, speed_text, sentence_pause_text
         )
         if errors:
             return SettingsApplyResult(False, tuple(errors))
@@ -1220,6 +1250,11 @@ class Controller:
                     hotkey=candidate_hotkey.canonical,
                     pitch_percent=pitch_percent,
                     speed_percent=speed_percent,
+                    sentence_pause_ms=(
+                        current.sentence_pause_ms
+                        if sentence_pause_ms is None
+                        else sentence_pause_ms
+                    ),
                 )
                 try:
                     self._save_settings(next_settings)
@@ -1282,7 +1317,9 @@ class Controller:
                 if not committed:
                     self._backend_manager.discard(candidate)
 
-    def _validate_settings_scalars(self, hotkey, pitch_text, speed_text):
+    def _validate_settings_scalars(
+        self, hotkey, pitch_text, speed_text, sentence_pause_text=None
+    ):
         errors = []
         try:
             candidate_hotkey = parse_hotkey(hotkey)
@@ -1299,7 +1336,18 @@ class Controller:
         )
         if speed_error is not None:
             errors.append(("speed", speed_error))
-        return candidate_hotkey, pitch_percent, speed_percent, errors
+        sentence_pause_ms, sentence_pause_error = _parse_sentence_pause_text(
+            sentence_pause_text
+        )
+        if sentence_pause_error is not None:
+            errors.append(("sentence_pause", sentence_pause_error))
+        return (
+            candidate_hotkey,
+            pitch_percent,
+            speed_percent,
+            sentence_pause_ms,
+            errors,
+        )
 
     def _handle_worker_event(self, event: object) -> None:
         if not isinstance(event, SpeechEvent):
@@ -1430,6 +1478,13 @@ class Controller:
             if settings is None:
                 return DEFAULT_PITCH_PERCENT, DEFAULT_SPEED_PERCENT
             return settings.pitch_percent, settings.speed_percent
+
+    def current_sentence_pause_ms(self) -> int:
+        with self._state_lock:
+            settings = self.state.settings
+            if settings is None:
+                return DEFAULT_SENTENCE_PAUSE_MS
+            return settings.sentence_pause_ms
 
     def request_pitch_change(self, value: object) -> bool:
         with self._state_lock:
