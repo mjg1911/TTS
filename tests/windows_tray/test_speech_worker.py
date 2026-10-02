@@ -198,7 +198,7 @@ def test_multi_chunk_request_creates_one_playback_pipeline() -> None:
         worker.submit(SpeechRequest(301, "hello"))
         wait_for_event(events, SpeechEventKind.FINISHED, 301)
         assert factory_calls == [22050]
-        assert played == [b"one", b"two"]
+        assert played == [b"one", bytes(7938) + b"two"]
     finally:
         worker.shutdown()
 
@@ -264,6 +264,34 @@ def test_piper_backend_still_receives_original_text_once():
 
         assert calls == ["First sentence. Second sentence."]
         assert played == [b"audio"]
+    finally:
+        worker.shutdown()
+
+
+@pytest.mark.parametrize("sample_rate", [16000, 22050, 24000])
+@pytest.mark.parametrize("speed_percent", [-50, 0, 100])
+def test_piper_sentence_audio_has_180ms_gaps_only_between_sentences(
+    sample_rate, speed_percent
+):
+    events = []
+    played = []
+    voice = SimpleNamespace(
+        config=SimpleNamespace(sample_rate=sample_rate),
+        synthesize=lambda _text: iter(
+            [Chunk(b"\x01\x00"), Chunk(b"\x02\x00"), Chunk(b"\x03\x00")]
+        ),
+    )
+    player = FakePlayer(played, threading.Event())
+    player.speed_percent = speed_percent
+    worker = SpeechWorker(lambda: voice, events.append, lambda _rate: player)
+    try:
+        worker.submit(SpeechRequest(306, "First. Second? Third!"))
+        wait_for_event(events, SpeechEventKind.FINISHED, 306)
+        pause_frames = round(sample_rate * 0.180 * (1 + speed_percent / 100))
+        silence = bytes(pause_frames * 2)
+        assert b"".join(played) == (
+            b"\x01\x00" + silence + b"\x02\x00" + silence + b"\x03\x00"
+        )
     finally:
         worker.shutdown()
 

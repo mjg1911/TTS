@@ -19,6 +19,7 @@ from .sentence_splitter import split_speech_sentences
 
 
 _LOGGER = logging.getLogger(__name__)
+_PIPER_SENTENCE_PAUSE_MS = 180
 
 
 class SpeechEventKind(Enum):
@@ -447,6 +448,7 @@ class SpeechWorker:
                 if cancelled:
                     player.stop()
 
+                played_piper_sentence = False
                 phase = "synthesis"
                 while True:
                     phase = "synthesis"
@@ -470,6 +472,17 @@ class SpeechWorker:
                     audio_bytes = (
                         chunk.audio_int16_bytes if is_piper_voice else chunk
                     )
+                    if is_piper_voice and audio_bytes:
+                        if played_piper_sentence:
+                            # Piper yields one sentence per chunk. Queue PCM silence
+                            # so buffered playback preserves the audible boundary.
+                            # The pitch pipeline applies tempo to silence too.
+                            speed = 1 + getattr(player, "speed_percent", 0) / 100
+                            pause_frames = round(
+                                sample_rate * _PIPER_SENTENCE_PAUSE_MS / 1000 * speed
+                            )
+                            audio_bytes = bytes(pause_frames * 2) + audio_bytes
+                        played_piper_sentence = True
                     if cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
