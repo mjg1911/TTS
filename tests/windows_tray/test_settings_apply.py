@@ -247,6 +247,92 @@ def test_applying_kokoro_settings_clears_live_piper_references():
     assert controller.state.voice_path == Path("old.onnx")
 
 
+def test_switching_piper_to_kokoro_clears_live_piper_reference():
+    piper = object()
+    kokoro = object()
+    manager = BackendManager(
+        "Piper",
+        "old.onnx",
+        piper,
+        lambda: None,
+        lambda engine, voice_id: BackendCandidate(
+            engine,
+            voice_id,
+            kokoro if engine == "Kokoro" else object(),
+        ),
+    )
+    controller = Controller(
+        settings=TraySettings(
+            engine="Piper",
+            voice="old.onnx",
+            kokoro_voice="af_heart",
+            hotkey="alt+backtick",
+        ),
+        save_settings=lambda _settings: None,
+        hotkeys=FakeHotkeys(),
+        backend_manager=manager,
+        kokoro_voice_ids=("af_heart",),
+    )
+    controller.set_voice(Path("old.onnx"), piper)
+    controller.configure_runtime(resolve_voice=lambda reference: Path(reference))
+
+    result = apply_settings(
+        controller,
+        hotkey="alt+backtick",
+        pitch_text="26",
+        speed_text="0",
+        engine="Kokoro",
+        kokoro_voice="af_heart",
+    )
+
+    assert result.applied is True
+    assert manager.current() is kokoro
+    assert controller.state.voice is None
+    assert controller.state.voice_path == Path("old.onnx")
+
+
+def test_switching_kokoro_to_piper_prepares_one_piper_backend():
+    kokoro = object()
+    piper = object()
+    calls = []
+    manager = BackendManager(
+        "Kokoro",
+        "af_heart",
+        kokoro,
+        lambda: None,
+        lambda engine, voice_id: calls.append((engine, voice_id))
+        or BackendCandidate(engine, voice_id, piper),
+    )
+    controller = Controller(
+        settings=TraySettings(
+            engine="Kokoro",
+            voice="voice.onnx",
+            kokoro_voice="af_heart",
+            hotkey="alt+backtick",
+        ),
+        save_settings=lambda _settings: None,
+        hotkeys=FakeHotkeys(),
+        backend_manager=manager,
+        kokoro_voice_ids=("af_heart",),
+    )
+    canonical = Path("voice.onnx").resolve()
+    controller.configure_runtime(resolve_voice=lambda _reference: canonical)
+
+    result = apply_settings(
+        controller,
+        hotkey="alt+backtick",
+        pitch_text="26",
+        speed_text="0",
+        engine="Piper",
+        kokoro_voice="af_heart",
+    )
+
+    assert result.applied is True
+    assert calls == [("Piper", str(canonical))]
+    assert manager.current() is piper
+    assert controller.state.voice is piper
+
+
 @pytest.mark.parametrize("reference", ["en_US-example-medium", "voices/example.onnx"])
 def test_stored_piper_reference_matches_canonical_active_identity(reference):
     canonical = Path("voices/example.onnx").resolve()

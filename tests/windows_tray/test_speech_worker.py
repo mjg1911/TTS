@@ -1,6 +1,8 @@
 import threading
 import logging
 import time
+import gc
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +13,7 @@ from piper.windows_tray.speech import (
     SpeechRequest,
     SpeechWorker,
 )
+from piper.windows_tray.backend_manager import BackendCandidate, BackendManager
 
 
 class Chunk:
@@ -98,6 +101,81 @@ def make_worker(voice, events, played, entered):
         events.append,
         player_factory=lambda _sample_rate: FakePlayer(played, entered),
     )
+
+
+class FakePiperVoice:
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+
+
+def test_backend_switch_does_not_release_backend_during_active_speech():
+    old_backend = FakePiperVoice()
+    new_backend = FakePiperVoice()
+    manager = BackendManager(
+        "Piper",
+        "old.onnx",
+        old_backend,
+        old_backend.close,
+        lambda engine, voice_id: BackendCandidate(
+            engine,
+            voice_id,
+            new_backend,
+            new_backend.close,
+        ),
+    )
+
+    backend, release = manager.acquire()
+    manager.commit(manager.prepare("Piper", "new.onnx"))
+
+    assert old_backend.close_calls == 0
+    assert backend is old_backend
+
+    release()
+
+    assert old_backend.close_calls == 1
+    assert manager.current() is new_backend
+
+
+def test_completed_startup_override_is_collectible_while_worker_idle():
+    class StartupBackend:
+        def synthesize(self, _text, _cancel_event):
+            return SimpleNamespace(sample_rate=22050, chunks=iter(()))
+
+    backend = StartupBackend()
+    reference = weakref.ref(backend)
+    events = []
+    played = []
+    entered = threading.Event()
+    worker = SpeechWorker(
+        lambda: pytest.fail("startup override must bypass the active provider"),
+        events.append,
+        player_factory=lambda _rate: FakePlayer(played, entered),
+    )
+    try:
+        worker.submit(SpeechRequest(
+            1, "Kokoro is loading, please wait.",
+            SpeechPurpose.STARTUP_STATUS, backend_override=backend,
+        ))
+        del backend
+        wait_for_event(events, SpeechEventKind.FINISHED, 1)
+        # FINISHED is emitted before _run clears its active request. Allow that
+        # cleanup to finish, without submitting another request or shutting down.
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            gc.collect()
+            if reference() is None:
+                break
+            time.sleep(0.01)
+        assert worker._thread.is_alive()
+        with worker._condition:
+            assert worker._active_request is None
+            assert not worker._has_pending_locked()
+        assert reference() is None
+    finally:
+        worker.shutdown()
 
 
 def test_browser_is_rejected_while_foreground_or_error_is_active() -> None:
