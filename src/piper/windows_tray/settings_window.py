@@ -1,4 +1,6 @@
 from pathlib import Path
+from queue import Queue, Empty
+import threading
 import tkinter as tk
 from tkinter import filedialog, ttk
 from typing import Callable, Optional
@@ -12,6 +14,21 @@ from .settings_theme import (
     TEXT,
     configure_studio_theme,
 )
+
+
+def choose_reference_clip(parent: tk.Misc) -> Optional[Path]:
+    selected = filedialog.askopenfilename(
+        parent=parent,
+        title="Choose Chatterbox reference clip",
+        filetypes=[("WAV audio", "*.wav")],
+    )
+    return Path(selected) if selected else None
+
+
+def import_managed_reference_clip(source: Path) -> Path:
+    from .chatterbox_voice import import_reference_clip
+
+    return import_reference_clip(source)
 
 
 def choose_voice_model(parent: tk.Misc) -> Optional[Path]:
@@ -57,7 +74,18 @@ class SettingsWindow:
         self._closed = False
         self.pending_voice_path: Optional[Path] = None
         self.displayed_voice_path = snapshot.piper_voice_path
+        self.pending_reference_clip: Optional[str] = None
+        self.displayed_reference_clip = snapshot.chatterbox_reference_clip
         self.engine_var = tk.StringVar(value=snapshot.engine)
+        self.chatterbox_device_var = tk.StringVar(value=snapshot.chatterbox_device)
+        boolean_var = getattr(tk, "BooleanVar", tk.StringVar)
+        self.chatterbox_custom_voice_var = boolean_var(
+            value=snapshot.chatterbox_custom_voice_enabled
+        )
+        self.reference_clip_name_var = tk.StringVar(value="")
+        self.reference_clip_path_var = tk.StringVar(value="")
+        self.reference_clip_status_var = tk.StringVar(value="")
+        self._reference_import_pending = False
         self.kokoro_voice_var = tk.StringVar(value=snapshot.kokoro_voice)
         self.hotkey_var = tk.StringVar(value=snapshot.hotkey)
         self.pitch_var = tk.StringVar(value=f"{snapshot.pitch_percent:g}")
@@ -66,7 +94,7 @@ class SettingsWindow:
         self.piper_sentence_streaming_var = tk.StringVar(
             value=("true" if snapshot.piper_sentence_streaming_enabled else "false")
         )
-        self.engine_status_var = tk.StringVar(value="")
+        self.engine_status_var = tk.StringVar(value=snapshot.chatterbox_device_message)
         self.kokoro_verify_status_var = tk.StringVar(value="")
         self._error_vars = {
             key: tk.StringVar(value="")
@@ -77,6 +105,7 @@ class SettingsWindow:
                 "speed",
                 "sentence_pause",
                 "piper_sentence_streaming",
+                "reference_clip",
                 "piper_voice",
                 "kokoro_voice",
                 "voice",
@@ -160,7 +189,7 @@ class SettingsWindow:
         self.engine_combo = ttk.Combobox(
             voice,
             textvariable=self.engine_var,
-            values=("Piper", "Kokoro"),
+            values=("Piper", "Kokoro", "Chatterbox Nano"),
             state="readonly",
             style="Piper.TCombobox",
             font=("Segoe UI", 10),
@@ -170,13 +199,85 @@ class SettingsWindow:
             "<<ComboboxSelected>>", lambda _: self._refresh_voice_controls()
         )
         self._error_label(voice, "engine", 3)
-        if not snapshot.kokoro_available and snapshot.kokoro_unavailable_reason:
-            ttk.Label(
-                voice,
-                textvariable=self.engine_status_var,
-                style="Muted.Piper.TLabel",
-                wraplength=310,
-            ).grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        self.nano_voice_frame = ttk.Frame(voice, style="Panel.Piper.TFrame")
+        self.nano_voice_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            self.nano_voice_frame,
+            text="English voice",
+            style="Muted.Piper.TLabel",
+        ).grid(row=0, column=0, sticky="w", pady=(10, 5))
+        device_controls = ttk.Frame(self.nano_voice_frame, style="Panel.Piper.TFrame")
+        device_controls.grid(row=1, column=0, sticky="w", pady=(3, 5))
+        ttk.Label(device_controls, text="Device", style="Muted.Piper.TLabel").grid(
+            row=0, column=0, padx=(0, 12)
+        )
+        for column, (label, value) in enumerate((("CPU", "cpu"), ("GPU", "cuda")), 1):
+            ttk.Radiobutton(
+                device_controls,
+                text=label,
+                value=value,
+                variable=self.chatterbox_device_var,
+            ).grid(row=0, column=column, padx=(0, 10))
+        self.import_reference_clip_button = ttk.Button(
+            self.nano_voice_frame,
+            text="Import reference clip…",
+            command=self._choose_reference_clip,
+            style="Piper.TButton",
+        )
+        self.import_reference_clip_button.grid(
+            row=2, column=0, sticky="w", pady=(8, 0)
+        )
+        ttk.Label(
+            self.nano_voice_frame,
+            textvariable=self.reference_clip_name_var,
+            style="Piper.TLabel",
+            wraplength=310,
+            justify="left",
+        ).grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        ttk.Label(
+            self.nano_voice_frame,
+            textvariable=self.reference_clip_path_var,
+            style="Muted.Piper.TLabel",
+            wraplength=310,
+            justify="left",
+        ).grid(row=4, column=0, sticky="ew")
+        self.chatterbox_custom_voice_checkbutton = ttk.Checkbutton(
+            self.nano_voice_frame,
+            text="Use custom voice",
+            variable=self.chatterbox_custom_voice_var,
+            onvalue=True,
+            offvalue=False,
+            style="Piper.TCheckbutton",
+        )
+        self.chatterbox_custom_voice_checkbutton.grid(
+            row=5, column=0, sticky="w", pady=(8, 0)
+        )
+        self.reference_clip_error_label = self._error_label(
+            self.nano_voice_frame, "reference_clip", 6
+        )
+        ttk.Label(
+            self.nano_voice_frame,
+            text=(
+                "Choose a clear WAV recording longer than 5 seconds. "
+                "Piper keeps a local copy for Chatterbox."
+            ),
+            style="Muted.Piper.TLabel",
+            wraplength=310,
+            justify="left",
+        ).grid(row=7, column=0, sticky="ew", pady=(6, 0))
+        ttk.Label(
+            self.nano_voice_frame,
+            textvariable=self.reference_clip_status_var,
+            style="Muted.Piper.TLabel",
+            wraplength=310,
+        ).grid(row=8, column=0, sticky="ew", pady=(4, 0))
+        self._set_reference_clip_labels(snapshot.chatterbox_reference_clip)
+        ttk.Label(
+            voice,
+            textvariable=self.engine_status_var,
+            style="Muted.Piper.TLabel",
+            wraplength=310,
+        ).grid(row=4, column=0, sticky="ew", pady=(6, 0))
         self.piper_voice_frame = ttk.Frame(voice, style="Panel.Piper.TFrame")
         self.piper_voice_frame.columnconfigure(0, weight=1)
         ttk.Label(
@@ -216,7 +317,11 @@ class SettingsWindow:
         )
         self.kokoro_voice_combo.grid(row=1, column=0, sticky="ew")
         self._error_label(self.kokoro_voice_frame, "kokoro_voice", 2)
-        if not snapshot.kokoro_available and snapshot.kokoro_unavailable_reason:
+        if (
+            snapshot.engine == "Kokoro"
+            and not snapshot.kokoro_available
+            and snapshot.kokoro_unavailable_reason
+        ):
             self.engine_status_var.set(snapshot.kokoro_unavailable_reason)
             self.engine_var.set("Piper")
         self._refresh_voice_controls()
@@ -429,7 +534,10 @@ class SettingsWindow:
 
     def _refresh_voice_controls(self) -> None:
         kokoro = self.engine_var.get() == "Kokoro"
-        self._show_frame(self.piper_voice_frame, not kokoro)
+        self._show_frame(self.piper_voice_frame, self.engine_var.get() == "Piper")
+        self._show_frame(
+            self.nano_voice_frame, self.engine_var.get() == "Chatterbox Nano"
+        )
         self._show_frame(self.kokoro_voice_frame, kokoro)
 
     @staticmethod
@@ -486,6 +594,75 @@ class SettingsWindow:
         )
         self.voice_label.configure(text=str(path) if path else "No voice loaded")
 
+    def _set_reference_clip_labels(self, reference: str) -> None:
+        path = Path(reference) if reference else None
+        self.reference_clip_name_var.set(
+            path.name if path else "No reference clip imported"
+        )
+        self.reference_clip_path_var.set(str(path) if path else "")
+
+    def _choose_reference_clip(self) -> None:
+        if self._reference_import_pending or getattr(
+            self, "_apply_in_progress", False
+        ):
+            return
+        selected = choose_reference_clip(self.window)
+        if selected is None:
+            return
+
+        results = Queue(maxsize=1)
+        self._reference_import_pending = True
+        self.import_reference_clip_button.configure(state="disabled")
+        self.reference_clip_status_var.set("Importing reference clip…")
+
+        def import_in_background():
+            try:
+                results.put((import_managed_reference_clip(selected), None))
+            except Exception as error:
+                results.put((None, error))
+
+        def poll_import():
+            if self._closed:
+                return
+            try:
+                imported_path, error = results.get_nowait()
+            except Empty:
+                self.window.after(25, poll_import)
+                return
+
+            self._reference_import_pending = False
+            self.import_reference_clip_button.configure(state="normal")
+            if error is not None:
+                if isinstance(error, ValueError):
+                    detail = str(error).strip()
+                    guidance = "Choose a readable WAV clip longer than 5 seconds."
+                    message = "%s %s" % (detail, guidance) if detail else guidance
+                else:
+                    message = (
+                        "Piper could not import that WAV file. "
+                        "Check that it is readable and try again."
+                    )
+                self._error_vars["reference_clip"].set(message)
+                self.reference_clip_status_var.set("")
+                self._render_errors()
+                return
+
+            self.pending_reference_clip = str(imported_path)
+            self.displayed_reference_clip = self.pending_reference_clip
+            self._set_reference_clip_labels(self.displayed_reference_clip)
+            self._error_vars["reference_clip"].set("")
+            self.reference_clip_status_var.set(
+                "Imported. Save changes to use this clip."
+            )
+            self._render_errors()
+
+        threading.Thread(
+            target=import_in_background,
+            name="chatterbox-reference-import",
+            daemon=True,
+        ).start()
+        self.window.after(25, poll_import)
+
     def _choose_voice(self) -> None:
         selected = choose_voice_model(self.window)
         if selected is not None:
@@ -502,16 +679,87 @@ class SettingsWindow:
     def _apply(self) -> None:
         self._clear_errors()
         self._render_errors()
-        result = self._on_apply(
+        if getattr(self, "_apply_in_progress", False):
+            return
+        if self._reference_import_pending:
+            self._error_vars["reference_clip"].set(
+                "Wait for the reference clip import to finish before saving."
+            )
+            self._render_errors()
+            return
+        arguments = (
             self.engine_var.get(),
             self.hotkey_var.get(),
             self.pitch_var.get(),
             self.speed_var.get(),
-            self.pending_voice_path,
+            self.pending_voice_path if self.engine_var.get() == "Piper" else None,
             self.kokoro_voice_var.get(),
             self.sentence_pause_var.get(),
             self.piper_sentence_streaming_var.get() == "true",
         )
+        toggle_value = self.chatterbox_custom_voice_var.get()
+        custom_voice_enabled = toggle_value is True or toggle_value in ("true", "1")
+        reference_clip = (
+            self.pending_reference_clip
+            if self.pending_reference_clip is not None
+            else self.displayed_reference_clip
+        )
+        owner = getattr(self._on_apply, "__self__", None)
+        if arguments[0] != "Chatterbox Nano":
+            if hasattr(owner, "cancel_nano_settings"):
+                result = self._on_apply(
+                    *arguments,
+                    chatterbox_custom_voice_enabled=custom_voice_enabled,
+                    chatterbox_reference_clip=reference_clip,
+                )
+            else:
+                result = self._on_apply(*arguments)
+            self._finish_apply(result)
+            return
+        self._apply_in_progress = True
+        self.import_reference_clip_button.configure(state="disabled")
+        self._apply_cancel_event = threading.Event()
+        self.engine_status_var.set("Preparing Chatterbox Nano...")
+        device = self.chatterbox_device_var.get()
+        results = Queue(maxsize=1)
+
+        def apply_background():
+            try:
+                if hasattr(owner, "cancel_nano_settings"):
+                    result = self._on_apply(
+                        *arguments,
+                        cancel_event=self._apply_cancel_event,
+                        chatterbox_device=device,
+                        chatterbox_custom_voice_enabled=custom_voice_enabled,
+                        chatterbox_reference_clip=reference_clip,
+                    )
+                else:
+                    result = self._on_apply(*arguments)
+            except Exception:
+                result = SettingsApplyResult(
+                    False, (("engine", "Chatterbox Nano is not available."),)
+                )
+            results.put(result)
+
+        def poll():
+            if self._closed:
+                return
+            try:
+                result = results.get_nowait()
+            except Empty:
+                self.window.after(25, poll)
+                return
+            self._apply_in_progress = False
+            self.import_reference_clip_button.configure(state="normal")
+            self.engine_status_var.set("")
+            self._finish_apply(result)
+
+        threading.Thread(
+            target=apply_background, name="nano-settings", daemon=True
+        ).start()
+        self.window.after(25, poll)
+
+    def _finish_apply(self, result):
         if not result.applied:
             for key, message in result.errors:
                 target = "piper_voice" if key == "voice" else key
@@ -526,12 +774,20 @@ class SettingsWindow:
             return
         if result.snapshot is not None:
             self._refresh_from_snapshot(result.snapshot)
+            if result.snapshot.chatterbox_device_message:
+                self.engine_status_var.set(result.snapshot.chatterbox_device_message)
+                return
         self.close()
 
     def _refresh_from_snapshot(self, snapshot: SettingsWindowSnapshot) -> None:
         self.displayed_voice_path = snapshot.piper_voice_path
         self.pending_voice_path = None
+        self.pending_reference_clip = None
+        self.displayed_reference_clip = snapshot.chatterbox_reference_clip
         self.engine_var.set(snapshot.engine)
+        self.chatterbox_device_var.set(snapshot.chatterbox_device)
+        self.chatterbox_custom_voice_var.set(snapshot.chatterbox_custom_voice_enabled)
+        self.engine_status_var.set(snapshot.chatterbox_device_message)
         self.kokoro_voice_var.set(snapshot.kokoro_voice)
         self.hotkey_var.set(snapshot.hotkey)
         self.pitch_var.set(f"{snapshot.pitch_percent:g}")
@@ -541,6 +797,8 @@ class SettingsWindow:
             "true" if snapshot.piper_sentence_streaming_enabled else "false"
         )
         self._set_voice_label(snapshot.piper_voice_path)
+        self._set_reference_clip_labels(snapshot.chatterbox_reference_clip)
+        self.reference_clip_status_var.set("")
         self.update_last_text(snapshot.last_text)
         self._refresh_voice_controls()
 
@@ -577,6 +835,8 @@ class SettingsWindow:
     def close(self) -> None:
         if self._closed:
             return
+        if getattr(self, "_apply_in_progress", False):
+            self._apply_cancel_event.set()
         self._closed = True
         try:
             self.window.destroy()

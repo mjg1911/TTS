@@ -39,7 +39,19 @@ if ($hasKokoroInputs) {
     & "$Root/script/stage_kokoro_payload.ps1"
     $env:PIPER_KOKORO_PAYLOAD_DIR = (Resolve-Path "build/kokoro-payload").Path
 }
+$requireNano = $env:PIPER_REQUIRE_NANO_PAYLOAD -eq "1"
+$hasNanoModel = -not [string]::IsNullOrWhiteSpace($env:PIPER_NANO_MODEL_DIR)
+if ($requireNano -and -not $hasNanoModel -and
+    [string]::IsNullOrWhiteSpace($env:PIPER_NANO_PAYLOAD_DIR)) {
+    throw "release build requires a local Nano model directory or staged payload"
+}
+if ($hasNanoModel) {
+    & "$Root/script/build_nano_worker.ps1"
+    & "$Root/script/stage_nano_payload.ps1"
+    $env:PIPER_NANO_PAYLOAD_DIR = (Resolve-Path "build/nano-payload").Path
+}
 python -m PyInstaller --clean --noconfirm script/piper_tray.spec
+if ($LASTEXITCODE -ne 0) { throw "Piper Tray packaging failed" }
 
 if (-not (Test-Path $Exe -PathType Leaf)) { throw "Expected executable was not created: $Exe" }
 if (-not (Test-Path (Join-Path $DistDir "_internal") -PathType Container)) { throw "PyInstaller support directory missing" }
@@ -47,6 +59,9 @@ if ($requireKokoro -and -not (Test-Path (Join-Path $DistDir "_internal\kokoro_pa
     throw "Required Kokoro payload was not collected"
 }
 $File = Get-Item $Exe
+if ($requireNano -and -not (Test-Path (Join-Path $DistDir "_internal\nano_payload\manifest.json") -PathType Leaf)) {
+    throw "Required Chatterbox Nano payload was not collected"
+}
 if ($File.Length -le 0) { throw "Built executable is empty: $Exe" }
 $Hash = Get-FileHash -Algorithm SHA256 $Exe
 Write-Host "Built $DistDir"

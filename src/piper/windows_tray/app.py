@@ -94,7 +94,72 @@ def _prepare_kokoro_installation(logger):
         return inspect_kokoro_installation(install_root), None
     except (OSError, ValueError, KeyError) as error:
         logger.warning("Kokoro unavailable error_type=%s", type(error).__name__)
-        return None, "Kokoro is unavailable because required installed files could not be found or read."
+        return (
+            None,
+            "Kokoro is unavailable because required installed files could not be found or read.",
+        )
+
+
+def _nano_root() -> Path:
+    return Path(os.environ["APPDATA"]) / "Piper" / "ChatterboxNano"
+
+
+def _prepare_nano_installation():
+    from piper.nano_assets import inspect_nano_installation
+
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    bundled = Path(frozen_root) / "nano_payload" if frozen_root else None
+    return inspect_nano_installation(
+        bundled if bundled is not None and bundled.is_dir() else _nano_root()
+    )
+
+
+def _prepare_nano_backend(
+    cancel_event=None, device="cpu", reference_clip=None
+) -> BackendCandidate:
+    from .nano_client import NanoWorkerClient
+
+    try:
+        installation = _prepare_nano_installation()
+        if reference_clip is not None:
+            from .chatterbox_voice import validate_reference_clip
+
+            reference_clip = str(validate_reference_clip(Path(reference_clip)))
+        client_options = {"device": device}
+        if reference_clip is not None:
+            client_options["reference_clip"] = reference_clip
+        client = NanoWorkerClient(installation, **client_options)
+        if cancel_event is not None:
+            register_cleanup = getattr(cancel_event, "register_cancel_cleanup", None)
+            if register_cleanup is not None:
+                register_cleanup(client.shutdown)
+        try:
+            client.ensure_ready(cancel_event)
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("Nano startup was cancelled")
+        except Exception:
+            client.shutdown()
+            raise
+        return BackendCandidate("Chatterbox Nano", "default", client, client.shutdown)
+    except (OSError, RuntimeError, ValueError, KeyError) as error:
+        raise BackendPreparationError("Chatterbox Nano is unavailable") from error
+
+
+def _prepare_configured_nano_backend(
+    settings, cancel_event=None, record_timing=None
+) -> BackendCandidate:
+    client_options = {}
+    if settings.chatterbox_custom_voice_enabled:
+        client_options["reference_clip"] = settings.chatterbox_reference_clip
+
+    prepare = lambda: _prepare_nano_backend(
+        cancel_event,
+        device=settings.chatterbox_device,
+        **client_options,
+    )
+    if record_timing is not None:
+        return record_timing("nano_readiness", prepare)
+    return prepare()
 
 
 def _load_configured_voice(
@@ -125,9 +190,7 @@ def _build_speech_worker(controller: Controller, backend_provider) -> SpeechWork
         worker, "set_piper_sentence_streaming_provider", None
     )
     if set_streaming_provider is not None:
-        set_streaming_provider(
-            controller.current_piper_sentence_streaming_enabled
-        )
+        set_streaming_provider(controller.current_piper_sentence_streaming_enabled)
     return worker
 
 
@@ -153,6 +216,7 @@ def run_app(
     backend_manager = None
     backend_stopped = False
     kokoro_startup = None
+    nano_startup = None
     kokoro_verification = None
     controller = None
     ui = None
@@ -165,13 +229,17 @@ def run_app(
                 hotkeys.stop()
             except Exception as error:
                 if logger is not None:
-                    logger.error("Piper hotkeys could not be stopped cleanly: %s", error)
+                    logger.error(
+                        "Piper hotkeys could not be stopped cleanly: %s", error
+                    )
             finally:
                 hotkeys_stopped = True
 
     def cancel_kokoro_startup() -> None:
         if kokoro_startup is not None:
             kokoro_startup.cancel()
+        if nano_startup is not None:
+            nano_startup.cancel()
 
     def close_instance() -> None:
         nonlocal instance_closed
@@ -180,7 +248,9 @@ def run_app(
                 instance.close()
             except Exception as error:
                 if logger is not None:
-                    logger.error("Piper instance could not be closed cleanly: %s", error)
+                    logger.error(
+                        "Piper instance could not be closed cleanly: %s", error
+                    )
             finally:
                 instance_closed = True
 
@@ -220,7 +290,9 @@ def run_app(
                 backend_manager.shutdown()
             except Exception as error:
                 if logger is not None:
-                    log_exception_safe(logger, "speech backend stop failed", error, stage="shutdown")
+                    log_exception_safe(
+                        logger, "speech backend stop failed", error, stage="shutdown"
+                    )
             finally:
                 backend_stopped = True
 
@@ -361,6 +433,27 @@ def run_app(
                     replace(settings, piper_voice=voice_id), data_dirs
                 )
                 return BackendCandidate("Piper", str(path), voice)
+            if engine == "Chatterbox Nano":
+                if voice_id != "default":
+                    raise BackendPreparationError("Unknown Nano voice")
+                preparation_options = {}
+                if controller is not None:
+                    reference_clip = controller.nano_preparation_reference_clip()
+                    if reference_clip is not None:
+                        preparation_options["reference_clip"] = reference_clip
+                return _prepare_nano_backend(
+                    (
+                        controller.nano_preparation_cancel_event()
+                        if controller is not None
+                        else None
+                    ),
+                    device=(
+                        controller.nano_preparation_device()
+                        if controller is not None
+                        else settings.chatterbox_device
+                    ),
+                    **preparation_options,
+                )
             if engine != "Kokoro":
                 raise BackendPreparationError("Kokoro is unavailable")
             if not kokoro_preparation_attempted:
@@ -393,7 +486,11 @@ def run_app(
             return BackendCandidate("Kokoro", voice_id, client, client.shutdown)
 
         backend_manager = BackendManager(
-            "Piper", str(configured_path), configured_voice, lambda: None, prepare_backend
+            "Piper",
+            str(configured_path),
+            configured_voice,
+            lambda: None,
+            prepare_backend,
         )
         controller = Controller(
             settings=settings,
@@ -404,6 +501,8 @@ def run_app(
         )
         if settings.engine == "Kokoro":
             controller.begin_kokoro_startup()
+        elif settings.engine == "Chatterbox Nano":
+            controller.begin_nano_startup()
         controller.set_voice(configured_path, configured_voice)
         del configured_voice
         codex_monitor = CodexMonitor(
@@ -424,12 +523,21 @@ def run_app(
 
         icon_path = Path(__file__).resolve().parents[1] / "img" / "logo.png"
         tray = TrayIcon(icon_path, controller.enqueue)
-        if settings.engine == "Kokoro":
-            tray.set_status("Kokoro is loading")
+        if settings.engine in {"Kokoro", "Chatterbox Nano"}:
+            tray.set_status("%s is loading" % settings.engine)
         if hasattr(tray, "set_snapshot_provider"):
             tray.set_snapshot_provider(controller.tray_snapshot)
 
         def pump() -> None:
+            if nano_startup is not None:
+                nano_result = nano_startup.take_result()
+                if nano_result is not None:
+                    if nano_result.candidate is not None:
+                        controller.complete_nano_startup(nano_result.candidate)
+                    else:
+                        controller.fail_nano_startup(
+                            "Chatterbox Nano is unavailable during startup."
+                        )
             if kokoro_startup is not None:
                 startup_result = kokoro_startup.take_result()
                 if startup_result is not None:
@@ -450,9 +558,7 @@ def run_app(
                         )
             verification_result = kokoro_verification.take_result()
             if verification_result is not None:
-                ui.update_settings_kokoro_verification(
-                    verification_result.message
-                )
+                ui.update_settings_kokoro_verification(verification_result.message)
             command = controller.drain_once()
             if command is not None:
                 controller.handle(command)
@@ -548,6 +654,7 @@ def run_app(
             )
 
         if settings.engine == "Kokoro":
+
             def prepare_startup_candidate(cancel_event, record_timing):
                 nonlocal kokoro_installation, kokoro_unavailable_reason
                 nonlocal kokoro_preparation_attempted
@@ -557,7 +664,9 @@ def run_app(
                 )
                 kokoro_preparation_attempted = True
                 if kokoro_installation is None:
-                    raise RuntimeError(kokoro_unavailable_reason or "Kokoro unavailable")
+                    raise RuntimeError(
+                        kokoro_unavailable_reason or "Kokoro unavailable"
+                    )
                 voice = kokoro_installation.voices.get(settings.kokoro_voice)
                 if voice is None:
                     raise RuntimeError("Kokoro voice is unavailable")
@@ -589,17 +698,26 @@ def run_app(
             kokoro_startup = KokoroStartupCoordinator(prepare_startup_candidate, logger)
             kokoro_startup.start()
 
+        if settings.engine == "Chatterbox Nano":
+
+            def prepare_nano_startup(cancel_event, record_timing):
+                candidate = _prepare_configured_nano_backend(
+                    settings,
+                    cancel_event=cancel_event,
+                    record_timing=record_timing,
+                )
+                return candidate, ()
+
+            nano_startup = KokoroStartupCoordinator(prepare_nano_startup, logger)
+            nano_startup.start()
+
         power_listener = PowerBroadcastListener()
         power_listener.start(
-            lambda: controller.enqueue(
-                Command(CommandKind.SYSTEM_RESUME)
-            )
+            lambda: controller.enqueue(Command(CommandKind.SYSTEM_RESUME))
         )
 
         def mark_runtime_ready() -> None:
-            getattr(logger, "info", lambda *_args: None)(
-                "Piper tray runtime ready"
-            )
+            getattr(logger, "info", lambda *_args: None)("Piper tray runtime ready")
             controller.announce_ready()
 
         ui.root.after(0, mark_runtime_ready)

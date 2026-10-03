@@ -13,6 +13,10 @@ if (-not (Test-Path "dist/PiperTray/_internal/kokoro_payload/manifest.json" -Pat
     throw "Installer requires the complete offline Kokoro payload"
 }
 $setupText = Get-Content "setup.py" -Raw
+if ($env:PIPER_REQUIRE_NANO_PAYLOAD -eq "1" -and
+    -not (Test-Path "dist/PiperTray/_internal/nano_payload/manifest.json" -PathType Leaf)) {
+    throw "Installer requires the complete offline Chatterbox Nano payload"
+}
 $versionMatch = [regex]::Match($setupText, 'version="([^"]+)"')
 $version = $versionMatch.Groups[1].Value
 if ([string]::IsNullOrWhiteSpace($version)) { throw "Could not read package version" }
