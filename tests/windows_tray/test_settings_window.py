@@ -30,6 +30,45 @@ class FakeWidget:
     def grid(self, **kwargs):
         self.grid_options = kwargs
 
+    def grid_remove(self):
+        self.hidden = True
+
+    def bind(self, *args, **kwargs):
+        pass
+
+    def geometry(self, value):
+        self.window_geometry = value
+
+    def minsize(self, *args):
+        pass
+
+    def update_idletasks(self):
+        pass
+
+    def winfo_children(self):
+        return self.children
+
+    def winfo_class(self):
+        return "Frame"
+
+    def winfo_height(self):
+        return 100
+
+    def winfo_rooty(self):
+        return 0
+
+    def yview(self, *args):
+        pass
+
+    def set(self, *args):
+        pass
+
+    def create_window(self, *args, **kwargs):
+        return 1
+
+    def create_line(self, *args, **kwargs):
+        pass
+
     def pack(self, **kwargs):
         self.pack_options = kwargs
 
@@ -121,6 +160,7 @@ def install_fake_tk(monkeypatch, built_frames):
         Toplevel=FakeToplevel,
         StringVar=FakeVar,
         Text=FakeText,
+        Canvas=FakeWidget,
         Misc=object,
     )
     fake_ttk = SimpleNamespace(
@@ -130,9 +170,12 @@ def install_fake_tk(monkeypatch, built_frames):
         Checkbutton=FakeButton,
         Entry=FakeEntry,
         Label=FakeLabel,
+        Combobox=FakeEntry,
+        Scrollbar=FakeWidget,
     )
     monkeypatch.setattr(settings_window, "tk", fake_tk)
     monkeypatch.setattr(settings_window, "ttk", fake_ttk)
+    monkeypatch.setattr(settings_window, "configure_studio_theme", lambda _: None)
     monkeypatch.setattr(settings_window, "choose_voice_model", lambda parent: None)
     return settings_window
 
@@ -149,7 +192,7 @@ def make_snapshot(**overrides):
     return SettingsWindowSnapshot(**values)
 
 
-def test_window_builds_engine_and_five_settings_sections_with_initial_values(monkeypatch):
+def test_window_initializes_staged_settings_from_snapshot(monkeypatch):
     built_frames = []
     settings_window = install_fake_tk(monkeypatch, built_frames)
     snapshot = make_snapshot()
@@ -163,16 +206,6 @@ def test_window_builds_engine_and_five_settings_sections_with_initial_values(mon
         on_verify_kokoro=lambda: True,
     )
 
-    assert [frame.text for frame in built_frames] == [
-        "Speech engine",
-        "Piper voice model",
-        "Kokoro voice",
-        "Kokoro maintenance",
-        "Last captured text",
-        "Hotkey settings",
-        "Pitch settings",
-        "Speed settings",
-    ]
     assert window.hotkey_var.get() == "alt+backtick"
     assert window.pitch_var.get() == "26"
     assert window.speed_var.get() == "0"
@@ -245,7 +278,10 @@ def test_apply_failure_renders_voice_error_in_voice_section(monkeypatch):
 
     assert window.window.exists is True
     assert window.error_text("piper_voice") == "The selected voice could not be loaded."
-    assert window.voice_error_label.kwargs["textvariable"] is window._error_vars["piper_voice"]
+    assert (
+        window.voice_error_label.kwargs["textvariable"]
+        is window._error_vars["piper_voice"]
+    )
 
 
 def test_apply_success_closes_window(monkeypatch):
@@ -460,11 +496,17 @@ def test_tk_ui_repeated_open_focuses_existing_window(monkeypatch):
 
     speak_text = lambda _text: None
     ui.open_settings(
-        make_snapshot(), lambda *_args: SettingsApplyResult(True), speak_text, lambda: True
+        make_snapshot(),
+        lambda *_args: SettingsApplyResult(True),
+        speak_text,
+        lambda: True,
     )
     first = created[0]
     ui.open_settings(
-        make_snapshot(), lambda *_args: SettingsApplyResult(True), lambda _text: None, lambda: True
+        make_snapshot(),
+        lambda *_args: SettingsApplyResult(True),
+        lambda _text: None,
+        lambda: True,
     )
 
     assert len(created) == 1
@@ -493,7 +535,10 @@ def test_tk_ui_first_open_makes_settings_window_visible(monkeypatch):
     ui._settings_window = None
 
     ui.open_settings(
-        make_snapshot(), lambda *_args: SettingsApplyResult(True), lambda _text: None, lambda: True
+        make_snapshot(),
+        lambda *_args: SettingsApplyResult(True),
+        lambda _text: None,
+        lambda: True,
     )
 
     assert len(created) == 1
@@ -528,13 +573,19 @@ def test_tk_ui_reopens_after_close_and_forwards_last_text(monkeypatch):
 
     ui.update_settings_last_text("ignored")
     ui.open_settings(
-        make_snapshot(), lambda *_args: SettingsApplyResult(True), lambda _text: None, lambda: True
+        make_snapshot(),
+        lambda *_args: SettingsApplyResult(True),
+        lambda _text: None,
+        lambda: True,
     )
     ui.update_settings_last_text("new text")
     first = created[0]
     first.close()
     ui.open_settings(
-        make_snapshot(), lambda *_args: SettingsApplyResult(True), lambda _text: None, lambda: True
+        make_snapshot(),
+        lambda *_args: SettingsApplyResult(True),
+        lambda _text: None,
+        lambda: True,
     )
 
     assert first.updated == "new text"
