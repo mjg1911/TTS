@@ -5,6 +5,7 @@ from threading import Event, Lock, Thread
 import os
 import subprocess
 import time
+from pathlib import Path
 from .kokoro_protocol import read_frame, write_frame, decode_audio, validate_synthesize, validate_response_frame
 from .kokoro_process import WindowsKillOnCloseJob, CREATE_NO_WINDOW
 
@@ -38,12 +39,17 @@ def launch_nano_worker(installation):
 
 
 class NanoWorkerClient:
-    def __init__(self, installation, process_factory=launch_nano_worker, device='cpu'):
+    def __init__(self, installation, process_factory=launch_nano_worker, device='cpu', reference_clip=None):
         if device not in ('cpu', 'cuda'):
             raise ValueError('Nano device must be cpu or cuda')
         self.installation = installation
         self._factory = process_factory
         self.device = device
+        self.reference_clip = (
+            None
+            if reference_clip is None
+            else Path(reference_clip).expanduser().resolve()
+        )
         self.effective_device = 'cpu'
         self.device_message = ''
         self._process = None
@@ -139,6 +145,8 @@ class NanoWorkerClient:
                 # Older workers accept manifest-only initialization and use CPU.
                 if self.device != 'cpu':
                     initialize['device'] = self.device
+                if self.reference_clip is not None:
+                    initialize['reference_clip'] = str(self.reference_clip)
                 write_frame(self._process.stdin, initialize)
                 ready = self._read(cancel_event)
                 rate = ready.get('sample_rate')

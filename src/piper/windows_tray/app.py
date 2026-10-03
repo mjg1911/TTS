@@ -114,12 +114,21 @@ def _prepare_nano_installation():
     )
 
 
-def _prepare_nano_backend(cancel_event=None, device="cpu") -> BackendCandidate:
+def _prepare_nano_backend(
+    cancel_event=None, device="cpu", reference_clip=None
+) -> BackendCandidate:
     from .nano_client import NanoWorkerClient
 
     try:
         installation = _prepare_nano_installation()
-        client = NanoWorkerClient(installation, device=device)
+        if reference_clip is not None:
+            from .chatterbox_voice import validate_reference_clip
+
+            reference_clip = str(validate_reference_clip(Path(reference_clip)))
+        client_options = {"device": device}
+        if reference_clip is not None:
+            client_options["reference_clip"] = reference_clip
+        client = NanoWorkerClient(installation, **client_options)
         if cancel_event is not None:
             register_cleanup = getattr(cancel_event, "register_cancel_cleanup", None)
             if register_cleanup is not None:
@@ -134,6 +143,23 @@ def _prepare_nano_backend(cancel_event=None, device="cpu") -> BackendCandidate:
         return BackendCandidate("Chatterbox Nano", "default", client, client.shutdown)
     except (OSError, RuntimeError, ValueError, KeyError) as error:
         raise BackendPreparationError("Chatterbox Nano is unavailable") from error
+
+
+def _prepare_configured_nano_backend(
+    settings, cancel_event=None, record_timing=None
+) -> BackendCandidate:
+    client_options = {}
+    if settings.chatterbox_custom_voice_enabled:
+        client_options["reference_clip"] = settings.chatterbox_reference_clip
+
+    prepare = lambda: _prepare_nano_backend(
+        cancel_event,
+        device=settings.chatterbox_device,
+        **client_options,
+    )
+    if record_timing is not None:
+        return record_timing("nano_readiness", prepare)
+    return prepare()
 
 
 def _load_configured_voice(
@@ -410,6 +436,11 @@ def run_app(
             if engine == "Chatterbox Nano":
                 if voice_id != "default":
                     raise BackendPreparationError("Unknown Nano voice")
+                preparation_options = {}
+                if controller is not None:
+                    reference_clip = controller.nano_preparation_reference_clip()
+                    if reference_clip is not None:
+                        preparation_options["reference_clip"] = reference_clip
                 return _prepare_nano_backend(
                     (
                         controller.nano_preparation_cancel_event()
@@ -421,6 +452,7 @@ def run_app(
                         if controller is not None
                         else settings.chatterbox_device
                     ),
+                    **preparation_options,
                 )
             if engine != "Kokoro":
                 raise BackendPreparationError("Kokoro is unavailable")
@@ -669,11 +701,10 @@ def run_app(
         if settings.engine == "Chatterbox Nano":
 
             def prepare_nano_startup(cancel_event, record_timing):
-                candidate = record_timing(
-                    "nano_readiness",
-                    lambda: _prepare_nano_backend(
-                        cancel_event, device=settings.chatterbox_device
-                    ),
+                candidate = _prepare_configured_nano_backend(
+                    settings,
+                    cancel_event=cancel_event,
+                    record_timing=record_timing,
                 )
                 return candidate, ()
 

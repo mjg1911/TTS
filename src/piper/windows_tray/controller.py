@@ -22,6 +22,8 @@ from .settings import (
     DEFAULT_SENTENCE_PAUSE_MS,
     DEFAULT_SPEED_PERCENT,
     TraySettings,
+    validate_chatterbox_custom_voice_enabled,
+    validate_chatterbox_reference_clip,
     validate_pitch_percent,
     validate_sentence_pause_ms,
     validate_speed_percent,
@@ -31,6 +33,7 @@ from .voice_manager import VoiceManager, VoiceSwitchEvent
 
 
 _LOGGER = logging.getLogger(__name__)
+_UNSET = object()
 _LAUNCH_WELCOME = "Piper is ready."
 _APPROVED_SPOKEN_ERRORS = frozenset(
     {
@@ -121,6 +124,8 @@ class TraySnapshot:
 class SettingsWindowSnapshot:
     chatterbox_device: str
     chatterbox_device_message: str
+    chatterbox_custom_voice_enabled: bool
+    chatterbox_reference_clip: str
     engine: str
     piper_voice_path: Optional[Path]
     piper_voice_reference: str
@@ -153,6 +158,8 @@ class SettingsWindowSnapshot:
         *,
         chatterbox_device: str = "cpu",
         chatterbox_device_message: str = "",
+        chatterbox_custom_voice_enabled: bool = False,
+        chatterbox_reference_clip: str = "",
         voice_path: Optional[Path] = None,
     ) -> None:
         if voice_path is not None and piper_voice_path is None:
@@ -160,6 +167,8 @@ class SettingsWindowSnapshot:
         values = {
             "chatterbox_device": chatterbox_device,
             "chatterbox_device_message": chatterbox_device_message,
+            "chatterbox_custom_voice_enabled": chatterbox_custom_voice_enabled,
+            "chatterbox_reference_clip": chatterbox_reference_clip,
             "engine": engine,
             "piper_voice_path": piper_voice_path,
             "piper_voice_reference": piper_voice_reference,
@@ -224,6 +233,12 @@ def _parse_sentence_pause_text(
 
 def _start_daemon_job(job: Callable[[], None]) -> None:
     threading.Thread(target=job, name="piper-capture", daemon=True).start()
+
+
+def _validate_reference_clip(path: Path) -> Path:
+    from .chatterbox_voice import validate_reference_clip
+
+    return validate_reference_clip(path)
 
 
 class Controller:
@@ -401,14 +416,22 @@ class Controller:
             self._set_tray_status(
                 "%s unavailable; Piper is ready" % self._startup_engine
             )
-            self._show_status(
-                (
-                    (
-                        "Chatterbox Nano is unavailable. Piper will continue to be used. Check the installed Nano payload."
-                        if self._startup_engine == "Chatterbox Nano"
-                        else "Kokoro is unavailable. Piper will continue to be used. Open Settings and run Verify Kokoro files."
-                    )
+            if (
+                self._startup_engine == "Chatterbox Nano"
+                and self.state.settings is not None
+                and self.state.settings.chatterbox_custom_voice_enabled
+            ):
+                status_message = (
+                    "The saved Chatterbox custom voice could not be loaded. Open Settings and import a readable WAV clip longer than 5 seconds."
                 )
+            else:
+                status_message = (
+                    "Chatterbox Nano is unavailable. Piper will continue to be used. Check the installed Nano payload."
+                    if self._startup_engine == "Chatterbox Nano"
+                    else "Kokoro is unavailable. Piper will continue to be used. Open Settings and run Verify Kokoro files."
+                )
+            self._show_status(
+                status_message
             )
 
     def configure_runtime(
@@ -1214,6 +1237,10 @@ class Controller:
                     if settings.engine == "Chatterbox Nano" and self._backend_manager
                     else ""
                 ),
+                chatterbox_custom_voice_enabled=(
+                    settings.chatterbox_custom_voice_enabled
+                ),
+                chatterbox_reference_clip=settings.chatterbox_reference_clip,
                 engine=settings.engine,
                 piper_voice_path=self.state.voice_path,
                 piper_voice_reference=settings.piper_voice,
@@ -1239,6 +1266,20 @@ class Controller:
             self.state.settings.chatterbox_device if self.state.settings else "cpu"
         )
 
+    def nano_preparation_reference_clip(self) -> Optional[str]:
+        requested = getattr(self._nano_preparation_context, "reference_clip", _UNSET)
+        if requested is not _UNSET:
+            return requested
+        with self._state_lock:
+            settings = self.state.settings
+            if (
+                settings is not None
+                and settings.chatterbox_custom_voice_enabled
+                and settings.chatterbox_reference_clip
+            ):
+                return settings.chatterbox_reference_clip
+        return None
+
     def cancel_nano_settings(self) -> None:
         self.nano_settings_cancel_event.set()
 
@@ -1255,12 +1296,35 @@ class Controller:
         *,
         cancel_event=None,
         chatterbox_device=None,
+        chatterbox_custom_voice_enabled=None,
+        chatterbox_reference_clip=None,
     ) -> SettingsApplyResult:
         # Readiness can take minutes. Never hold the UI-facing state lock while
         # constructing Nano; the settings window runs this call off-thread.
         candidate = None
         with self._state_lock:
             current = self.state.settings
+            custom_voice_enabled = (
+                current.chatterbox_custom_voice_enabled
+                if chatterbox_custom_voice_enabled is None and current is not None
+                else False
+                if chatterbox_custom_voice_enabled is None
+                else chatterbox_custom_voice_enabled
+            )
+            reference_clip = (
+                current.chatterbox_reference_clip
+                if chatterbox_reference_clip is None and current is not None
+                else ""
+                if chatterbox_reference_clip is None
+                else chatterbox_reference_clip
+            )
+            try:
+                custom_voice_enabled = validate_chatterbox_custom_voice_enabled(
+                    custom_voice_enabled
+                )
+                reference_clip = validate_chatterbox_reference_clip(reference_clip)
+            except ValueError as error:
+                return SettingsApplyResult(False, (("reference_clip", str(error)),))
             device = (
                 chatterbox_device
                 if chatterbox_device is not None
@@ -1271,6 +1335,11 @@ class Controller:
                     False, (("engine", "Choose CPU or GPU for Chatterbox."),)
                 )
             device_changed = current is not None and device != current.chatterbox_device
+            custom_voice_changed = (
+                current is None
+                or custom_voice_enabled != current.chatterbox_custom_voice_enabled
+                or reference_clip != current.chatterbox_reference_clip
+            )
             self._settings_apply_generation += 1
             apply_generation = self._settings_apply_generation
             self.nano_settings_cancel_event.set()
@@ -1287,12 +1356,41 @@ class Controller:
                     )
                 cancel_event = cancel_event or threading.Event()
                 self.nano_settings_cancel_event = cancel_event
+        if engine == "Chatterbox Nano" and custom_voice_enabled:
+            if not reference_clip:
+                return SettingsApplyResult(
+                    False,
+                    (
+                        (
+                            "reference_clip",
+                            "Import a WAV reference clip longer than 5 seconds before enabling custom voice.",
+                        ),
+                    ),
+                )
+            try:
+                reference_clip = str(_validate_reference_clip(Path(reference_clip)))
+            except (OSError, ValueError, KeyError, TypeError):
+                return SettingsApplyResult(
+                    False,
+                    (
+                        (
+                            "reference_clip",
+                            "The reference clip is missing or invalid. Import a readable WAV clip longer than 5 seconds.",
+                        ),
+                    ),
+                )
+            custom_voice_changed = (
+                current is None
+                or custom_voice_enabled != current.chatterbox_custom_voice_enabled
+                or reference_clip != current.chatterbox_reference_clip
+            )
         if (
             engine == "Chatterbox Nano"
             and self._backend_manager is not None
             and (
                 self._backend_manager.current_identity() != (engine, "default")
                 or device_changed
+                or custom_voice_changed
             )
             and not self._validate_settings_scalars(
                 hotkey, pitch_text, speed_text, sentence_pause_text
@@ -1301,14 +1399,26 @@ class Controller:
             try:
                 self._nano_preparation_context.cancel_event = cancel_event
                 self._nano_preparation_context.device = device
+                self._nano_preparation_context.reference_clip = (
+                    reference_clip if custom_voice_enabled else None
+                )
                 candidate = self._backend_manager.prepare(engine, "default")
             except BackendPreparationError:
+                message = (
+                    "The custom voice could not be prepared. Check that the WAV clip is readable and longer than 5 seconds."
+                    if custom_voice_enabled
+                    else "Chatterbox Nano is not available."
+                )
                 return SettingsApplyResult(
-                    False, (("engine", "Chatterbox Nano is not available."),)
+                    False, (("engine", message),)
                 )
             finally:
                 self._nano_preparation_context.cancel_event = None
                 self._nano_preparation_context.device = None
+                try:
+                    del self._nano_preparation_context.reference_clip
+                except AttributeError:
+                    pass
         try:
             if engine == "Chatterbox Nano" and cancel_event.is_set():
                 return SettingsApplyResult(
@@ -1327,6 +1437,8 @@ class Controller:
                 apply_generation,
                 cancel_event,
                 device,
+                custom_voice_enabled,
+                reference_clip,
             )
         finally:
             if candidate is not None:
@@ -1346,6 +1458,8 @@ class Controller:
         apply_generation: Optional[int] = None,
         cancel_event=None,
         chatterbox_device=None,
+        chatterbox_custom_voice_enabled=None,
+        chatterbox_reference_clip=None,
     ) -> SettingsApplyResult:
         if (
             piper_sentence_streaming_enabled is not None
@@ -1522,6 +1636,16 @@ class Controller:
                 next_settings = replace(
                     current,
                     chatterbox_device=chatterbox_device or current.chatterbox_device,
+                    chatterbox_custom_voice_enabled=(
+                        current.chatterbox_custom_voice_enabled
+                        if chatterbox_custom_voice_enabled is None
+                        else chatterbox_custom_voice_enabled
+                    ),
+                    chatterbox_reference_clip=(
+                        current.chatterbox_reference_clip
+                        if chatterbox_reference_clip is None
+                        else chatterbox_reference_clip
+                    ),
                     engine=engine,
                     piper_voice=piper_reference,
                     kokoro_voice=kokoro_voice,

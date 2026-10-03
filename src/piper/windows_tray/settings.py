@@ -32,6 +32,20 @@ def validate_piper_sentence_streaming_enabled(value: object) -> bool:
     return value
 
 
+def validate_chatterbox_custom_voice_enabled(value: object) -> bool:
+    if type(value) is not bool:
+        raise ValueError("chatterbox_custom_voice_enabled must be a boolean")
+    return value
+
+
+def validate_chatterbox_reference_clip(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("chatterbox_reference_clip must be a string")
+    if value and not value.strip():
+        raise ValueError("chatterbox_reference_clip must be empty or a path")
+    return value
+
+
 def validate_pitch_percent(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
         raise ValueError("pitch_percent must be a finite number")
@@ -66,6 +80,8 @@ def validate_sentence_pause_ms(value: object) -> int:
 @dataclass(frozen=True, init=False)
 class TraySettings:
     chatterbox_device: Literal["cpu", "cuda"] = "cpu"
+    chatterbox_custom_voice_enabled: bool = False
+    chatterbox_reference_clip: str = ""
     schema_version: int = SETTINGS_SCHEMA_VERSION
     engine: Literal["Piper", "Kokoro", "Chatterbox Nano"] = "Piper"
     piper_voice: str = DEFAULT_VOICE
@@ -99,6 +115,8 @@ class TraySettings:
         ),
         *,
         chatterbox_device: Literal["cpu", "cuda"] = "cpu",
+        chatterbox_custom_voice_enabled: bool = False,
+        chatterbox_reference_clip: str = "",
         voice: Optional[str] = None,
     ) -> None:
         if voice is not None and piper_voice == DEFAULT_VOICE:
@@ -135,6 +153,12 @@ def _validated(data: object) -> TraySettings:
 
     engine = data.get("engine", "Piper")
     chatterbox_device = data.get("chatterbox_device", "cpu")
+    chatterbox_custom_voice_enabled = validate_chatterbox_custom_voice_enabled(
+        data.get("chatterbox_custom_voice_enabled", False)
+    )
+    chatterbox_reference_clip = validate_chatterbox_reference_clip(
+        data.get("chatterbox_reference_clip", "")
+    )
     if chatterbox_device not in ("cpu", "cuda"):
         raise ValueError("invalid Chatterbox device")
     piper_voice = data.get("piper_voice")
@@ -186,6 +210,8 @@ def _validated(data: object) -> TraySettings:
         raise ValueError("browser_chatgpt_enabled must be a boolean")
     return TraySettings(
         chatterbox_device=chatterbox_device,
+        chatterbox_custom_voice_enabled=chatterbox_custom_voice_enabled,
+        chatterbox_reference_clip=chatterbox_reference_clip,
         engine=engine,
         piper_voice=piper_voice.strip(),
         kokoro_voice=kokoro_voice.strip(),

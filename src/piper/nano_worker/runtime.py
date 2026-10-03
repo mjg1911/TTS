@@ -55,7 +55,7 @@ def resolve_device(device, torch_module=None):
     return 'cuda', ''
 
 
-def load_model(directory, model_class=None, device='cpu'):
+def load_model(directory, model_class=None, device='cpu', reference_clip=None):
     os.environ['HF_HUB_OFFLINE'] = '1'
     os.environ['TRANSFORMERS_OFFLINE'] = '1'
     if model_class is None:
@@ -63,7 +63,20 @@ def load_model(directory, model_class=None, device='cpu'):
         model_class = ChatterboxTurboTTS
     effective_device, device_message = resolve_device(device)
     model = model_class.from_local(Path(directory), device=effective_device, nano=True)
-    if model.conds is None:
+    if reference_clip is not None:
+        try:
+            reference_path = Path(reference_clip).expanduser()
+            if not reference_path.is_absolute():
+                raise ValueError('Nano reference clip must be an absolute WAV path')
+            reference_path = reference_path.resolve(strict=True)
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            raise ValueError('Nano reference clip must be an existing absolute WAV file') from error
+        if not reference_path.is_absolute() or not reference_path.is_file() or reference_path.suffix.lower() != '.wav':
+            raise ValueError('Nano reference clip must be an existing absolute WAV file')
+        model.prepare_conditionals(reference_path, exaggeration=0.0)
+        if model.conds is None:
+            raise ValueError('Nano custom voice conditionals are missing')
+    elif model.conds is None:
         raise ValueError('Nano default voice conditionals are missing')
     if type(model.sr) is not int or not 8000 <= model.sr <= 192000:
         raise ValueError('invalid Nano sample rate')

@@ -45,21 +45,43 @@ def _configure_numba_cache(installation_root):
 def serve(root, incoming, outgoing):
     write_frame(outgoing, {'type': 'hello', 'engine': 'Chatterbox Nano', 'protocol_version': 1})
     request = read_frame(incoming)
-    if not isinstance(request, dict) or set(request) not in (
-        {'type', 'manifest_sha256'},
-        {'type', 'manifest_sha256', 'device'},
-    ):
+    required_fields = {'type', 'manifest_sha256'}
+    allowed_fields = required_fields | {'device', 'reference_clip'}
+    if (not isinstance(request, dict)
+            or not required_fields.issubset(request)
+            or not set(request).issubset(allowed_fields)):
         raise ValueError('invalid Nano initialize message')
     validate_initialize({key: request[key] for key in ('type', 'manifest_sha256')})
     device = request.get('device', 'cpu')
     if device not in ('cpu', 'cuda'):
         raise ValueError('Nano device must be cpu or cuda')
+    reference_clip = None
+    if 'reference_clip' in request:
+        reference_clip = request['reference_clip']
+        if not isinstance(reference_clip, str) or not reference_clip:
+            raise ValueError('Nano reference clip must be an absolute WAV file path')
+        try:
+            reference_path = Path(reference_clip).expanduser()
+            if not reference_path.is_absolute():
+                raise ValueError('Nano reference clip must be an absolute WAV file path')
+            reference_path = reference_path.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise ValueError('Nano reference clip must be an existing WAV file') from error
+        if (not reference_path.is_absolute() or not reference_path.is_file()
+                or reference_path.suffix.lower() != '.wav'):
+            raise ValueError('Nano reference clip must be an existing absolute WAV file')
+        reference_clip = str(reference_path)
     installation = inspect_nano_installation(root)
     if request['manifest_sha256'] != installation.manifest_sha256:
         raise ValueError('Nano manifest identity changed')
     _configure_numba_cache(installation.root)
+    load_options = {}
+    if device != 'cpu':
+        load_options['device'] = device
+    if reference_clip is not None:
+        load_options['reference_clip'] = reference_clip
     with contextlib.redirect_stdout(sys.stderr):
-        model = load_model(installation.model_dir, device=device) if device == 'cuda' else load_model(installation.model_dir)
+        model = load_model(installation.model_dir, **load_options)
     effective_device = getattr(model, 'effective_device', 'cpu')
     device_message = getattr(model, 'device_message', '') or ''
     write_frame(outgoing, {

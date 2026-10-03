@@ -12,7 +12,11 @@ Speech is generated locally using voice models on your computer. Choose your eng
 
 ## Chatterbox Nano setup
 
-Nano uses its built-in default English voice. It runs in a separate worker so its dependencies do not affect Piper or Kokoro. Normal speech uses local files and does not download models. If Nano is unavailable, the app keeps the current working engine; a failed Nano startup recovers to Piper.
+Nano offers its built-in default English voice or a custom voice from a reference clip. It runs in a separate worker so its dependencies do not affect Piper or Kokoro. Normal speech uses local files and does not download models. If Nano is unavailable, the app keeps the current working engine; a failed Nano startup recovers to Piper.
+
+To add a custom voice, select Chatterbox Nano in Settings and click **Import reference clip**. Choose a PCM WAV recording longer than five seconds, preferably clear speech from one speaker. Piper validates the recording and keeps its own local copy, so moving the original file will not break the voice. Enable **Use custom voice** and click **Save changes** to apply it. Turn the toggle off and save to return to the bundled voice; the imported clip stays available. Both the clip selection and toggle are remembered between sessions. If a clip cannot be imported or prepared, the existing working voice is preserved.
+
+Custom voices require the updated Nano worker. When updating an existing installation, rebuild and stage the worker from this branch using the setup commands below.
 
 When Chatterbox Nano is selected in Settings, choose CPU or GPU under Device and
 click Save changes. CPU is the default for compatibility. GPU uses CUDA on an available
