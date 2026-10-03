@@ -9,7 +9,6 @@ from typing import Literal, Optional
 
 from . import (
     DEFAULT_HOTKEY,
-    DEFAULT_KOKORO_VOICE,
     DEFAULT_VOICE,
     SETTINGS_SCHEMA_VERSION,
 )
@@ -83,9 +82,8 @@ class TraySettings:
     chatterbox_custom_voice_enabled: bool = False
     chatterbox_reference_clip: str = ""
     schema_version: int = SETTINGS_SCHEMA_VERSION
-    engine: Literal["Piper", "Kokoro", "Chatterbox Nano"] = "Piper"
+    engine: Literal["Piper", "Chatterbox Nano"] = "Piper"
     piper_voice: str = DEFAULT_VOICE
-    kokoro_voice: str = DEFAULT_KOKORO_VOICE
     hotkey: str = DEFAULT_HOTKEY
     log_level: str = "INFO"
     error_sounds: bool = False
@@ -99,9 +97,8 @@ class TraySettings:
     def __init__(
         self,
         schema_version: int = SETTINGS_SCHEMA_VERSION,
-        engine: Literal["Piper", "Kokoro", "Chatterbox Nano"] = "Piper",
+        engine: Literal["Piper", "Chatterbox Nano"] = "Piper",
         piper_voice: str = DEFAULT_VOICE,
-        kokoro_voice: str = DEFAULT_KOKORO_VOICE,
         hotkey: str = DEFAULT_HOTKEY,
         log_level: str = "INFO",
         error_sounds: bool = False,
@@ -135,6 +132,7 @@ class TraySettings:
 class SettingsLoadResult:
     settings: TraySettings
     source: Literal["loaded", "missing", "corrupt"]
+    migration_notice: Optional[str] = None
 
 
 def settings_path(appdata: Optional[Path] = None) -> Path:
@@ -162,7 +160,6 @@ def _validated(data: object) -> TraySettings:
     if chatterbox_device not in ("cpu", "cuda"):
         raise ValueError("invalid Chatterbox device")
     piper_voice = data.get("piper_voice")
-    kokoro_voice = data.get("kokoro_voice", DEFAULT_KOKORO_VOICE)
     hotkey = data.get("hotkey")
     log_level = data.get("log_level", "INFO")
     error_sounds = data.get("error_sounds", False)
@@ -185,14 +182,11 @@ def _validated(data: object) -> TraySettings:
     )
     if not isinstance(engine, str) or engine not in {
         "Piper",
-        "Kokoro",
         "Chatterbox Nano",
     }:
         raise ValueError("invalid engine")
     if not isinstance(piper_voice, str) or not piper_voice.strip():
         raise ValueError("piper_voice must be a non-empty string")
-    if not isinstance(kokoro_voice, str) or not kokoro_voice.strip():
-        raise ValueError("kokoro_voice must be a non-empty string")
     if not isinstance(hotkey, str) or not hotkey.strip():
         raise ValueError("hotkey must be a non-empty string")
     if not isinstance(log_level, str) or log_level not in {
@@ -214,7 +208,6 @@ def _validated(data: object) -> TraySettings:
         chatterbox_reference_clip=chatterbox_reference_clip,
         engine=engine,
         piper_voice=piper_voice.strip(),
-        kokoro_voice=kokoro_voice.strip(),
         hotkey=hotkey.strip(),
         log_level=log_level,
         error_sounds=error_sounds,
@@ -236,22 +229,34 @@ def _corrupt_path(path: Path) -> Path:
     return candidate
 
 
-def _migrate(data: object) -> tuple[object, bool]:
-    if (
-        not isinstance(data, dict)
-        or type(data.get("schema_version")) is not int
-        or data.get("schema_version") != 1
-    ):
-        return data, False
+def _migrate(data: object) -> tuple[object, bool, Optional[str]]:
+    if not isinstance(data, dict) or type(data.get("schema_version")) is not int:
+        return data, False, None
+    schema_version = data.get("schema_version")
+    if schema_version not in (1, SETTINGS_SCHEMA_VERSION):
+        return data, False, None
+
     migrated = dict(data)
-    legacy_voice = migrated.pop("voice", DEFAULT_VOICE)
-    migrated.update(
-        schema_version=SETTINGS_SCHEMA_VERSION,
-        engine="Piper",
-        piper_voice=legacy_voice,
-        kokoro_voice=DEFAULT_KOKORO_VOICE,
-    )
-    return migrated, True
+    changed = False
+    migration_notice = None
+
+    if schema_version == 1:
+        legacy_voice = migrated.pop("voice", DEFAULT_VOICE)
+        migrated["schema_version"] = SETTINGS_SCHEMA_VERSION
+        migrated["piper_voice"] = legacy_voice
+        migrated.setdefault("engine", "Piper")
+        changed = True
+
+    if migrated.get("engine") == "Kokoro":
+        migrated["engine"] = "Piper"
+        migration_notice = "Kokoro is no longer available. Piper has been selected."
+        changed = True
+
+    if "kokoro_voice" in migrated:
+        del migrated["kokoro_voice"]
+        changed = True
+
+    return migrated, changed, migration_notice
 
 
 def load_settings(path: Optional[Path] = None) -> SettingsLoadResult:
@@ -259,17 +264,23 @@ def load_settings(path: Optional[Path] = None) -> SettingsLoadResult:
     try:
         if not path.exists():
             return SettingsLoadResult(TraySettings(), "missing")
-        data, migrated = _migrate(json.loads(path.read_text(encoding="utf-8")))
+        data, migrated, migration_notice = _migrate(
+            json.loads(path.read_text(encoding="utf-8"))
+        )
         settings = _validated(data)
-        if migrated:
-            save_settings(settings, path)
-        return SettingsLoadResult(settings, "loaded")
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         try:
             path.replace(_corrupt_path(path))
         except OSError:
             pass
         return SettingsLoadResult(TraySettings(), "corrupt")
+
+    if migrated:
+        try:
+            save_settings(settings, path)
+        except OSError:
+            pass
+    return SettingsLoadResult(settings, "loaded", migration_notice)
 
 
 def save_settings(settings: TraySettings, path: Optional[Path] = None) -> None:
@@ -285,4 +296,11 @@ def save_settings(settings: TraySettings, path: Optional[Path] = None) -> None:
         handle.flush()
         os.fsync(handle.fileno())
         temp_path = Path(handle.name)
-    os.replace(temp_path, path)
+    try:
+        os.replace(temp_path, path)
+    except OSError:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+        raise

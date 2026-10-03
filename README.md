@@ -2,7 +2,9 @@
 
 Piper is a Windows desktop app that makes it easy to listen to text while you work. It stays in the system tray, ready to read selected text aloud with a keyboard shortcut.
 
-The app offers three speech engines for different needs. Piper is exceptionally lightweight and quick, making it a good choice for everyday speech with minimal overhead. Kokoro offers a more natural, higher-quality sound when you want a richer listening experience. Chatterbox Nano adds an expressive English default voice that runs locally on your CPU or NVIDIA GPU.
+The app offers two speech engines for different needs. Piper is exceptionally lightweight and quick, making it a good choice for everyday speech with minimal overhead. Chatterbox Nano adds an expressive English default voice that runs locally on your CPU or NVIDIA GPU.
+
+Kokoro was removed. If Kokoro was selected in a previous installation, Piper is now selected after upgrade and your other saved preferences are preserved.
 
 Switch between engines and voices to find the sound that suits you. You can also adjust speech speed and pitch, stop playback at any time, and replay the last selection from the tray.
 
@@ -12,7 +14,7 @@ Speech is generated locally using voice models on your computer. Choose your eng
 
 ## Chatterbox Nano setup
 
-Nano offers its built-in default English voice or a custom voice from a reference clip. It runs in a separate worker so its dependencies do not affect Piper or Kokoro. Normal speech uses local files and does not download models. If Nano is unavailable, the app keeps the current working engine; a failed Nano startup recovers to Piper.
+Nano offers its built-in default English voice or a custom voice from a reference clip. It runs in a separate worker so its dependencies do not affect Piper. Normal speech uses local files and does not download models. If Nano is unavailable, the app keeps the current working engine; a failed Nano startup recovers to Piper.
 
 To add a custom voice, select Chatterbox Nano in Settings and click **Import reference clip**. Choose a PCM WAV recording longer than five seconds, preferably clear speech from one speaker. Piper validates the recording and keeps its own local copy, so moving the original file will not break the voice. Enable **Use custom voice** and click **Save changes** to apply it. Turn the toggle off and save to return to the bundled voice; the imported clip stays available. Both the clip selection and toggle are remembered between sessions. If a clip cannot be imported or prepared, the existing working voice is preserved.
 

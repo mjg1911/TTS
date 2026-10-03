@@ -22,6 +22,9 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 [Files]
 Source: "..\dist\PiperTray\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\_internal\kokoro_payload"
+
 [Icons]
 Name: "{group}\Piper Tray"; Filename: "{app}\{#MyAppExeName}"
 

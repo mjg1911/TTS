@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from piper.windows_tray.controller import Controller, KokoroStartupState
+from piper.windows_tray.controller import Controller, BackendStartupState
 from piper.windows_tray.backend_manager import BackendCandidate, BackendManager
 from piper.windows_tray.commands import Command, CommandKind
 from piper.windows_tray.settings import TraySettings, save_settings
@@ -164,26 +164,26 @@ def test_changed_active_piper_voice_is_loaded_once_and_reused_as_candidate():
     )
 
 
-def test_kokoro_settings_resolve_piper_path_without_loading_piper():
-    kokoro_backend = object()
+def test_nano_settings_resolve_piper_path_without_loading_piper():
+    nano_backend = object()
     backend_manager = BackendManager(
-        "Kokoro",
-        "af_heart",
-        kokoro_backend,
+        "Chatterbox Nano",
+        "default",
+        nano_backend,
         lambda: None,
         lambda engine, voice_id: BackendCandidate(engine, voice_id, object()),
     )
     controller = Controller(
         settings=TraySettings(
             voice="old.onnx",
-            engine="Kokoro",
-            kokoro_voice="af_heart",
+            engine="Chatterbox Nano",
+
             hotkey="alt+backtick",
         ),
         save_settings=lambda _settings: None,
         hotkeys=FakeHotkeys(),
         backend_manager=backend_manager,
-        kokoro_voice_ids=("af_heart",),
+
     )
     resolved = Path("new.onnx").resolve()
     load_calls = []
@@ -200,17 +200,17 @@ def test_kokoro_settings_resolve_piper_path_without_loading_piper():
         pitch_text="26",
         speed_text="0",
         piper_voice_path=Path("new.onnx"),
-        engine="Kokoro",
-        kokoro_voice="af_heart",
+        engine="Chatterbox Nano",
+
     )
 
     assert result.applied is True
     assert resolve_calls == ["new.onnx"]
     assert load_calls == []
-    assert backend_manager.current() is kokoro_backend
+    assert backend_manager.current() is nano_backend
 
 
-def test_applying_kokoro_settings_clears_live_piper_references():
+def test_applying_nano_settings_clears_live_piper_references():
     piper = object()
     backend_manager = BackendManager(
         "Piper",
@@ -238,7 +238,7 @@ def test_applying_kokoro_settings_clears_live_piper_references():
         pitch_text="26",
         speed_text="0",
         piper_voice_path=None,
-        engine="Kokoro",
+        engine="Chatterbox Nano",
     )
 
     assert result.applied is True
@@ -247,9 +247,9 @@ def test_applying_kokoro_settings_clears_live_piper_references():
     assert controller.state.voice_path == Path("old.onnx")
 
 
-def test_switching_piper_to_kokoro_clears_live_piper_reference():
+def test_switching_piper_to_nano_clears_live_piper_reference():
     piper = object()
-    kokoro = object()
+    nano = object()
     manager = BackendManager(
         "Piper",
         "old.onnx",
@@ -258,20 +258,20 @@ def test_switching_piper_to_kokoro_clears_live_piper_reference():
         lambda engine, voice_id: BackendCandidate(
             engine,
             voice_id,
-            kokoro if engine == "Kokoro" else object(),
+            nano if engine == "Chatterbox Nano" else object(),
         ),
     )
     controller = Controller(
         settings=TraySettings(
             engine="Piper",
             voice="old.onnx",
-            kokoro_voice="af_heart",
+
             hotkey="alt+backtick",
         ),
         save_settings=lambda _settings: None,
         hotkeys=FakeHotkeys(),
         backend_manager=manager,
-        kokoro_voice_ids=("af_heart",),
+
     )
     controller.set_voice(Path("old.onnx"), piper)
     controller.configure_runtime(resolve_voice=lambda reference: Path(reference))
@@ -281,39 +281,39 @@ def test_switching_piper_to_kokoro_clears_live_piper_reference():
         hotkey="alt+backtick",
         pitch_text="26",
         speed_text="0",
-        engine="Kokoro",
-        kokoro_voice="af_heart",
+        engine="Chatterbox Nano",
+
     )
 
     assert result.applied is True
-    assert manager.current() is kokoro
+    assert manager.current() is nano
     assert controller.state.voice is None
     assert controller.state.voice_path == Path("old.onnx")
 
 
-def test_switching_kokoro_to_piper_prepares_one_piper_backend():
-    kokoro = object()
+def test_switching_nano_to_piper_prepares_one_piper_backend():
+    nano = object()
     piper = object()
     calls = []
     manager = BackendManager(
-        "Kokoro",
-        "af_heart",
-        kokoro,
+        "Chatterbox Nano",
+        "default",
+        nano,
         lambda: None,
         lambda engine, voice_id: calls.append((engine, voice_id))
         or BackendCandidate(engine, voice_id, piper),
     )
     controller = Controller(
         settings=TraySettings(
-            engine="Kokoro",
+            engine="Chatterbox Nano",
             voice="voice.onnx",
-            kokoro_voice="af_heart",
+
             hotkey="alt+backtick",
         ),
         save_settings=lambda _settings: None,
         hotkeys=FakeHotkeys(),
         backend_manager=manager,
-        kokoro_voice_ids=("af_heart",),
+
     )
     canonical = Path("voice.onnx").resolve()
     controller.configure_runtime(resolve_voice=lambda _reference: canonical)
@@ -324,7 +324,7 @@ def test_switching_kokoro_to_piper_prepares_one_piper_backend():
         pitch_text="26",
         speed_text="0",
         engine="Piper",
-        kokoro_voice="af_heart",
+
     )
 
     assert result.applied is True
@@ -373,7 +373,6 @@ def apply_settings(
     speed_text,
     piper_voice_path=None,
     engine="Piper",
-    kokoro_voice="af_heart",
 ):
     return controller.apply_settings(
         engine,
@@ -381,7 +380,7 @@ def apply_settings(
         pitch_text,
         speed_text,
         piper_voice_path,
-        kokoro_voice,
+
     )
 
 
@@ -530,9 +529,9 @@ def test_apply_settings_unchanged_voice_and_hotkey_still_saves_scalars():
 
 
 @pytest.mark.parametrize("stale_result", ["success", "failure"])
-def test_settings_engine_switch_invalidates_in_flight_kokoro_startup(stale_result):
+def test_settings_engine_switch_invalidates_in_flight_nano_startup(stale_result):
     tray_statuses = []
-    settings = TraySettings(engine="Kokoro", kokoro_voice="af_heart")
+    settings = TraySettings(engine="Chatterbox Nano")
     controller = make_controller(
         settings=settings,
         hotkeys=FakeHotkeys(),
@@ -543,8 +542,8 @@ def test_settings_engine_switch_invalidates_in_flight_kokoro_startup(stale_resul
     controller.configure_runtime(show_status=statuses.append)
     capture_jobs = []
     controller.configure_runtime(capture_submit=capture_jobs.append)
-    controller.begin_kokoro_startup()
-    stale_candidate = BackendCandidate("Kokoro", "af_heart", object())
+    controller.begin_nano_startup()
+    stale_candidate = BackendCandidate("Chatterbox Nano", "default", object())
 
     result = apply_settings(
         controller,
@@ -564,9 +563,9 @@ def test_settings_engine_switch_invalidates_in_flight_kokoro_startup(stale_resul
     status_count = len(tray_statuses)
 
     if stale_result == "success":
-        controller.complete_kokoro_startup(stale_candidate, ["af_heart"])
+        controller.complete_nano_startup(stale_candidate)
     else:
-        controller.fail_kokoro_startup("stale Kokoro startup failure")
+        controller.fail_nano_startup("stale Chatterbox Nano startup failure")
 
     assert controller.state.settings.engine == "Piper"
     assert controller._backend_manager.current() is selected_backend
@@ -576,8 +575,8 @@ def test_settings_engine_switch_invalidates_in_flight_kokoro_startup(stale_resul
     assert len(tray_statuses) == status_count
 
 
-def test_apply_kokoro_settings_during_startup_does_not_prepare_second_backend():
-    settings = TraySettings(engine="Kokoro", kokoro_voice="af_heart")
+def test_apply_nano_settings_during_startup_does_not_prepare_second_backend():
+    settings = TraySettings(engine="Chatterbox Nano")
     saved = []
     controller = make_controller(
         settings=settings,
@@ -589,7 +588,7 @@ def test_apply_kokoro_settings_during_startup_does_not_prepare_second_backend():
     controller._backend_manager.prepare = lambda engine, voice: preparations.append(
         (engine, voice)
     ) or original_prepare(engine, voice)
-    controller.begin_kokoro_startup()
+    controller.begin_nano_startup()
 
     result = apply_settings(
         controller,
@@ -597,17 +596,17 @@ def test_apply_kokoro_settings_during_startup_does_not_prepare_second_backend():
         pitch_text=str(settings.pitch_percent),
         speed_text=str(settings.speed_percent),
         piper_voice_path=None,
-        engine="Kokoro",
+        engine="Chatterbox Nano",
     )
 
     assert result.applied is False
     assert result.error_map() == {
-        "engine": "Kokoro is still starting. Wait for startup to finish before applying Kokoro settings."
+        "engine": "Chatterbox Nano is still starting."
     }
     assert preparations == []
     assert saved == []
     assert controller.state.settings is settings
-    assert controller.kokoro_startup_state is KokoroStartupState.LOADING
+    assert controller.backend_startup_state is BackendStartupState.LOADING
 
 
 def test_voice_load_failure_keeps_all_prior_state_and_skips_rebind_and_save():

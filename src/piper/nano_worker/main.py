@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 from piper.nano_assets import inspect_nano_installation
-from piper.windows_tray.kokoro_protocol import read_frame, write_frame, encode_audio, validate_initialize, validate_synthesize
+from piper.windows_tray.worker_protocol import read_frame, write_frame, encode_audio, validate_initialize, validate_synthesize
 from .runtime import load_model, generate_chunks
 
 

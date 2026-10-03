@@ -23,7 +23,7 @@ class Hotkeys:
 def controller(prepare, save=lambda settings: None):
     manager = BackendManager("Piper", "old", object(), lambda: None, prepare)
     instance = Controller(
-        settings=TraySettings(piper_voice="old", kokoro_voice="af_heart"),
+        settings=TraySettings(piper_voice="old"),
         save_settings=save,
         hotkeys=Hotkeys(),
         backend_manager=manager,
@@ -35,7 +35,7 @@ def controller(prepare, save=lambda settings: None):
 def test_nano_settings_preserve_other_voices(tmp_path):
     path = tmp_path / "settings.json"
     settings = TraySettings(
-        engine="Chatterbox Nano", piper_voice="saved.onnx", kokoro_voice="af_bella"
+        engine="Chatterbox Nano", piper_voice="saved.onnx"
     )
     save_settings(settings, path)
     assert load_settings(path).settings == settings
@@ -48,7 +48,7 @@ def test_nano_switch_uses_default_voice():
         or BackendCandidate(engine, voice, object())
     )
     result = c.apply_settings(
-        "Chatterbox Nano", "alt+backtick", "26", "0", None, "af_heart"
+        "Chatterbox Nano", "alt+backtick", "26", "0", None
     )
     assert result.applied
     assert calls == [("Chatterbox Nano", "default")]
@@ -62,7 +62,7 @@ def test_nano_preparation_failure_preserves_piper():
 
     c, manager = controller(fail)
     result = c.apply_settings(
-        "Chatterbox Nano", "alt+backtick", "26", "0", None, "af_heart"
+        "Chatterbox Nano", "alt+backtick", "26", "0", None
     )
     assert result.errors == (("engine", "Chatterbox Nano is not available."),)
     assert manager.current_identity() == ("Piper", "old")
@@ -79,7 +79,7 @@ def test_nano_save_failure_discards_candidate():
         fail_save,
     )
     assert not c.apply_settings(
-        "Chatterbox Nano", "alt+backtick", "26", "0", None, "af_heart"
+        "Chatterbox Nano", "alt+backtick", "26", "0", None
     ).applied
     assert closed == [True]
     assert manager.current_identity() == ("Piper", "old")
@@ -117,7 +117,7 @@ def test_nano_preparation_does_not_hold_controller_lock():
     c, manager = controller(prepare)
     worker = threading.Thread(
         target=lambda: c.apply_settings(
-            "Chatterbox Nano", "alt+backtick", "26", "0", None, "af_heart"
+            "Chatterbox Nano", "alt+backtick", "26", "0", None
         )
     )
     worker.start()
@@ -178,18 +178,16 @@ def test_nano_controls_hide_other_voices():
 
     window = object.__new__(SettingsWindow)
     window.engine_var = types.SimpleNamespace(get=lambda: "Chatterbox Nano")
-    window.piper_voice_frame, window.kokoro_voice_frame, window.nano_voice_frame = (
-        Frame(),
+    window.piper_voice_frame, window.nano_voice_frame = (
         Frame(),
         Frame(),
     )
     window._refresh_voice_controls()
     assert window.nano_voice_frame.visible
     assert not window.piper_voice_frame.visible
-    assert not window.kokoro_voice_frame.visible
 
 
-def test_nano_unavailable_kokoro_does_not_change_selection(monkeypatch):
+def test_nano_selection_is_preserved(monkeypatch):
     from tests.windows_tray.test_settings_window import install_fake_tk, make_snapshot
     from piper.windows_tray.controller import SettingsApplyResult
 
@@ -197,12 +195,11 @@ def test_nano_unavailable_kokoro_does_not_change_selection(monkeypatch):
     window = module.SettingsWindow(
         object(),
         make_snapshot(
-            engine="Chatterbox Nano", kokoro_unavailable_reason="Kokoro absent"
+            engine="Chatterbox Nano"
         ),
         lambda *args: SettingsApplyResult(True),
         lambda: None,
         lambda text: None,
-        lambda: True,
     )
     assert window.engine_var.get() == "Chatterbox Nano"
 
@@ -223,7 +220,7 @@ def test_cancel_nano_settings_keeps_old_backend():
     worker = threading.Thread(
         target=lambda: results.append(
             c.apply_settings(
-                "Chatterbox Nano", "alt+backtick", "26", "0", None, "af_heart"
+                "Chatterbox Nano", "alt+backtick", "26", "0", None
             )
         )
     )
@@ -246,7 +243,7 @@ def test_nano_app_startup_is_background_and_keeps_piper_until_ready(
     import threading, time
     from types import SimpleNamespace
     from tests.windows_tray.test_app_foundation import _patch_primary_app
-    from piper.windows_tray.controller import KokoroStartupState
+    from piper.windows_tray.controller import BackendStartupState
 
     events = []
     app, instance, ui, tray = _patch_primary_app(monkeypatch, events)
@@ -285,18 +282,18 @@ def test_nano_app_startup_is_background_and_keeps_piper_until_ready(
         assert entered.wait(2)
         c = controllers[0]
         assert c._backend_manager.current_identity()[0] == "Piper"
-        assert c.kokoro_startup_state is KokoroStartupState.LOADING
+        assert c.backend_startup_state is BackendStartupState.LOADING
         assert preparation_threads[0] != threading.get_ident()
         release.set()
         deadline = time.monotonic() + 2
         while (
-            c.kokoro_startup_state is KokoroStartupState.LOADING
+            c.backend_startup_state is BackendStartupState.LOADING
             and time.monotonic() < deadline
         ):
             if ui.root.callbacks:
                 ui.root.callbacks.pop(0)()
             time.sleep(0.005)
-        assert c.kokoro_startup_state is not KokoroStartupState.LOADING
+        assert c.backend_startup_state is not BackendStartupState.LOADING
         assert c._backend_manager.current_identity()[0] == (
             "Piper" if failure else "Chatterbox Nano"
         )
@@ -329,7 +326,6 @@ def test_nano_settings_window_applies_off_thread_and_finishes_on_ui(monkeypatch)
         apply,
         lambda: None,
         lambda text: None,
-        lambda: True,
     )
     callbacks = []
     window.window.after = lambda delay, callback: callbacks.append(callback)
@@ -363,7 +359,7 @@ def test_newer_nano_apply_supersedes_older_preparation():
     old = threading.Thread(
         target=lambda: outcomes.append(
             c.apply_settings(
-                "Chatterbox Nano", "alt+backtick", "26", "0", None, "af_heart"
+                "Chatterbox Nano", "alt+backtick", "26", "0", None
             )
         )
     )
@@ -371,7 +367,7 @@ def test_newer_nano_apply_supersedes_older_preparation():
     assert entered.wait(2)
     try:
         assert c.apply_settings(
-            "Chatterbox Nano", "alt+backtick", "30", "0", None, "af_heart"
+            "Chatterbox Nano", "alt+backtick", "30", "0", None
         ).applied
     finally:
         release.set()

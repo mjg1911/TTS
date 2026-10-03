@@ -192,9 +192,6 @@ class FakeUi:
         self.statuses = []
         self.settings_apply = None
         self.settings_speak_text = None
-        self.settings_verify_kokoro = None
-        self.kokoro_verification_message = None
-        self.kokoro_verification_update_thread_id = None
 
     def choose_voice_model(self):
         return None
@@ -208,18 +205,14 @@ class FakeUi:
     def show_last_text(self, _text):
         pass
 
-    def open_settings(self, snapshot, on_apply, on_speak_text, on_verify_kokoro):
+    def open_settings(self, snapshot, on_apply, on_speak_text):
         self.events.append(("settings.open", snapshot))
         self.settings_apply = on_apply
         self.settings_speak_text = on_speak_text
-        self.settings_verify_kokoro = on_verify_kokoro
 
     def update_settings_last_text(self, text):
         self.events.append(("settings.last_text", text))
 
-    def update_settings_kokoro_verification(self, message):
-        self.kokoro_verification_update_thread_id = threading.get_ident()
-        self.kokoro_verification_message = message
 
     def prompt_pitch(self, _current):
         return None
@@ -451,11 +444,11 @@ def test_startup_piper_is_collectible_while_mainloop_runs(monkeypatch, recover):
     def mainloop():
         controller = controllers[0]
         # Drive the real controller completion path deterministically.
-        controller.begin_kokoro_startup()
-        controller.complete_kokoro_startup(
-            app.BackendCandidate("Kokoro", "af_heart", object()), ["af_heart"]
+        controller.begin_nano_startup()
+        controller.complete_nano_startup(
+            app.BackendCandidate("Chatterbox Nano", "default", object())
         )
-        assert controller._backend_manager.current_identity() == ("Kokoro", "af_heart")
+        assert controller._backend_manager.current_identity() == ("Chatterbox Nano", "default")
         assert controller.state.voice is None
         assert controller._voice_manager.current() is None
         assert len(references) == 1
@@ -466,31 +459,6 @@ def test_startup_piper_is_collectible_while_mainloop_runs(monkeypatch, recover):
     assert app.run_app([]) == 0
 
 
-def test_bundled_kokoro_deploy_failure_does_not_block_piper_startup(monkeypatch):
-    events = []
-    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
-    controllers = []
-    original_controller = app.Controller
-    monkeypatch.setattr(
-        app,
-        "Controller",
-        lambda *args, **kwargs: controllers.append(
-            original_controller(*args, **kwargs)
-        )
-        or controllers[-1],
-    )
-    ui.root.mainloop = lambda: None
-    monkeypatch.setattr(
-        app,
-        "ensure_bundled_kokoro_payload",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read-only disk")),
-    )
-    monkeypatch.setattr(app, "_bundled_kokoro_root", lambda: Path("bundle"))
-    assert app.run_app([]) == 0
-    assert "voice" in events
-    snapshot = controllers[0].settings_window_snapshot()
-    assert snapshot.kokoro_available is False
-    assert snapshot.kokoro_unavailable_reason is None
 
 
 def test_power_resume_callback_enqueues_system_resume_and_stops(monkeypatch):
@@ -590,57 +558,6 @@ def test_tray_settings_opens_only_when_main_thread_pump_handles_command(monkeypa
     assert app.run_app([]) == 0
 
 
-def test_manual_kokoro_verification_flows_through_main_thread_pump(monkeypatch):
-    events = []
-    app, _instance, ui, tray = _patch_primary_app(monkeypatch, events)
-    verified = threading.Event()
-    tray_enqueue = []
-    worker = RecordingSpeechWorker(events, tray)
-
-    monkeypatch.setattr(
-        app,
-        "_build_speech_worker",
-        lambda _controller, _voice_manager: worker,
-    )
-
-    monkeypatch.setattr(
-        app,
-        "TrayIcon",
-        lambda _path, enqueue: tray_enqueue.append(enqueue) or tray,
-    )
-    monkeypatch.setattr(app, "_kokoro_root", lambda: Path("Kokoro"))
-    monkeypatch.setattr(
-        app,
-        "verify_kokoro_installation",
-        lambda _root: verified.set() or object(),
-    )
-
-    def mainloop():
-        mainloop_thread_id = threading.get_ident()
-        ui.root.callbacks.pop(0)()
-        tray_enqueue[0](Command(CommandKind.CONFIGURE_SETTINGS))
-        ui.root.callbacks.pop(0)()
-        assert ui.settings_verify_kokoro is not None
-        assert ui.settings_verify_kokoro() is True
-        assert verified.wait(timeout=1)
-
-        deadline = time.monotonic() + 1
-        while time.monotonic() < deadline:
-            ui.root.callbacks.pop(0)()
-            if ui.kokoro_verification_message is not None:
-                break
-
-        assert ui.kokoro_verification_message == (
-            "Kokoro files verified successfully."
-        )
-        assert ui.kokoro_verification_update_thread_id == mainloop_thread_id
-
-        tray_enqueue[0](Command(CommandKind.EXIT))
-        ui.root.callbacks.pop(0)()
-
-    ui.root.mainloop = mainloop
-
-    assert app.run_app([]) == 0
 
 
 def test_primary_bootstrap_speaks_text_entered_in_settings(monkeypatch):

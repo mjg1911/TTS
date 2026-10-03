@@ -71,17 +71,17 @@ def make_controller(settings=None):
 def test_piper_selected_startup_state_is_ready():
     controller, *_ = make_controller()
 
-    startup_state = getattr(controller_module, "KokoroStartupState", None)
+    startup_state = getattr(controller_module, "BackendStartupState", None)
     assert startup_state is not None
-    assert controller.kokoro_startup_state is startup_state.READY
+    assert controller.backend_startup_state is startup_state.READY
 
 
-def test_begin_kokoro_startup_marks_loading():
+def test_begin_nano_startup_marks_loading():
     controller, *_ = make_controller()
 
-    controller.begin_kokoro_startup()
+    controller.begin_nano_startup()
 
-    assert controller.kokoro_startup_state is controller_module.KokoroStartupState.LOADING
+    assert controller.backend_startup_state is controller_module.BackendStartupState.LOADING
 
 
 def test_startup_transitions_update_tray_status_and_failure_guidance():
@@ -89,32 +89,32 @@ def test_startup_transitions_update_tray_status_and_failure_guidance():
     tray_statuses = []
     controller.configure_runtime(set_tray_status=tray_statuses.append)
 
-    controller.begin_kokoro_startup()
-    controller.complete_kokoro_startup(
-        BackendCandidate("Kokoro", "af_heart", object()), ["af_heart"]
+    controller.begin_nano_startup()
+    controller.complete_nano_startup(
+        BackendCandidate("Chatterbox Nano", "default", object())
     )
-    controller.begin_kokoro_startup()
-    controller.fail_kokoro_startup("unavailable")
+    controller.begin_nano_startup()
+    controller.fail_nano_startup("unavailable")
 
     assert tray_statuses == [
-        "Kokoro is loading",
-        "Kokoro is ready",
-        "Kokoro is loading",
-        "Kokoro unavailable; Piper is ready",
+        "Chatterbox Nano is loading",
+        "Chatterbox Nano is ready",
+        "Chatterbox Nano is loading",
+        "Chatterbox Nano unavailable; Piper is ready",
     ]
     assert statuses[-1] == (
-        "Kokoro is unavailable. Piper will continue to be used. "
-        "Open Settings and run Verify Kokoro files."
+        "Chatterbox Nano is unavailable. Piper will continue to be used. "
+        "Check the installed Nano payload."
     )
 
 
 def test_startup_result_cannot_commit_after_shutdown_begins():
     controller, _speech, manager, _piper, _statuses = make_controller()
-    candidate = BackendCandidate("Kokoro", "af_heart", object())
-    controller.begin_kokoro_startup()
+    candidate = BackendCandidate("Chatterbox Nano", "default", object())
+    controller.begin_nano_startup()
     controller.handle(Command(CommandKind.EXIT))
 
-    controller.complete_kokoro_startup(candidate, ["af_heart"])
+    controller.complete_nano_startup(candidate)
 
     assert controller.state.shutting_down is True
     assert manager.commits == []
@@ -125,7 +125,7 @@ def test_loading_hotkey_announces_once_and_bypasses_capture():
     controller, speech, _manager, piper, _statuses = make_controller()
     capture_calls = []
     controller.configure_runtime(capture=lambda: capture_calls.append(True))
-    controller.begin_kokoro_startup()
+    controller.begin_nano_startup()
 
     controller.handle(Command(CommandKind.CAPTURE_REQUEST))
     controller.handle(Command(CommandKind.CAPTURE_REQUEST))
@@ -133,23 +133,23 @@ def test_loading_hotkey_announces_once_and_bypasses_capture():
     assert capture_calls == []
     assert len(speech.submitted) == 1
     request = speech.submitted[0]
-    assert request.text == "Kokoro is loading, please wait."
+    assert request.text == "Chatterbox Nano is loading, please wait."
     assert request.purpose is SpeechPurpose.STARTUP_STATUS
     assert request.backend_override is piper
 
 
 def test_capture_enqueued_while_loading_stays_status_request_after_readiness():
     controller, speech, manager, piper, _statuses = make_controller(
-        TraySettings(engine="Kokoro", kokoro_voice="af_heart")
+        TraySettings(engine="Chatterbox Nano")
     )
     capture_jobs = []
     controller.configure_runtime(capture_submit=capture_jobs.append)
-    controller.begin_kokoro_startup()
+    controller.begin_nano_startup()
 
     controller.enqueue(Command(CommandKind.CAPTURE_REQUEST))
     queued_capture = controller.drain_once()
-    candidate = BackendCandidate("Kokoro", "af_heart", object())
-    controller.complete_kokoro_startup(candidate, ["af_heart"])
+    candidate = BackendCandidate("Chatterbox Nano", "default", object())
+    controller.complete_nano_startup(candidate)
     controller.handle(queued_capture)
 
     assert manager.current() is candidate.backend
@@ -162,7 +162,7 @@ def test_capture_enqueued_while_loading_stays_status_request_after_readiness():
 
 def test_loading_hotkey_can_retry_after_pending_status_is_evicted():
     controller, speech, _manager, _piper, _statuses = make_controller()
-    controller.begin_kokoro_startup()
+    controller.begin_nano_startup()
     controller.handle(Command(CommandKind.CAPTURE_REQUEST))
     first_request = speech.submitted[-1]
 
@@ -226,7 +226,7 @@ def test_cancel_auxiliary_eviction_allows_another_loading_hotkey():
     try:
         worker.submit(SpeechRequest(501, "active foreground"))
         assert active_started.wait(timeout=1)
-        controller.begin_kokoro_startup()
+        controller.begin_nano_startup()
         controller.handle(Command(CommandKind.CAPTURE_REQUEST))
         first_request = worker._pending_startup_status
         assert first_request is not None
@@ -247,51 +247,50 @@ def test_cancel_auxiliary_eviction_allows_another_loading_hotkey():
         worker.shutdown()
 
 
-def test_successful_startup_commits_candidate_and_voice_ids():
+def test_successful_startup_commits_candidate():
     controller, _speech, manager, _piper, _statuses = make_controller()
-    candidate = BackendCandidate("Kokoro", "af_heart", object())
+    candidate = BackendCandidate("Chatterbox Nano", "default", object())
 
-    controller.begin_kokoro_startup()
-    controller.complete_kokoro_startup(candidate, ["af_heart", "am_adam"])
+    controller.begin_nano_startup()
+    controller.complete_nano_startup(candidate)
 
-    assert controller.kokoro_startup_state is controller_module.KokoroStartupState.READY
+    assert controller.backend_startup_state is controller_module.BackendStartupState.READY
     assert manager.commits == [candidate]
-    assert controller._kokoro_voice_ids == ("af_heart", "am_adam")
 
 
-def test_hotkey_after_startup_readiness_requests_capture_with_kokoro_active():
+def test_hotkey_after_startup_readiness_requests_capture_with_nano_active():
     controller, _speech, manager, _piper, _statuses = make_controller(
-        TraySettings(engine="Kokoro", kokoro_voice="af_heart")
+        TraySettings(engine="Chatterbox Nano")
     )
-    candidate = BackendCandidate("Kokoro", "af_heart", object())
+    candidate = BackendCandidate("Chatterbox Nano", "default", object())
     capture_jobs = []
     controller.configure_runtime(
         capture=lambda: None,
         capture_submit=capture_jobs.append,
     )
 
-    controller.begin_kokoro_startup()
-    controller.complete_kokoro_startup(candidate, ["af_heart"])
+    controller.begin_nano_startup()
+    controller.complete_nano_startup(candidate)
     controller.handle(Command(CommandKind.CAPTURE_REQUEST))
 
     assert manager.current() is candidate.backend
     assert len(capture_jobs) == 1
-    assert controller.kokoro_startup_state is controller_module.KokoroStartupState.READY
+    assert controller.backend_startup_state is controller_module.BackendStartupState.READY
 
 
-def test_successful_kokoro_startup_clears_live_piper_references():
+def test_successful_nano_startup_clears_live_piper_references():
     controller, _speech, manager, piper, _statuses = make_controller(
-        TraySettings(engine="Kokoro", kokoro_voice="af_heart")
+        TraySettings(engine="Chatterbox Nano")
     )
     voice_manager = VoiceManager(piper, lambda _reference: None)
     controller.configure_runtime(voice_manager=voice_manager)
     controller.set_voice(Path("old.onnx"), piper)
-    candidate = BackendCandidate("Kokoro", "af_heart", object())
+    candidate = BackendCandidate("Chatterbox Nano", "default", object())
 
-    controller.begin_kokoro_startup()
+    controller.begin_nano_startup()
     assert controller._startup_piper_backend is piper
 
-    controller.complete_kokoro_startup(candidate, ["af_heart"])
+    controller.complete_nano_startup(candidate)
 
     assert manager.current() is candidate.backend
     assert controller.state.voice is None
@@ -305,11 +304,11 @@ def test_failed_startup_keeps_piper_and_saved_settings():
     controller, _speech, manager, piper, statuses = make_controller(settings)
     before = controller.state.settings
 
-    controller.begin_kokoro_startup()
-    controller.fail_kokoro_startup("Kokoro model could not be loaded")
+    controller.begin_nano_startup()
+    controller.fail_nano_startup("Chatterbox Nano model could not be loaded")
 
-    assert controller.kokoro_startup_state is controller_module.KokoroStartupState.UNAVAILABLE
+    assert controller.backend_startup_state is controller_module.BackendStartupState.UNAVAILABLE
     assert manager.current() is piper
     assert manager.commits == []
-    assert controller.state.settings is before
-    assert statuses and "Kokoro" in statuses[-1]
+    assert controller.state.settings == before
+    assert statuses and "Chatterbox Nano" in statuses[-1]

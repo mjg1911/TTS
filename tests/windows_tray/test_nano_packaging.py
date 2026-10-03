@@ -4,7 +4,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_nano_package_is_included_in_distribution():
-    assert '"piper.nano_worker"' in (ROOT / 'setup.py').read_text()
+    setup = (ROOT / 'setup.py').read_text()
+    assert '"piper.nano_worker"' in setup
+    assert '"piper.kokoro_worker"' not in setup
 
 
 def test_tray_build_collects_optional_nano_payload():

@@ -156,7 +156,7 @@ def test_completed_startup_override_is_collectible_while_worker_idle():
     )
     try:
         worker.submit(SpeechRequest(
-            1, "Kokoro is loading, please wait.",
+            1, "Chatterbox Nano is loading, please wait.",
             SpeechPurpose.STARTUP_STATUS, backend_override=backend,
         ))
         del backend

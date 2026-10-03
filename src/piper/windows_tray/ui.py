@@ -31,7 +31,6 @@ class TkUi:
         snapshot: SettingsWindowSnapshot,
         on_apply,
         on_speak_text,
-        on_verify_kokoro,
     ) -> None:
         self._assert_main_thread()
         current = self._settings_window
@@ -47,7 +46,6 @@ class TkUi:
             snapshot=snapshot,
             on_apply=on_apply,
             on_speak_text=on_speak_text,
-            on_verify_kokoro=on_verify_kokoro,
             on_close=cleared,
         )
         self._settings_window.focus()
@@ -56,11 +54,6 @@ class TkUi:
         self._assert_main_thread()
         if self._settings_window is not None:
             self._settings_window.update_last_text(text)
-
-    def update_settings_kokoro_verification(self, message: str) -> None:
-        self._assert_main_thread()
-        if self._settings_window is not None:
-            self._settings_window.update_kokoro_verification(message)
 
     def show_status(self, message: str) -> None:
         """Show a runtime message without pausing the command pump."""

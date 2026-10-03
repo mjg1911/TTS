@@ -6,8 +6,8 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from .kokoro_protocol import read_frame, write_frame, decode_audio, validate_synthesize, validate_response_frame
-from .kokoro_process import WindowsKillOnCloseJob, CREATE_NO_WINDOW
+from .worker_protocol import read_frame, write_frame, decode_audio, validate_synthesize, validate_response_frame
+from .worker_process import WindowsKillOnCloseJob, CREATE_NO_WINDOW
 
 class NanoUnavailable(RuntimeError):
     pass
@@ -25,15 +25,27 @@ def launch_nano_worker(installation):
     environment.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1')
     process = subprocess.Popen(command + ['--root', str(installation.root)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0)
     if os.name == 'nt':
+        job = None
         try:
             job = WindowsKillOnCloseJob()
             job.assign(process)
             process._nano_job = job
         except BaseException:
-            process.kill()
-            process.wait()
-            if 'job' in locals():
-                job.close()
+            try:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                try:
+                    process.wait(timeout=1)
+                except Exception:
+                    pass
+            finally:
+                if job is not None:
+                    try:
+                        job.close()
+                    except Exception:
+                        pass
             raise
     return process
 
