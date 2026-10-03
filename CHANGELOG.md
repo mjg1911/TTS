@@ -2,6 +2,7 @@
 
 ## 1.7.0
 
+- Remove Kokoro and migrate saved Kokoro selections to Piper while preserving other preferences
 - Add Japanese phonemizer using OpenJTalk (`pyopenjtalk-plus`) in the new `ja` extra
     - `--data.phoneme_type japanese` for training; `"phoneme_type": "japanese"` in a voice config for synthesis
     - espeak-ng has no kanji coverage (it reads out Unicode character names) and no pitch accent

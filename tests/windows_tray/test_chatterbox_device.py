@@ -16,7 +16,7 @@ def controller(prepare, save=lambda settings: None):
         rollback_rebind=lambda: True,
     )
     instance = Controller(
-        settings=TraySettings(piper_voice="old", kokoro_voice="af_heart"),
+        settings=TraySettings(piper_voice="old"),
         save_settings=save,
         hotkeys=hotkeys,
         backend_manager=manager,
@@ -42,7 +42,7 @@ def test_device_switch_reloads_worker_and_persists():
     saved = []
     c, manager = controller(prepare, saved.append)
     assert c.apply_settings(
-        "Chatterbox Nano", "alt+backtick", "26", "0", None, "af_heart"
+        "Chatterbox Nano", "alt+backtick", "26", "0", None
     ).applied
     assert c.apply_settings(
         "Chatterbox Nano",
@@ -50,7 +50,6 @@ def test_device_switch_reloads_worker_and_persists():
         "26",
         "0",
         None,
-        "af_heart",
         chatterbox_device="cuda",
     ).applied
     assert requested == ["cpu", "cuda"]
@@ -72,7 +71,6 @@ def test_unavailable_cuda_message_preserves_preference():
         "26",
         "0",
         None,
-        "af_heart",
         chatterbox_device="cuda",
     )
     assert result.applied
@@ -90,7 +88,6 @@ def test_invalid_device_does_not_prepare_worker():
         "26",
         "0",
         None,
-        "af_heart",
         chatterbox_device="mps",
     )
     assert not result.applied
@@ -113,7 +110,7 @@ def test_device_save_failure_preserves_working_device():
         lambda e, v: BackendCandidate(e, v, object(), lambda: closed.append(True))
     )
     assert c.apply_settings(
-        "Chatterbox Nano", "alt+backtick", "26", "0", None, "af_heart"
+        "Chatterbox Nano", "alt+backtick", "26", "0", None
     ).applied
     original = manager.current()
     c._save_settings = lambda _: (_ for _ in ()).throw(OSError("disk"))
@@ -123,7 +120,6 @@ def test_device_save_failure_preserves_working_device():
         "26",
         "0",
         None,
-        "af_heart",
         chatterbox_device="cuda",
     )
     assert not result.applied
@@ -183,7 +179,6 @@ def test_gpu_controls_forward_choice_and_keep_fallback_visible(monkeypatch):
         Owner().apply,
         lambda: None,
         lambda _: None,
-        lambda: True,
     )
     assert window.chatterbox_device_var.get() == "cpu"
     window.chatterbox_device_var.set("cuda")

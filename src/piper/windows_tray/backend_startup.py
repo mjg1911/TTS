@@ -1,4 +1,4 @@
-"""Background coordination for initial Kokoro readiness."""
+"""Background coordination for shared speech backend startup."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Callable, Mapping, Optional, Tuple
 
 
-# KokoroWorkerClient.shutdown() waits at most twice for its worker process.
+# Worker shutdown waits at most twice for its process.
 # Leave a small margin for callback scheduling and let cancellation remain bounded.
 CANCEL_WAIT_SECONDS = 5.0
 
@@ -49,13 +49,18 @@ class StartupCancelEvent(Event):
         for callback in callbacks:
             self._dispatch(callback)
 
+    def release_cancel_cleanups(self) -> None:
+        """Drop startup-only cleanups after the caller takes resource ownership."""
+        with self._callbacks_lock:
+            self._callbacks.clear()
+
     def _dispatch(self, callback: Callable[[], None]) -> None:
         def run() -> None:
             try:
                 callback()
             except Exception as error:
                 self._logger.error(
-                    "Kokoro startup cleanup failed stage=cancel_cleanup "
+                    "Backend startup cleanup failed stage=cancel_cleanup "
                     "exception_type=%s",
                     type(error).__name__,
                 )
@@ -64,7 +69,7 @@ class StartupCancelEvent(Event):
                     self._cleanup_in_flight -= 1
                     self._callbacks_changed.notify_all()
 
-        thread = Thread(target=run, name="kokoro-startup-cleanup", daemon=True)
+        thread = Thread(target=run, name="backend-startup-cleanup", daemon=True)
         with self._callbacks_changed:
             self._cleanup_in_flight += 1
             thread.start()
@@ -80,7 +85,7 @@ class StartupCancelEvent(Event):
 
 
 @dataclass(frozen=True)
-class KokoroStartupResult:
+class BackendStartupResult:
     candidate: Optional[object]
     voice_ids: Tuple[str, ...]
     unavailable_reason: Optional[str]
@@ -95,7 +100,7 @@ class KokoroStartupResult:
         )
 
 
-class KokoroStartupCoordinator:
+class BackendStartupCoordinator:
     """Run a startup job off-thread and transfer its result once to the caller.
 
     ``startup_job`` returns ``(candidate, voice_ids)``. It may register active
@@ -108,12 +113,18 @@ class KokoroStartupCoordinator:
         startup_job: Callable,
         logger,
         monotonic: Callable[[], float] = time.monotonic,
+        engine_label: Optional[str] = None,
     ) -> None:
         self._startup_job = startup_job
         self._logger = logger
         self._monotonic = monotonic
+        self._unavailable_reason = (
+            "%s is unavailable during startup." % engine_label
+            if engine_label
+            else "Backend is unavailable during startup."
+        )
         self._cancel_event = StartupCancelEvent(logger)
-        self._results: Queue[KokoroStartupResult] = Queue(maxsize=1)
+        self._results: Queue[BackendStartupResult] = Queue(maxsize=1)
         self._lock = Lock()
         self._started = False
         self._cancelled = False
@@ -121,7 +132,7 @@ class KokoroStartupCoordinator:
         self._current_stage = "initialization"
         self._thread = Thread(
             target=self._run,
-            name="kokoro-startup",
+            name="backend-startup",
             daemon=True,
         )
 
@@ -151,15 +162,18 @@ class KokoroStartupCoordinator:
         )
         if not worker_finished or not cleanup_finished:
             self._logger.error(
-                "Kokoro startup cancellation timed out stage=shutdown"
+                "Backend startup cancellation timed out stage=shutdown"
             )
 
-    def take_result(self) -> Optional[KokoroStartupResult]:
+    def take_result(self) -> Optional[BackendStartupResult]:
         with self._lock:
             try:
-                return self._results.get_nowait()
+                result = self._results.get_nowait()
             except Empty:
                 return None
+            if result.candidate is not None:
+                self._cancel_event.release_cancel_cleanups()
+            return result
 
     def _run(self) -> None:
         candidate = None
@@ -177,7 +191,7 @@ class KokoroStartupCoordinator:
 
         try:
             candidate, voice_ids = self._startup_job(self._cancel_event, record_timing)
-            result = KokoroStartupResult(
+            result = BackendStartupResult(
                 candidate=candidate,
                 voice_ids=tuple(voice_ids),
                 unavailable_reason=None,
@@ -188,14 +202,14 @@ class KokoroStartupCoordinator:
             with self._lock:
                 stage = self._current_stage
             self._logger.error(
-                "Kokoro startup failed stage=%s exception_type=%s",
+                "Backend startup failed stage=%s exception_type=%s",
                 stage,
                 type(error).__name__,
             )
-            result = KokoroStartupResult(
+            result = BackendStartupResult(
                 candidate=None,
                 voice_ids=(),
-                unavailable_reason="Kokoro is unavailable during startup.",
+                unavailable_reason=self._unavailable_reason,
                 stage_durations=self._timing_snapshot(),
             )
 
@@ -229,7 +243,7 @@ class KokoroStartupCoordinator:
                 close()
             except Exception as error:
                 self._logger.error(
-                    "Kokoro startup candidate cleanup failed stage=candidate_cleanup "
+                    "Backend startup candidate cleanup failed stage=candidate_cleanup "
                     "exception_type=%s",
                     type(error).__name__,
                 )

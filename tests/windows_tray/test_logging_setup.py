@@ -87,7 +87,7 @@ def test_exception_logging_omits_error_text(tmp_path: Path) -> None:
     try:
         raise RuntimeError(sentinel)
     except RuntimeError as error:
-        log_exception_safe(logger, "kokoro request failed", error)
+        log_exception_safe(logger, "nano request failed", error)
 
     for handler in logger.handlers:
         handler.flush()

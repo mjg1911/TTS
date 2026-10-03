@@ -5,7 +5,7 @@ import logging
 from queue import Empty, Queue
 from pathlib import Path
 import threading
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, Optional, Tuple
 
 from .capture import CaptureResult, CaptureStatus
 from .backend_manager import BackendCandidate, BackendManager, BackendPreparationError
@@ -60,7 +60,7 @@ class PlaybackState(Enum):
     SHUTTING_DOWN = auto()
 
 
-class KokoroStartupState(Enum):
+class BackendStartupState(Enum):
     LOADING = auto()
     READY = auto()
     UNAVAILABLE = auto()
@@ -82,7 +82,7 @@ class AppState:
     voice_path: Optional[Path] = None
     voice: Optional[object] = None
     settings_recovery_required: bool = False
-    kokoro_startup_state: KokoroStartupState = KokoroStartupState.READY
+    backend_startup_state: BackendStartupState = BackendStartupState.READY
 
     @property
     def auxiliary_active(self) -> bool:
@@ -129,10 +129,6 @@ class SettingsWindowSnapshot:
     engine: str
     piper_voice_path: Optional[Path]
     piper_voice_reference: str
-    kokoro_voice: str
-    kokoro_voices: Sequence[str]
-    kokoro_available: bool
-    kokoro_unavailable_reason: Optional[str]
     hotkey: str
     pitch_percent: float
     speed_percent: float
@@ -145,10 +141,6 @@ class SettingsWindowSnapshot:
         engine: str = "Piper",
         piper_voice_path: Optional[Path] = None,
         piper_voice_reference: str = "",
-        kokoro_voice: str = "af_heart",
-        kokoro_voices: Sequence[str] = (),
-        kokoro_available: bool = False,
-        kokoro_unavailable_reason: Optional[str] = None,
         hotkey: str = "alt+backtick",
         pitch_percent: float = 26.0,
         speed_percent: float = 0.0,
@@ -172,10 +164,6 @@ class SettingsWindowSnapshot:
             "engine": engine,
             "piper_voice_path": piper_voice_path,
             "piper_voice_reference": piper_voice_reference,
-            "kokoro_voice": kokoro_voice,
-            "kokoro_voices": tuple(kokoro_voices),
-            "kokoro_available": kokoro_available,
-            "kokoro_unavailable_reason": kokoro_unavailable_reason,
             "hotkey": hotkey,
             "pitch_percent": pitch_percent,
             "speed_percent": speed_percent,
@@ -252,8 +240,6 @@ class Controller:
         speech_worker: Optional[object] = None,
         voice_manager: Optional[VoiceManager] = None,
         backend_manager: Optional[BackendManager] = None,
-        kokoro_voice_ids: Sequence[str] = (),
-        kokoro_unavailable_reason: Optional[str] = None,
     ) -> None:
         self.state = AppState(settings=settings)
         self._commands = Queue()  # type: Queue[Command]
@@ -302,36 +288,19 @@ class Controller:
         self._capture_replaced_speech = False
         self._voice_manager = voice_manager
         self._backend_manager = backend_manager
-        self._kokoro_voice_ids = tuple(sorted(kokoro_voice_ids))
-        self._kokoro_unavailable_reason = kokoro_unavailable_reason
         self._nano_preparation_context = threading.local()
         self._settings_apply_generation = 0
         self.nano_settings_cancel_event = threading.Event()
-        self._startup_engine = "Kokoro"
+        self._startup_engine = "Chatterbox Nano"
         self._startup_piper_backend = None
         self._startup_status_pending_or_active = False
         self._startup_status_generation: Optional[int] = None
         self._state_lock = threading.RLock()
 
     @property
-    def kokoro_startup_state(self) -> KokoroStartupState:
+    def backend_startup_state(self) -> BackendStartupState:
         with self._state_lock:
-            return self.state.kokoro_startup_state
-
-    def set_kokoro_voice_ids(self, voice_ids: Sequence[str]) -> None:
-        with self._state_lock:
-            self._kokoro_voice_ids = tuple(sorted(voice_ids))
-
-    def begin_nano_startup(self) -> None:
-        self.begin_kokoro_startup("Chatterbox Nano")
-
-    def complete_nano_startup(self, candidate: object) -> None:
-        self.complete_kokoro_startup(candidate, ())
-        if (
-            self._backend_manager
-            and self._backend_manager.current() is candidate.backend
-        ):
-            self._notify_nano_device(candidate.backend)
+            return self.state.backend_startup_state
 
     def _notify_nano_device(self, backend) -> None:
         message = getattr(backend, "device_message", "")
@@ -341,15 +310,11 @@ class Controller:
             except (OSError, RuntimeError):
                 self._log_error(message)
 
-    def fail_nano_startup(self, reason: str) -> None:
-        self.fail_kokoro_startup(reason)
-
-    def begin_kokoro_startup(self, engine: str = "Kokoro") -> None:
+    def begin_nano_startup(self) -> None:
         with self._state_lock:
             if self.state.shutting_down:
                 return
-            self._startup_engine = engine
-            self.state.kokoro_startup_state = KokoroStartupState.LOADING
+            self.state.backend_startup_state = BackendStartupState.LOADING
             self._startup_status_pending_or_active = False
             self._startup_status_generation = None
             self._startup_piper_backend = (
@@ -359,13 +324,11 @@ class Controller:
             )
             self._set_tray_status("%s is loading" % self._startup_engine)
 
-    def complete_kokoro_startup(
-        self, candidate: object, voice_ids: Sequence[str]
-    ) -> None:
+    def complete_nano_startup(self, candidate: object) -> None:
         with self._state_lock:
             if (
                 self.state.shutting_down
-                or self.state.kokoro_startup_state is not KokoroStartupState.LOADING
+                or self.state.backend_startup_state is not BackendStartupState.LOADING
             ):
                 if self._backend_manager is not None:
                     try:
@@ -383,36 +346,29 @@ class Controller:
                         self._backend_manager.discard(candidate)
                     except Exception:
                         pass
-                self.fail_kokoro_startup(str(error))
+                self.fail_nano_startup(str(error))
                 return
             self.clear_voice_backend()
             self._startup_piper_backend = None
-            if self._startup_engine == "Kokoro":
-                self._kokoro_voice_ids = tuple(sorted(voice_ids))
-                self._kokoro_unavailable_reason = None
             self._startup_status_pending_or_active = False
             self._startup_status_generation = None
-            self.state.kokoro_startup_state = KokoroStartupState.READY
+            self.state.backend_startup_state = BackendStartupState.READY
             self._set_tray_status("%s is ready" % self._startup_engine)
+            self._notify_nano_device(candidate.backend)
 
-    def fail_kokoro_startup(self, reason: str) -> None:
+    def fail_nano_startup(self, reason: str) -> None:
         with self._state_lock:
             if (
                 self.state.shutting_down
-                or self.state.kokoro_startup_state is not KokoroStartupState.LOADING
+                or self.state.backend_startup_state is not BackendStartupState.LOADING
             ):
                 return
-            if (
-                self._startup_engine == "Chatterbox Nano"
-                and self.state.settings is not None
-            ):
+            if self.state.settings is not None:
                 self.state.settings = replace(self.state.settings, engine="Piper")
-            else:
-                self._kokoro_unavailable_reason = reason
             self._startup_piper_backend = None
             self._startup_status_pending_or_active = False
             self._startup_status_generation = None
-            self.state.kokoro_startup_state = KokoroStartupState.UNAVAILABLE
+            self.state.backend_startup_state = BackendStartupState.UNAVAILABLE
             self._set_tray_status(
                 "%s unavailable; Piper is ready" % self._startup_engine
             )
@@ -427,8 +383,6 @@ class Controller:
             else:
                 status_message = (
                     "Chatterbox Nano is unavailable. Piper will continue to be used. Check the installed Nano payload."
-                    if self._startup_engine == "Chatterbox Nano"
-                    else "Kokoro is unavailable. Piper will continue to be used. Open Settings and run Verify Kokoro files."
                 )
             self._show_status(
                 status_message
@@ -566,7 +520,7 @@ class Controller:
                 command.kind is CommandKind.CAPTURE_REQUEST
                 and command.capture_is_startup_status is None
             ):
-                loading = self.state.kokoro_startup_state is KokoroStartupState.LOADING
+                loading = self.state.backend_startup_state is BackendStartupState.LOADING
                 command = replace(
                     command,
                     capture_is_startup_status=loading,
@@ -721,10 +675,10 @@ class Controller:
             capture_status_was_pinned = capture_is_startup_status is True
             if capture_is_startup_status is None:
                 capture_is_startup_status = (
-                    self.state.kokoro_startup_state is KokoroStartupState.LOADING
+                    self.state.backend_startup_state is BackendStartupState.LOADING
                 )
             if capture_is_startup_status:
-                self._announce_kokoro_loading(
+                self._announce_backend_loading(
                     getattr(command, "capture_status_backend", None),
                     backend_is_pinned=capture_status_was_pinned,
                 )
@@ -1132,7 +1086,7 @@ class Controller:
             )
         )
 
-    def _announce_kokoro_loading(
+    def _announce_backend_loading(
         self, backend_override=None, *, backend_is_pinned: bool = False
     ) -> None:
         if (
@@ -1244,10 +1198,6 @@ class Controller:
                 engine=settings.engine,
                 piper_voice_path=self.state.voice_path,
                 piper_voice_reference=settings.piper_voice,
-                kokoro_voice=settings.kokoro_voice,
-                kokoro_voices=self._kokoro_voice_ids,
-                kokoro_available=bool(self._kokoro_voice_ids),
-                kokoro_unavailable_reason=self._kokoro_unavailable_reason,
                 hotkey=settings.hotkey,
                 pitch_percent=settings.pitch_percent,
                 speed_percent=settings.speed_percent,
@@ -1290,7 +1240,6 @@ class Controller:
         pitch_text,
         speed_text,
         piper_voice_path,
-        kokoro_voice,
         sentence_pause_text=None,
         piper_sentence_streaming_enabled=None,
         *,
@@ -1349,7 +1298,7 @@ class Controller:
                     return SettingsApplyResult(
                         False, (("engine", "Piper is shutting down."),)
                     )
-                if self.state.kokoro_startup_state is KokoroStartupState.LOADING:
+                if self.state.backend_startup_state is BackendStartupState.LOADING:
                     return SettingsApplyResult(
                         False,
                         (("engine", "%s is still starting." % self._startup_engine),),
@@ -1430,7 +1379,6 @@ class Controller:
                 pitch_text,
                 speed_text,
                 piper_voice_path,
-                kokoro_voice,
                 sentence_pause_text,
                 piper_sentence_streaming_enabled,
                 candidate,
@@ -1451,7 +1399,6 @@ class Controller:
         pitch_text: str,
         speed_text: str,
         piper_voice_path: Optional[Path],
-        kokoro_voice: str,
         sentence_pause_text: Optional[str] = None,
         piper_sentence_streaming_enabled: Optional[bool] = None,
         prepared_candidate: Optional[BackendCandidate] = None,
@@ -1486,11 +1433,10 @@ class Controller:
             )
         if not isinstance(engine, str) or engine not in {
             "Piper",
-            "Kokoro",
             "Chatterbox Nano",
         }:
             return SettingsApplyResult(
-                False, (("engine", "Choose Piper, Kokoro or Chatterbox Nano."),)
+                False, (("engine", "Choose Piper or Chatterbox Nano."),)
             )
 
         (
@@ -1529,20 +1475,6 @@ class Controller:
                     (("general", "Piper settings are not available."),),
                 )
 
-            if (
-                engine == "Kokoro"
-                and self.state.kokoro_startup_state is KokoroStartupState.LOADING
-            ):
-                return SettingsApplyResult(
-                    False,
-                    (
-                        (
-                            "engine",
-                            "Kokoro is still starting. Wait for startup to finish before applying Kokoro settings.",
-                        ),
-                    ),
-                )
-
             resolved_path: Optional[Path] = None
             piper_reference = current.piper_voice
             if engine == "Piper" or piper_voice_path is not None:
@@ -1568,20 +1500,10 @@ class Controller:
                     )
 
                 piper_reference = str(resolved_path)
-            if (
-                engine == "Kokoro"
-                and self._kokoro_voice_ids
-                and kokoro_voice not in self._kokoro_voice_ids
-            ):
-                return SettingsApplyResult(
-                    False,
-                    (("kokoro_voice", "The selected Kokoro voice is not installed."),),
-                )
-
             active_voice = (
                 piper_reference
                 if engine == "Piper"
-                else "default" if engine == "Chatterbox Nano" else kokoro_voice
+                else "default"
             )
             desired_identity = (engine, active_voice)
             current_identity = self._backend_manager.current_identity()
@@ -1648,7 +1570,6 @@ class Controller:
                     ),
                     engine=engine,
                     piper_voice=piper_reference,
-                    kokoro_voice=kokoro_voice,
                     hotkey=candidate_hotkey.canonical,
                     pitch_percent=pitch_percent,
                     speed_percent=speed_percent,
@@ -1728,13 +1649,13 @@ class Controller:
                         self.set_voice(Path(candidate.voice_id), candidate.backend)
                 else:
                     self.clear_voice_backend()
-                if self.state.kokoro_startup_state is KokoroStartupState.LOADING:
-                    self.state.kokoro_startup_state = KokoroStartupState.READY
+                if self.state.backend_startup_state is BackendStartupState.LOADING:
+                    self.state.backend_startup_state = BackendStartupState.READY
                     self._startup_piper_backend = None
                     self._startup_status_pending_or_active = False
                     self._startup_status_generation = None
                     self._set_tray_status(
-                        "Piper is ready" if engine == "Piper" else "Kokoro is ready"
+                        "%s is ready" % engine
                     )
                 return SettingsApplyResult(
                     True, snapshot=self.settings_window_snapshot()

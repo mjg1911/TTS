@@ -54,11 +54,93 @@ def test_v1_settings_migrate_to_v2_without_corrupt_rename(tmp_path: Path) -> Non
     assert result.settings.schema_version == 2
     assert result.settings.engine == "Piper"
     assert result.settings.piper_voice == "en_GB-alba-medium"
-    assert result.settings.kokoro_voice == "af_heart"
+    assert result.migration_notice is None
     assert not path.with_name("settings.json.corrupt").exists()
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["schema_version"] == 2
     assert "voice" not in saved
+    assert "kokoro_voice" not in saved
+
+
+def test_kokoro_settings_migrate_to_piper_and_preserve_preferences(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    original = {
+        "schema_version": 2,
+        "engine": "Kokoro",
+        "piper_voice": "en_US-lessac-medium",
+        "kokoro_voice": ["obsolete", "and ignored"],
+        "hotkey": "ctrl+shift+p",
+        "log_level": "DEBUG",
+        "error_sounds": True,
+        "codex_enabled": True,
+        "browser_chatgpt_enabled": True,
+        "pitch_percent": -11.5,
+        "speed_percent": 22,
+        "sentence_pause_ms": 350,
+        "piper_sentence_streaming_enabled": False,
+        "chatterbox_device": "cuda",
+        "chatterbox_custom_voice_enabled": True,
+        "chatterbox_reference_clip": "C:/Piper/reference.wav",
+    }
+    path.write_text(json.dumps(original), encoding="utf-8")
+
+    result = load_settings(path)
+
+    assert result.source == "loaded"
+    assert result.settings.engine == "Piper"
+    assert result.settings.piper_voice == "en_US-lessac-medium"
+    assert result.settings.hotkey == "ctrl+shift+p"
+    assert result.settings.log_level == "DEBUG"
+    assert result.settings.error_sounds is True
+    assert result.settings.codex_enabled is True
+    assert result.settings.browser_chatgpt_enabled is True
+    assert result.settings.pitch_percent == -11.5
+    assert result.settings.speed_percent == 22
+    assert result.settings.sentence_pause_ms == 350
+    assert result.settings.piper_sentence_streaming_enabled is False
+    assert result.settings.chatterbox_device == "cuda"
+    assert result.settings.chatterbox_custom_voice_enabled is True
+    assert result.settings.chatterbox_reference_clip == "C:/Piper/reference.wav"
+    assert result.migration_notice == (
+        "Kokoro is no longer available. Piper has been selected."
+    )
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["schema_version"] == 2
+    assert saved["engine"] == "Piper"
+    assert "kokoro_voice" not in saved
+    assert not list(tmp_path.glob("settings.json.corrupt*"))
+
+
+def test_kokoro_migration_save_failure_keeps_valid_settings(tmp_path: Path, monkeypatch):
+    path = tmp_path / "settings.json"
+    original = json.dumps(
+        {
+            "schema_version": 2,
+            "engine": "Kokoro",
+            "piper_voice": "en_US-lessac-medium",
+            "hotkey": "ctrl+shift+p",
+            "pitch_percent": 12,
+        }
+    )
+    path.write_text(original, encoding="utf-8")
+
+    def fail_replace(*_args, **_kwargs):
+        raise OSError("read-only settings directory")
+
+    monkeypatch.setattr("piper.windows_tray.settings.os.replace", fail_replace)
+
+    result = load_settings(path)
+
+    assert result.source == "loaded"
+    assert result.settings.engine == "Piper"
+    assert result.settings.piper_voice == "en_US-lessac-medium"
+    assert result.settings.pitch_percent == 12
+    assert result.migration_notice == (
+        "Kokoro is no longer available. Piper has been selected."
+    )
+    assert path.read_text(encoding="utf-8") == original
+    assert not list(tmp_path.glob("settings.json.corrupt*"))
+    assert list(tmp_path.iterdir()) == [path]
 
 
 def test_future_schema_is_still_corrupt(tmp_path: Path) -> None:

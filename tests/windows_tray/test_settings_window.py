@@ -204,7 +204,6 @@ def test_window_initializes_staged_settings_from_snapshot(monkeypatch):
         on_apply=lambda *_args: SettingsApplyResult(True),
         on_close=lambda: None,
         on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: True,
     )
 
     assert window.hotkey_var.get() == "alt+backtick"
@@ -214,6 +213,9 @@ def test_window_initializes_staged_settings_from_snapshot(monkeypatch):
     assert window.displayed_voice_path == Path("C:/voices/alba.onnx")
     assert window.last_text_value == "hello world"
     assert window.last_text.configured["state"] == "normal"
+    assert window.engine_combo.kwargs["values"] == ("Piper", "Chatterbox Nano")
+    assert not hasattr(window, "kokoro_voice_var")
+    assert all("Kokoro" not in frame.text for frame in built_frames)
 
 
 def test_window_does_not_become_transient_of_a_withdrawn_root(monkeypatch):
@@ -229,7 +231,6 @@ def test_window_does_not_become_transient_of_a_withdrawn_root(monkeypatch):
         on_apply=lambda *_args: SettingsApplyResult(True),
         on_close=lambda: None,
         on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: True,
     )
 
     assert not hasattr(window.window, "transient_parent")
@@ -250,7 +251,6 @@ def test_apply_failure_keeps_window_open_and_renders_field_errors(monkeypatch):
         on_apply=lambda *_args: result,
         on_close=lambda: None,
         on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: True,
     )
 
     window._apply()
@@ -272,7 +272,6 @@ def test_apply_failure_renders_voice_error_in_voice_section(monkeypatch):
         on_apply=lambda *_args: result,
         on_close=lambda: None,
         on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: True,
     )
 
     window._apply()
@@ -294,7 +293,6 @@ def test_apply_success_closes_window(monkeypatch):
         on_apply=lambda *args: apply_calls.append(args) or SettingsApplyResult(True),
         on_close=lambda: None,
         on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: True,
     )
     window.hotkey_var.set("ctrl+q")
     window.pitch_var.set("-10")
@@ -304,7 +302,7 @@ def test_apply_success_closes_window(monkeypatch):
     window._apply()
 
     assert apply_calls == [
-        ("Piper", "ctrl+q", "-10", "25", Path("new.onnx"), "af_heart", "180", True)
+        ("Piper", "ctrl+q", "-10", "25", Path("new.onnx"), "180", True)
     ]
     assert window.window.exists is False
 
@@ -318,7 +316,6 @@ def test_cancel_discards_local_edits_without_calling_apply(monkeypatch):
         on_apply=lambda *args: apply_calls.append(args),
         on_close=lambda: None,
         on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: True,
     )
     window.hotkey_var.set("ctrl+q")
     window.pending_voice_path = Path("new.onnx")
@@ -338,7 +335,6 @@ def test_update_last_text_keeps_text_editable_and_refreshes_value(monkeypatch):
         on_apply=lambda *_args: SettingsApplyResult(True),
         on_close=lambda: None,
         on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: True,
     )
 
     window.update_last_text("captured\ntext")
@@ -364,7 +360,6 @@ def test_choose_voice_only_stages_selected_path(monkeypatch):
         on_apply=lambda *_args: SettingsApplyResult(True),
         on_close=lambda: None,
         on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: True,
     )
 
     window._choose_voice()
@@ -383,7 +378,6 @@ def test_speak_text_forwards_exact_multiline_contents(monkeypatch):
         on_apply=lambda *_args: SettingsApplyResult(True),
         on_close=lambda: None,
         on_speak_text=spoken.append,
-        on_verify_kokoro=lambda: True,
     )
     window.last_text.value = "First line\nSecond line  "
 
@@ -401,71 +395,12 @@ def test_speak_text_ignores_whitespace_only_contents(monkeypatch):
         on_apply=lambda *_args: SettingsApplyResult(True),
         on_close=lambda: None,
         on_speak_text=spoken.append,
-        on_verify_kokoro=lambda: True,
     )
     window.last_text.value = " \n\t"
 
     window._speak_text()
 
     assert spoken == []
-
-
-def test_verify_kokoro_button_starts_verification_and_disables_itself(monkeypatch):
-    settings_window = install_fake_tk(monkeypatch, [])
-    calls = []
-    window = settings_window.SettingsWindow(
-        parent=object(),
-        snapshot=make_snapshot(),
-        on_apply=lambda *_args: SettingsApplyResult(True),
-        on_close=lambda: None,
-        on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: calls.append("verify") or True,
-    )
-
-    window._verify_kokoro()
-
-    assert calls == ["verify"]
-    assert window.kokoro_verify_status_var.get() == "Verifying Kokoro files..."
-    assert window.kokoro_verify_button.configured["state"] == "disabled"
-
-
-def test_verify_kokoro_duplicate_start_restores_button(monkeypatch):
-    settings_window = install_fake_tk(monkeypatch, [])
-    window = settings_window.SettingsWindow(
-        parent=object(),
-        snapshot=make_snapshot(),
-        on_apply=lambda *_args: SettingsApplyResult(True),
-        on_close=lambda: None,
-        on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: False,
-    )
-
-    window._verify_kokoro()
-
-    assert window.kokoro_verify_status_var.get() == (
-        "Kokoro verification is already running."
-    )
-    assert window.kokoro_verify_button.configured["state"] == "normal"
-
-
-def test_verification_result_reenables_button(monkeypatch):
-    settings_window = install_fake_tk(monkeypatch, [])
-    window = settings_window.SettingsWindow(
-        parent=object(),
-        snapshot=make_snapshot(),
-        on_apply=lambda *_args: SettingsApplyResult(True),
-        on_close=lambda: None,
-        on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: True,
-    )
-
-    window._verify_kokoro()
-    window.update_kokoro_verification("Kokoro files verified successfully.")
-
-    assert window.kokoro_verify_status_var.get() == (
-        "Kokoro files verified successfully."
-    )
-    assert window.kokoro_verify_button.configured["state"] == "normal"
 
 
 def test_tk_ui_repeated_open_focuses_existing_window(monkeypatch):
@@ -500,14 +435,12 @@ def test_tk_ui_repeated_open_focuses_existing_window(monkeypatch):
         make_snapshot(),
         lambda *_args: SettingsApplyResult(True),
         speak_text,
-        lambda: True,
     )
     first = created[0]
     ui.open_settings(
         make_snapshot(),
         lambda *_args: SettingsApplyResult(True),
         lambda _text: None,
-        lambda: True,
     )
 
     assert len(created) == 1
@@ -539,7 +472,6 @@ def test_tk_ui_first_open_makes_settings_window_visible(monkeypatch):
         make_snapshot(),
         lambda *_args: SettingsApplyResult(True),
         lambda _text: None,
-        lambda: True,
     )
 
     assert len(created) == 1
@@ -577,7 +509,6 @@ def test_tk_ui_reopens_after_close_and_forwards_last_text(monkeypatch):
         make_snapshot(),
         lambda *_args: SettingsApplyResult(True),
         lambda _text: None,
-        lambda: True,
     )
     ui.update_settings_last_text("new text")
     first = created[0]
@@ -586,7 +517,6 @@ def test_tk_ui_reopens_after_close_and_forwards_last_text(monkeypatch):
         make_snapshot(),
         lambda *_args: SettingsApplyResult(True),
         lambda _text: None,
-        lambda: True,
     )
 
     assert first.updated == "new text"

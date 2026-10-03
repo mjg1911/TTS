@@ -17,7 +17,6 @@ def test_reference_import_remains_accessible_in_small_settings_window(tk_root):
         on_apply=lambda *_args, **_kwargs: SettingsApplyResult(False),
         on_close=lambda: None,
         on_speak_text=lambda _text: None,
-        on_verify_kokoro=lambda: True,
     )
     try:
         window.window.geometry("900x680")

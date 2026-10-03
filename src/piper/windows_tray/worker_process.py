@@ -1,11 +1,10 @@
-"""Windows process helpers for binding the Kokoro worker to the tray."""
+"""Windows process helpers shared by the tray's speech workers."""
 
 from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
 import os
-import subprocess
 from typing import Callable, Optional
 
 
@@ -52,7 +51,7 @@ class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
 
 def _win32_job_functions():
     if os.name != "nt":
-        raise OSError("Kokoro worker process binding is Windows-only")
+        raise OSError("Speech worker process binding is Windows-only")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
     def create_job():
@@ -112,31 +111,3 @@ class WindowsKillOnCloseJob:
             handle = self._handle
             self._handle = None
             self._close_handle(handle)
-
-
-def launch_kokoro_worker(
-    config,
-    *,
-    popen=subprocess.Popen,
-    job_factory=WindowsKillOnCloseJob,
-):
-    process = popen(
-        [str(config.executable)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=CREATE_NO_WINDOW,
-    )
-    job = None
-    try:
-        job = job_factory()
-        job.assign(process)
-    except BaseException:
-        try:
-            process.kill()
-        finally:
-            if job is not None:
-                job.close()
-        raise
-    process._piper_kokoro_job = job
-    return process

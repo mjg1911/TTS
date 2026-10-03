@@ -155,11 +155,11 @@ def test_set_status_updates_title_and_refreshes_menu(monkeypatch, tmp_path: Path
 
     if when == "after_start":
         tray.start()
-    tray.set_status("Kokoro is loading")
+    tray.set_status("Chatterbox Nano is loading")
 
     if when == "before_start":
         tray.start()
-    assert icon["title"] == "Kokoro is loading"
+    assert icon["title"] == "Chatterbox Nano is loading"
     assert icon["updates"] == (1 if when == "after_start" else 0)
 
 
@@ -169,7 +169,7 @@ def test_set_status_after_start_refreshes_menu_and_uses_unavailable_title(monkey
     tray = tray_icon.TrayIcon(tmp_path / "icon.png", lambda _command: None)
     tray.start()
 
-    tray.set_status("Kokoro unavailable; Piper is ready")
+    tray.set_status("Chatterbox Nano unavailable; Piper is ready")
 
-    assert icon["title"] == "Kokoro unavailable; Piper is ready"
+    assert icon["title"] == "Chatterbox Nano unavailable; Piper is ready"
     assert icon["updates"] == 1

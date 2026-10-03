@@ -1,4 +1,4 @@
-"""Private framed protocol shared by the tray and Kokoro helper."""
+"""Private framed protocol shared by the tray and speech workers."""
 
 from __future__ import annotations
 
@@ -8,24 +8,11 @@ import json
 import struct
 from typing import BinaryIO, Dict
 
-PROTOCOL_VERSION = 1
 MAX_TEXT_BYTES = 1024 * 1024
 MAX_AUDIO_BYTES = 1024 * 1024
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 
 _HEADER = struct.Struct(">I")
-_MESSAGE_TYPES = {
-    "hello",
-    "initialize",
-    "ready",
-    "synthesize",
-    "audio",
-    "response_end",
-    "response_error",
-    "response_cancelled",
-    "cancel",
-    "shutdown",
-}
 
 
 class ProtocolError(RuntimeError):
@@ -113,17 +100,6 @@ def _require_type(message: Dict[str, object], expected: str) -> None:
         raise ProtocolError("message type must be %s" % expected)
 
 
-def validate_hello(message: Dict[str, object]) -> None:
-    """Validate the worker's compatibility handshake."""
-    _require_type(message, "hello")
-    if message.get("protocol_version") != PROTOCOL_VERSION:
-        raise ProtocolError("unsupported protocol version")
-    for field in ("worker_version", "kokoro_version"):
-        value = message.get(field)
-        if not isinstance(value, str) or not value.strip():
-            raise ProtocolError("%s must be non-empty" % field)
-
-
 def validate_initialize(message: Dict[str, object]) -> None:
     """Validate the manifest-only worker initialization message."""
     if set(message) != {"type", "manifest_sha256"}:
@@ -151,9 +127,9 @@ def validate_synthesize(message: Dict[str, object]) -> None:
 
 
 def validate_response_frame(message: Dict[str, object]) -> None:
-    """Validate request-scoped worker responses and cancellation messages."""
+    """Validate a request-scoped response from the Nano worker."""
     message_type = message.get("type")
-    if message_type not in {"audio", "response_end", "response_error", "response_cancelled", "cancel"}:
+    if message_type not in {"audio", "response_end", "response_error"}:
         raise ProtocolError("unsupported response message type")
     _positive_request_id(message.get("request_id"))
     if message_type == "audio":
@@ -162,18 +138,3 @@ def validate_response_frame(message: Dict[str, object]) -> None:
         category = message.get("category")
         if category is not None and (not isinstance(category, str) or not category.strip()):
             raise ProtocolError("response error category must be non-empty text")
-
-
-def validate_message(message: Dict[str, object]) -> None:
-    """Dispatch semantic validation for any supported protocol message."""
-    message_type = message.get("type")
-    if message_type not in _MESSAGE_TYPES:
-        raise ProtocolError("unsupported message type")
-    if message_type == "hello":
-        validate_hello(message)
-    elif message_type == "initialize":
-        validate_initialize(message)
-    elif message_type == "synthesize":
-        validate_synthesize(message)
-    elif message_type in {"audio", "response_end", "response_error", "response_cancelled", "cancel"}:
-        validate_response_frame(message)

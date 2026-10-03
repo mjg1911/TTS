@@ -24,21 +24,6 @@ if ($null -eq $Bridge) {
 
 python script/make_piper_tray_icon.py
 
-$requireKokoro = $env:PIPER_REQUIRE_KOKORO_PAYLOAD -eq "1"
-$kokoroInputs = @(
-    $env:PIPER_KOKORO_CONFIG,
-    $env:PIPER_KOKORO_MODEL,
-    $env:PIPER_KOKORO_AF_HEART
-)
-$hasKokoroInputs = @($kokoroInputs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq $kokoroInputs.Count
-if ($requireKokoro -and -not $hasKokoroInputs) {
-    throw "release build requires local Kokoro asset paths"
-}
-if ($hasKokoroInputs) {
-    & "$Root/script/build_kokoro_worker.ps1"
-    & "$Root/script/stage_kokoro_payload.ps1"
-    $env:PIPER_KOKORO_PAYLOAD_DIR = (Resolve-Path "build/kokoro-payload").Path
-}
 $requireNano = $env:PIPER_REQUIRE_NANO_PAYLOAD -eq "1"
 $hasNanoModel = -not [string]::IsNullOrWhiteSpace($env:PIPER_NANO_MODEL_DIR)
 if ($requireNano -and -not $hasNanoModel -and
@@ -55,9 +40,6 @@ if ($LASTEXITCODE -ne 0) { throw "Piper Tray packaging failed" }
 
 if (-not (Test-Path $Exe -PathType Leaf)) { throw "Expected executable was not created: $Exe" }
 if (-not (Test-Path (Join-Path $DistDir "_internal") -PathType Container)) { throw "PyInstaller support directory missing" }
-if ($requireKokoro -and -not (Test-Path (Join-Path $DistDir "_internal\kokoro_payload\manifest.json") -PathType Leaf)) {
-    throw "Required Kokoro payload was not collected"
-}
 $File = Get-Item $Exe
 if ($requireNano -and -not (Test-Path (Join-Path $DistDir "_internal\nano_payload\manifest.json") -PathType Leaf)) {
     throw "Required Chatterbox Nano payload was not collected"

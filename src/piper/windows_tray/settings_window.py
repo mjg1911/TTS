@@ -53,14 +53,12 @@ class SettingsWindow:
                 str,
                 Optional[Path],
                 str,
-                str,
                 bool,
             ],
             SettingsApplyResult,
         ],
         on_close: Callable[[], None],
         on_speak_text: Callable[[str], None],
-        on_verify_kokoro: Callable[[], bool],
     ) -> None:
         self.window = tk.Toplevel(parent)
         self.window.title("Piper Settings")
@@ -70,7 +68,6 @@ class SettingsWindow:
         self._on_apply = on_apply
         self._on_close = on_close
         self._on_speak_text = on_speak_text
-        self._on_verify_kokoro = on_verify_kokoro
         self._closed = False
         self.pending_voice_path: Optional[Path] = None
         self.displayed_voice_path = snapshot.piper_voice_path
@@ -86,7 +83,6 @@ class SettingsWindow:
         self.reference_clip_path_var = tk.StringVar(value="")
         self.reference_clip_status_var = tk.StringVar(value="")
         self._reference_import_pending = False
-        self.kokoro_voice_var = tk.StringVar(value=snapshot.kokoro_voice)
         self.hotkey_var = tk.StringVar(value=snapshot.hotkey)
         self.pitch_var = tk.StringVar(value=f"{snapshot.pitch_percent:g}")
         self.speed_var = tk.StringVar(value=f"{snapshot.speed_percent:g}")
@@ -95,7 +91,6 @@ class SettingsWindow:
             value=("true" if snapshot.piper_sentence_streaming_enabled else "false")
         )
         self.engine_status_var = tk.StringVar(value=snapshot.chatterbox_device_message)
-        self.kokoro_verify_status_var = tk.StringVar(value="")
         self._error_vars = {
             key: tk.StringVar(value="")
             for key in (
@@ -107,7 +102,6 @@ class SettingsWindow:
                 "piper_sentence_streaming",
                 "reference_clip",
                 "piper_voice",
-                "kokoro_voice",
                 "voice",
                 "general",
             )
@@ -189,7 +183,7 @@ class SettingsWindow:
         self.engine_combo = ttk.Combobox(
             voice,
             textvariable=self.engine_var,
-            values=("Piper", "Kokoro", "Chatterbox Nano"),
+            values=("Piper", "Chatterbox Nano"),
             state="readonly",
             style="Piper.TCombobox",
             font=("Segoe UI", 10),
@@ -302,28 +296,6 @@ class SettingsWindow:
             self.piper_voice_frame, "piper_voice", 4
         )
         self._set_voice_label(snapshot.piper_voice_path)
-        self.kokoro_voice_frame = ttk.Frame(voice, style="Panel.Piper.TFrame")
-        self.kokoro_voice_frame.columnconfigure(0, weight=1)
-        ttk.Label(
-            self.kokoro_voice_frame, text="Kokoro voice", style="Muted.Piper.TLabel"
-        ).grid(row=0, column=0, sticky="w", pady=(10, 5))
-        self.kokoro_voice_combo = ttk.Combobox(
-            self.kokoro_voice_frame,
-            textvariable=self.kokoro_voice_var,
-            values=tuple(snapshot.kokoro_voices),
-            state="readonly",
-            style="Piper.TCombobox",
-            font=("Segoe UI", 10),
-        )
-        self.kokoro_voice_combo.grid(row=1, column=0, sticky="ew")
-        self._error_label(self.kokoro_voice_frame, "kokoro_voice", 2)
-        if (
-            snapshot.engine == "Kokoro"
-            and not snapshot.kokoro_available
-            and snapshot.kokoro_unavailable_reason
-        ):
-            self.engine_status_var.set(snapshot.kokoro_unavailable_reason)
-            self.engine_var.set("Piper")
         self._refresh_voice_controls()
 
         speech = self._panel(self.controls, "Speech tuning", 1)
@@ -383,27 +355,6 @@ class SettingsWindow:
             wraplength=310,
         ).grid(row=2, column=0, sticky="w", pady=(6, 0))
         self._error_label(shortcut, "hotkey", 3)
-
-        maintenance = self._panel(self.controls, "Kokoro maintenance", 3)
-        ttk.Label(
-            maintenance,
-            text="Check installed model and runtime files. This may take a few minutes.",
-            style="Muted.Piper.TLabel",
-            wraplength=310,
-        ).grid(row=1, column=0, sticky="w", pady=(8, 10))
-        self.kokoro_verify_button = ttk.Button(
-            maintenance,
-            text="Verify Kokoro files",
-            command=self._verify_kokoro,
-            style="Piper.TButton",
-        )
-        self.kokoro_verify_button.grid(row=2, column=0, sticky="w")
-        ttk.Label(
-            maintenance,
-            textvariable=self.kokoro_verify_status_var,
-            style="Muted.Piper.TLabel",
-            wraplength=310,
-        ).grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
         preview = ttk.Frame(content, style="Panel.Piper.TFrame", padding=20)
         preview.grid(row=0, column=1, sticky="nsew")
@@ -533,12 +484,10 @@ class SettingsWindow:
         label.configure(wraplength=130)
 
     def _refresh_voice_controls(self) -> None:
-        kokoro = self.engine_var.get() == "Kokoro"
         self._show_frame(self.piper_voice_frame, self.engine_var.get() == "Piper")
         self._show_frame(
             self.nano_voice_frame, self.engine_var.get() == "Chatterbox Nano"
         )
-        self._show_frame(self.kokoro_voice_frame, kokoro)
 
     @staticmethod
     def _show_frame(frame, visible: bool) -> None:
@@ -693,7 +642,6 @@ class SettingsWindow:
             self.pitch_var.get(),
             self.speed_var.get(),
             self.pending_voice_path if self.engine_var.get() == "Piper" else None,
-            self.kokoro_voice_var.get(),
             self.sentence_pause_var.get(),
             self.piper_sentence_streaming_var.get() == "true",
         )
@@ -788,7 +736,6 @@ class SettingsWindow:
         self.chatterbox_device_var.set(snapshot.chatterbox_device)
         self.chatterbox_custom_voice_var.set(snapshot.chatterbox_custom_voice_enabled)
         self.engine_status_var.set(snapshot.chatterbox_device_message)
-        self.kokoro_voice_var.set(snapshot.kokoro_voice)
         self.hotkey_var.set(snapshot.hotkey)
         self.pitch_var.set(f"{snapshot.pitch_percent:g}")
         self.speed_var.set(f"{snapshot.speed_percent:g}")
@@ -820,17 +767,6 @@ class SettingsWindow:
         text = self.last_text.get("1.0", "end-1c")
         if text.strip():
             self._on_speak_text(text)
-
-    def _verify_kokoro(self) -> None:
-        self.kokoro_verify_status_var.set("Verifying Kokoro files...")
-        self.kokoro_verify_button.configure(state="disabled")
-        if not self._on_verify_kokoro():
-            self.kokoro_verify_status_var.set("Kokoro verification is already running.")
-            self.kokoro_verify_button.configure(state="normal")
-
-    def update_kokoro_verification(self, message: str) -> None:
-        self.kokoro_verify_status_var.set(message)
-        self.kokoro_verify_button.configure(state="normal")
 
     def close(self) -> None:
         if self._closed:

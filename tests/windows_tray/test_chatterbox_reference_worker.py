@@ -96,7 +96,7 @@ def test_reference_clip_rejects_files_above_the_size_limit(
 
 class _Process:
     def __init__(self, frames):
-        from piper.windows_tray.kokoro_protocol import write_frame
+        from piper.windows_tray.worker_protocol import write_frame
 
         self.stdout = io.BytesIO()
         for frame in frames:
@@ -165,7 +165,7 @@ def test_nano_client_sends_absolute_reference_only_when_custom_voice_is_enabled(
 
     try:
         worker.ensure_ready()
-        from piper.windows_tray.kokoro_protocol import read_frame
+        from piper.windows_tray.worker_protocol import read_frame
 
         process.stdin.seek(0)
         assert read_frame(process.stdin) == {
@@ -236,7 +236,7 @@ def test_worker_forwards_reference_clip_and_reports_ready_after_model_load(
     tmp_path, monkeypatch, fake_nano_installation
 ):
     main = importlib.import_module("piper.nano_worker.main")
-    from piper.windows_tray.kokoro_protocol import read_frame, write_frame
+    from piper.windows_tray.worker_protocol import read_frame, write_frame
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "profile"))
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
@@ -281,7 +281,7 @@ def test_worker_does_not_report_ready_when_custom_preparation_fails(
     tmp_path, monkeypatch, fake_nano_installation
 ):
     main = importlib.import_module("piper.nano_worker.main")
-    from piper.windows_tray.kokoro_protocol import read_frame, write_frame
+    from piper.windows_tray.worker_protocol import read_frame, write_frame
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "profile"))
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
@@ -321,7 +321,7 @@ def test_worker_rejects_invalid_custom_reference_before_loading(
     tmp_path, monkeypatch, fake_nano_installation, invalid_kind
 ):
     main = importlib.import_module("piper.nano_worker.main")
-    from piper.windows_tray.kokoro_protocol import read_frame, write_frame
+    from piper.windows_tray.worker_protocol import read_frame, write_frame
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "profile"))
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)

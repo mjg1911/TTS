@@ -105,7 +105,8 @@ def test_spec_builds_one_folder_distribution() -> None:
     assert "a.binaries," in text
     assert "a.datas," in text
     assert 'name="PiperTray"' in text
-    assert "kokoro_payload_datas" in text
+    assert "nano_payload_datas" in text
+    assert "kokoro" not in text.lower()
 
 
 def test_ffmpeg_and_ffplay_remain_external_to_frozen_bundle() -> None:
@@ -241,17 +242,55 @@ def test_frozen_smoke_script_uses_a_unique_temporary_root() -> None:
 def test_build_and_smoke_use_one_folder_executable() -> None:
     build = (ROOT / "script" / "build_windows_tray.ps1").read_text(encoding="utf-8")
     smoke = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(encoding="utf-8")
-    acceptance = (ROOT / "script" / "accept_windows_kokoro_offline.ps1").read_text(encoding="utf-8")
     assert '$DistDir = Join-Path $Root "dist\\PiperTray"' in build
     assert '$Exe = Join-Path $DistDir "PiperTray.exe"' in build
-    assert 'Join-Path $DistDir "_internal\\kokoro_payload\\manifest.json"' in build
     assert '$Exe = Join-Path $Root "dist\\PiperTray\\PiperTray.exe"' in smoke
-    assert '[string]$TrayExe = "dist/PiperTray/PiperTray.exe"' in acceptance
+    assert "kokoro" not in build.lower()
+    assert "kokoro" not in smoke.lower()
+
+
+def test_kokoro_only_packaging_inputs_are_removed() -> None:
+    removed_paths = (
+        "requirements/kokoro-worker.in",
+        "requirements/kokoro-worker-win-py311.lock",
+        "script/accept_windows_kokoro_offline.ps1",
+        "script/build_kokoro_worker.ps1",
+        "script/kokoro_assets.lock.json",
+        "script/kokoro_worker_entry.py",
+        "script/kokoro_worker.spec",
+        "script/smoke_kokoro_worker_stdio.ps1",
+        "script/smoke_windows_kokoro.ps1",
+        "script/stage_kokoro_payload.ps1",
+        "script/write_kokoro_manifest.py",
+    )
+
+    assert all(not (ROOT / path).exists() for path in removed_paths)
+
+
+def test_current_user_docs_describe_two_engines_and_kokoro_migration() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").lower()
+
+    assert "offers two speech engines" in readme
+    assert "kokoro was removed" in readme
+    assert "piper is now selected" in readme
+    assert "remove kokoro" in changelog
 
 
 def test_installer_ships_entire_one_folder_tree() -> None:
     builder = (ROOT / "script" / "build_windows_installer.ps1").read_text(encoding="utf-8")
     installer = (ROOT / "script" / "piper_tray_installer.iss").read_text(encoding="utf-8")
     assert '"dist/PiperTray/PiperTray.exe"' in builder
-    assert '"dist/PiperTray/_internal/kokoro_payload/manifest.json"' in builder
+    assert "kokoro" not in builder.lower()
+    assert "nano_payload/manifest.json" in builder
     assert 'Source: "..\\dist\\PiperTray\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs' in installer
+
+
+def test_installer_removes_only_the_stale_installed_kokoro_payload() -> None:
+    installer = (ROOT / "script" / "piper_tray_installer.iss").read_text(
+        encoding="utf-8"
+    ).lower()
+
+    assert "[installdelete]" in installer
+    assert 'type: filesandordirs; name: "{app}\\_internal\\kokoro_payload"' in installer
+    assert '"{localappdata}\\piper\\kokoro"' not in installer

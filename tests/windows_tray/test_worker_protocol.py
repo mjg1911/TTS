@@ -4,16 +4,14 @@ import struct
 
 import pytest
 
-from piper.windows_tray.kokoro_protocol import (
+from piper.windows_tray.worker_protocol import (
     MAX_AUDIO_BYTES,
     MAX_FRAME_BYTES,
     MAX_TEXT_BYTES,
-    PROTOCOL_VERSION,
     ProtocolError,
     decode_audio,
     encode_audio,
     read_frame,
-    validate_hello,
     validate_initialize,
     validate_response_frame,
     validate_synthesize,
@@ -23,9 +21,9 @@ from piper.windows_tray.kokoro_protocol import (
 
 def test_round_trip_control_frame():
     stream = io.BytesIO()
-    write_frame(stream, {"type": "cancel", "request_id": 7})
+    write_frame(stream, {"type": "shutdown"})
     stream.seek(0)
-    assert read_frame(stream) == {"type": "cancel", "request_id": 7}
+    assert read_frame(stream) == {"type": "shutdown"}
 
 
 def test_writes_four_byte_big_endian_length_prefix():
@@ -95,32 +93,6 @@ def test_decode_audio_rejects_invalid_base64_and_odd_pcm16():
         decode_audio("AQ==")
 
 
-def test_validate_hello_accepts_matching_protocol_metadata():
-    validate_hello(
-        {
-            "type": "hello",
-            "protocol_version": PROTOCOL_VERSION,
-            "worker_version": "1",
-            "kokoro_version": "0.9.4",
-        }
-    )
-
-
-def test_validate_hello_rejects_protocol_mismatch_or_missing_metadata():
-    message = {
-        "type": "hello",
-        "protocol_version": PROTOCOL_VERSION + 1,
-        "worker_version": "1",
-        "kokoro_version": "0.9.4",
-    }
-    with pytest.raises(ProtocolError, match="protocol version"):
-        validate_hello(message)
-    message["protocol_version"] = PROTOCOL_VERSION
-    del message["worker_version"]
-    with pytest.raises(ProtocolError, match="worker_version"):
-        validate_hello(message)
-
-
 def test_validate_initialize_requires_exact_manifest_fields():
     validate_initialize({"type": "initialize", "manifest_sha256": "a" * 64})
     for message in (
@@ -136,12 +108,12 @@ def test_validate_initialize_requires_exact_manifest_fields():
 
 def test_validate_synthesize_requires_positive_id_bounded_text_and_voice():
     validate_synthesize(
-        {"type": "synthesize", "request_id": 1, "text": "hello", "voice_id": "af_heart"}
+        {"type": "synthesize", "request_id": 1, "text": "hello", "voice_id": "default"}
     )
     cases = (
-        {"type": "synthesize", "text": "hello", "voice_id": "af_heart"},
-        {"type": "synthesize", "request_id": True, "text": "hello", "voice_id": "af_heart"},
-        {"type": "synthesize", "request_id": 1, "text": "x" * (MAX_TEXT_BYTES + 1), "voice_id": "af_heart"},
+        {"type": "synthesize", "text": "hello", "voice_id": "default"},
+        {"type": "synthesize", "request_id": True, "text": "hello", "voice_id": "default"},
+        {"type": "synthesize", "request_id": 1, "text": "x" * (MAX_TEXT_BYTES + 1), "voice_id": "default"},
         {"type": "synthesize", "request_id": 1, "text": "hello", "voice_id": "   "},
     )
     for message in cases:
@@ -151,7 +123,7 @@ def test_validate_synthesize_requires_positive_id_bounded_text_and_voice():
 
 @pytest.mark.parametrize(
     "message_type",
-    ["audio", "response_end", "response_error", "response_cancelled", "cancel"],
+    ["audio", "response_end", "response_error"],
 )
 def test_validate_response_frame_requires_positive_request_id(message_type):
     message = {"type": message_type, "request_id": 1}
@@ -172,29 +144,17 @@ def test_validate_response_frame_checks_audio_payload():
 @pytest.mark.parametrize(
     "message",
     [
-        {"type": "hello"},
         {"type": "initialize", "manifest_sha256": "a" * 64},
         {"type": "ready"},
-        {"type": "synthesize", "request_id": 1, "text": "x", "voice_id": "v"},
+        {"type": "synthesize", "request_id": 1, "text": "x", "voice_id": "default"},
         {"type": "audio", "request_id": 1, "audio": encode_audio(b"\x00\x00")},
         {"type": "response_end", "request_id": 1},
         {"type": "response_error", "request_id": 1},
-        {"type": "response_cancelled", "request_id": 1},
-        {"type": "cancel", "request_id": 1},
         {"type": "shutdown"},
     ],
 )
 def test_known_message_types_are_supported(message):
-    if message["type"] == "hello":
-        validate_hello(
-            dict(
-                message,
-                protocol_version=PROTOCOL_VERSION,
-                worker_version="1",
-                kokoro_version="0.9.4",
-            )
-        )
-    elif message["type"] == "initialize":
+    if message["type"] == "initialize":
         validate_initialize(message)
     elif message["type"] == "synthesize":
         validate_synthesize(message)

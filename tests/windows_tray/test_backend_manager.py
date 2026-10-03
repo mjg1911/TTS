@@ -48,10 +48,10 @@ def test_commit_updates_backend_and_identity_atomically():
         ),
     )
 
-    manager.commit(manager.prepare("Kokoro", "af_heart"))
+    manager.commit(manager.prepare("Chatterbox Nano", "default"))
 
     assert manager.current() is prepared
-    assert manager.current_identity() == ("Kokoro", "af_heart")
+    assert manager.current_identity() == ("Chatterbox Nano", "default")
 
 
 def test_prepare_does_not_replace_current_backend():
@@ -63,7 +63,7 @@ def test_prepare_does_not_replace_current_backend():
             engine, voice, prepared_backend, prepared_backend.shutdown
         ),
     )
-    candidate = manager.prepare("Kokoro", "af_heart")
+    candidate = manager.prepare("Chatterbox Nano", "default")
     assert manager.current() is current
     assert candidate.backend is prepared_backend
 
@@ -77,7 +77,7 @@ def test_discard_closes_uncommitted_candidate_exactly_once():
             engine, voice, prepared_backend, prepared_backend.shutdown
         ),
     )
-    candidate = manager.prepare("Kokoro", "af_heart")
+    candidate = manager.prepare("Chatterbox Nano", "default")
     manager.discard(candidate)
     manager.discard(candidate)
     assert prepared_backend.shutdown_calls == 1
@@ -93,7 +93,7 @@ def test_commit_transfers_candidate_ownership_and_closes_old_backend():
             engine, voice, prepared_backend, prepared_backend.shutdown
         ),
     )
-    candidate = manager.prepare("Kokoro", "af_heart")
+    candidate = manager.prepare("Chatterbox Nano", "default")
     manager.commit(candidate)
     assert manager.current() is prepared_backend
     assert current.shutdown_calls == 1
@@ -112,7 +112,7 @@ def test_commit_defers_closing_backend_until_lease_is_released():
         ),
     )
     leased_backend, release = manager.acquire()
-    manager.commit(manager.prepare("Kokoro", "af_heart"))
+    manager.commit(manager.prepare("Chatterbox Nano", "default"))
 
     assert leased_backend is current
     assert current.shutdown_calls == 0
@@ -141,7 +141,7 @@ def test_candidate_cannot_be_committed_after_discard():
             engine, voice, prepared_backend, prepared_backend.shutdown
         ),
     )
-    candidate = manager.prepare("Kokoro", "af_heart")
+    candidate = manager.prepare("Chatterbox Nano", "default")
     manager.discard(candidate)
     with pytest.raises(RuntimeError, match="candidate ownership already released"):
         manager.commit(candidate)
@@ -174,7 +174,7 @@ def test_replaced_backend_is_collectible_after_last_lease_releases():
         ),
     )
     leased, release = manager.acquire()
-    manager.commit(manager.prepare("Kokoro", "af_heart"))
+    manager.commit(manager.prepare("Chatterbox Nano", "default"))
 
     del current
     gc.collect()

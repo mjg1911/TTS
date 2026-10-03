@@ -136,7 +136,7 @@ def test_cuda_request_falls_back_to_cpu_with_message(tmp_path, monkeypatch):
 
 class Process:
     def __init__(self, frames):
-        from piper.windows_tray.kokoro_protocol import write_frame
+        from piper.windows_tray.worker_protocol import write_frame
         self.stdout = io.BytesIO()
         for frame in frames:
             write_frame(self.stdout, frame)
@@ -149,9 +149,99 @@ class Process:
     def wait(self, timeout=None): return 0
 
 
+def test_nano_worker_launch_hides_console_and_assigns_kill_on_close_job(
+    tmp_path, monkeypatch
+):
+    import os
+    import subprocess
+
+    _, _, client = modules()
+    worker_executable = tmp_path / "NanoWorker.exe"
+    process = SimpleNamespace(_handle=123)
+    calls = {}
+
+    class FakeJob:
+        def assign(self, candidate):
+            calls["assigned"] = candidate
+
+    job = FakeJob()
+
+    def fake_popen(argv, **kwargs):
+        calls["argv"] = argv
+        calls["kwargs"] = kwargs
+        return process
+
+    monkeypatch.setattr(
+        client,
+        "os",
+        SimpleNamespace(name="nt", environ=os.environ),
+    )
+    monkeypatch.setattr(client.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(client, "WindowsKillOnCloseJob", lambda: job)
+
+    launched = client.launch_nano_worker(
+        SimpleNamespace(root=tmp_path, worker_executable=worker_executable)
+    )
+
+    assert launched is process
+    assert calls["argv"] == [str(worker_executable), "--root", str(tmp_path)]
+    assert calls["kwargs"]["stdin"] is subprocess.PIPE
+    assert calls["kwargs"]["stdout"] is subprocess.PIPE
+    assert calls["kwargs"]["stderr"] is subprocess.DEVNULL
+    assert calls["kwargs"]["creationflags"] & client.CREATE_NO_WINDOW
+    assert calls["kwargs"]["env"]["HF_HUB_OFFLINE"] == "1"
+    assert calls["kwargs"]["env"]["TRANSFORMERS_OFFLINE"] == "1"
+    assert calls["assigned"] is process
+    assert process._nano_job is job
+
+
+def test_nano_worker_launch_failure_uses_bounded_cleanup_and_preserves_error(
+    tmp_path, monkeypatch
+):
+    import os
+    import subprocess
+
+    _, _, client = modules()
+    calls = []
+
+    class Process:
+        _handle = 123
+
+        def kill(self):
+            calls.append("kill")
+
+        def wait(self, timeout=None):
+            calls.append(("wait", timeout))
+            raise subprocess.TimeoutExpired("nano worker", timeout)
+
+    class FailingJob:
+        def assign(self, _process):
+            calls.append("assign")
+            raise OSError("job assignment failed")
+
+        def close(self):
+            calls.append("close")
+
+    process = Process()
+    monkeypatch.setattr(
+        client,
+        "os",
+        SimpleNamespace(name="nt", environ=os.environ),
+    )
+    monkeypatch.setattr(client.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(client, "WindowsKillOnCloseJob", FailingJob)
+
+    with pytest.raises(OSError, match="job assignment failed"):
+        client.launch_nano_worker(
+            SimpleNamespace(root=tmp_path, worker_executable=tmp_path / "NanoWorker.exe")
+        )
+
+    assert calls == ["assign", "kill", ("wait", 1), "close"]
+
+
 @pytest.mark.usefixtures('fake_model_hashes')
 def test_client_dynamic_rate_and_pcm(tmp_path):
-    from piper.windows_tray.kokoro_protocol import encode_audio
+    from piper.windows_tray.worker_protocol import encode_audio
     _, _, client = modules()
     process = Process([{'type':'hello','engine':'Chatterbox Nano','protocol_version':1}, {'type':'ready','sample_rate':22050}, {'type':'audio','request_id':1,'audio':encode_audio(b'\0\0')}, {'type':'response_end','request_id':1}])
     worker = client.NanoWorkerClient(installation(tmp_path), process_factory=lambda _: process)
@@ -175,7 +265,7 @@ def test_client_sends_device_and_exposes_effective_device_message(tmp_path):
     assert worker.effective_device == 'cpu'
     assert worker.device_message == 'CUDA unavailable; using CPU.'
     process.stdin.seek(0)
-    from piper.windows_tray.kokoro_protocol import read_frame
+    from piper.windows_tray.worker_protocol import read_frame
     assert read_frame(process.stdin) == {
         'type': 'initialize',
         'manifest_sha256': worker.installation.manifest_sha256,
@@ -186,7 +276,7 @@ def test_client_sends_device_and_exposes_effective_device_message(tmp_path):
 
 @pytest.mark.usefixtures('fake_model_hashes')
 def test_cpu_client_initialization_is_accepted_by_legacy_worker(tmp_path):
-    from piper.windows_tray.kokoro_protocol import read_frame, validate_initialize
+    from piper.windows_tray.worker_protocol import read_frame, validate_initialize
     _, _, client = modules()
     process = Process([
         {'type':'hello','engine':'Chatterbox Nano','protocol_version':1},
@@ -247,7 +337,7 @@ def test_invalid_protocol_and_stale_audio_cleanup(tmp_path):
 @pytest.mark.usefixtures('fake_model_hashes')
 def test_worker_protocol_loads_offline_and_emits_pcm(tmp_path, monkeypatch):
     from piper.nano_worker import main
-    from piper.windows_tray.kokoro_protocol import write_frame, read_frame, decode_audio
+    from piper.windows_tray.worker_protocol import write_frame, read_frame, decode_audio
     item = installation(tmp_path)
     monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'profile'))
     monkeypatch.delenv('XDG_CACHE_HOME', raising=False)
@@ -261,7 +351,11 @@ def test_worker_protocol_loads_offline_and_emits_pcm(tmp_path, monkeypatch):
     incoming.seek(0)
     main.serve(tmp_path, incoming, outgoing)
     outgoing.seek(0)
-    assert read_frame(outgoing)['type'] == 'hello'
+    assert read_frame(outgoing) == {
+        'type': 'hello',
+        'engine': 'Chatterbox Nano',
+        'protocol_version': 1,
+    }
     assert read_frame(outgoing) == {'type':'ready','sample_rate':32000,'device':'cpu','device_message':''}
     assert decode_audio(read_frame(outgoing)['audio']) == b'\x01\x00'
     assert read_frame(outgoing)['type'] == 'response_end'
@@ -270,7 +364,7 @@ def test_worker_protocol_loads_offline_and_emits_pcm(tmp_path, monkeypatch):
 @pytest.mark.usefixtures('fake_model_hashes')
 def test_worker_uses_requested_device_and_reports_effective_device(tmp_path, monkeypatch):
     from piper.nano_worker import main
-    from piper.windows_tray.kokoro_protocol import write_frame, read_frame
+    from piper.windows_tray.worker_protocol import write_frame, read_frame
     item = installation(tmp_path)
     monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'profile'))
     monkeypatch.delenv('XDG_CACHE_HOME', raising=False)
@@ -284,7 +378,11 @@ def test_worker_uses_requested_device_and_reports_effective_device(tmp_path, mon
     incoming.seek(0)
     main.serve(tmp_path, incoming, outgoing)
     outgoing.seek(0)
-    assert read_frame(outgoing)['type'] == 'hello'
+    assert read_frame(outgoing) == {
+        'type': 'hello',
+        'engine': 'Chatterbox Nano',
+        'protocol_version': 1,
+    }
     assert read_frame(outgoing) == {'type':'ready','sample_rate':32000,'device':'cuda','device_message':''}
     assert calls == [(item.model_dir, 'cuda')]
 
@@ -304,7 +402,7 @@ def test_offline_loader_rejects_missing_default_voice(tmp_path):
 @pytest.mark.usefixtures('fake_model_hashes')
 def test_worker_rejects_changed_manifest_identity(tmp_path):
     from piper.nano_worker.main import serve
-    from piper.windows_tray.kokoro_protocol import write_frame
+    from piper.windows_tray.worker_protocol import write_frame
     installation(tmp_path)
     incoming = io.BytesIO()
     write_frame(incoming, {'type':'initialize','manifest_sha256':'0'*64})
@@ -406,7 +504,7 @@ def test_nano_worker_build_installs_cuda_enabled_torch():
 def test_worker_sets_writable_numba_cache_outside_installation_before_loading(tmp_path, monkeypatch):
     import os
     from piper.nano_worker import main
-    from piper.windows_tray.kokoro_protocol import write_frame
+    from piper.windows_tray.worker_protocol import write_frame
     install_root = tmp_path / 'installation'
     item = installation(install_root)
     user_data = tmp_path / 'profile'
@@ -462,7 +560,7 @@ def test_oversized_text_and_invalid_ready_stop_process(tmp_path):
 def test_cancel_during_blocked_inference_stops_promptly(tmp_path):
     import threading
     import time
-    from piper.windows_tray.kokoro_protocol import write_frame
+    from piper.windows_tray.worker_protocol import write_frame
     _, _, client = modules()
     process = Process([])
     reader, writer = __import__('os').pipe()
@@ -491,7 +589,7 @@ def test_cancel_during_blocked_inference_stops_promptly(tmp_path):
 @pytest.mark.usefixtures('fake_model_hashes')
 def test_reader_preserves_eof_when_audio_queue_is_full(tmp_path):
     import time
-    from piper.windows_tray.kokoro_protocol import encode_audio
+    from piper.windows_tray.worker_protocol import encode_audio
     _, _, client = modules()
     frames = [{'type':'hello','engine':'Chatterbox Nano','protocol_version':1}, {'type':'ready','sample_rate':24000}]
     frames += [{'type':'audio','request_id':1,'audio':encode_audio(b'\0\0')} for _ in range(20)]

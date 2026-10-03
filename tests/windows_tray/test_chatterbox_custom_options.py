@@ -131,7 +131,6 @@ def test_custom_voice_toggle_prepares_requested_clip_before_commit(monkeypatch, 
         "26",
         "0",
         None,
-        "af_heart",
         chatterbox_custom_voice_enabled=True,
         chatterbox_reference_clip=str(clip),
     )
@@ -161,7 +160,6 @@ def test_disabling_custom_voice_prepares_default_and_keeps_saved_clip(monkeypatc
         "26",
         "0",
         None,
-        "af_heart",
         chatterbox_custom_voice_enabled=False,
         chatterbox_reference_clip=str(clip),
     )
@@ -182,7 +180,6 @@ def test_missing_enabled_reference_is_rejected_before_backend_preparation(tmp_pa
         "26",
         "0",
         None,
-        "af_heart",
         chatterbox_custom_voice_enabled=True,
         chatterbox_reference_clip=str(tmp_path / "missing.wav"),
     )
@@ -225,7 +222,6 @@ def test_settings_window_shows_reference_import_and_custom_voice_toggle(monkeypa
         lambda *_args, **_kwargs: None,
         lambda: None,
         lambda _text: None,
-        lambda: True,
     )
 
     assert window.chatterbox_custom_voice_var.get() is True
@@ -257,7 +253,6 @@ def test_preparation_failure_keeps_existing_custom_voice_and_saved_settings(
         "26",
         "0",
         None,
-        "af_heart",
         chatterbox_custom_voice_enabled=True,
         chatterbox_reference_clip=str(clip),
     )
@@ -299,7 +294,6 @@ def test_save_failure_discards_prepared_custom_voice_and_keeps_old_backend(tmp_p
         "26",
         "0",
         None,
-        "af_heart",
         chatterbox_custom_voice_enabled=True,
         chatterbox_reference_clip=str(clip),
     )
@@ -336,7 +330,6 @@ def test_import_failure_preserves_current_reference_selection(monkeypatch):
         lambda *_args, **_kwargs: None,
         lambda: None,
         lambda _text: None,
-        lambda: True,
     )
     callbacks = []
     window.window.after = lambda _delay, callback: callbacks.append(callback)
@@ -362,7 +355,6 @@ def test_apply_waits_for_reference_import_to_finish(monkeypatch):
         or module.SettingsApplyResult(True),
         lambda: None,
         lambda _text: None,
-        lambda: True,
     )
     window._reference_import_pending = True
 
@@ -398,7 +390,6 @@ def test_reference_import_cannot_start_during_backend_apply(monkeypatch):
         lambda *_args, **_kwargs: None,
         lambda: None,
         lambda _text: None,
-        lambda: True,
     )
     window.window.after = lambda _delay, _callback: None
     window._apply_in_progress = True

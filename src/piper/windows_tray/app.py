@@ -30,14 +30,7 @@ from .single_instance import InstanceRole, SingleInstance
 from .tray_icon import TrayIcon
 from .voice_manager import VoiceManager
 from .codex_monitor import CodexMonitor, codex_sessions_dir
-from piper.kokoro_assets import (
-    inspect_kokoro_installation,
-    verify_kokoro_installation,
-)
-from .kokoro_client import KokoroWorkerClient, KokoroWorkerConfig
-from .kokoro_payload import ensure_bundled_kokoro_payload
-from .kokoro_startup import KokoroStartupCoordinator
-from .kokoro_verification import KokoroVerificationCoordinator
+from .backend_startup import BackendStartupCoordinator
 
 
 def TkUi():
@@ -64,40 +57,6 @@ def _voice_data_dirs() -> Iterable[Path]:
     if local_appdata:
         directories.append(Path(local_appdata) / "Piper")
     return directories
-
-
-def _kokoro_root() -> Path:
-    return Path(os.environ["LOCALAPPDATA"]) / "Piper" / "Kokoro"
-
-
-def _inspect_kokoro_installation():
-    try:
-        return inspect_kokoro_installation(_kokoro_root()), None
-    except (FileNotFoundError, OSError, ValueError, KeyError) as error:
-        return None, "Kokoro installation is unavailable: %s" % type(error).__name__
-
-
-def _bundled_kokoro_root() -> Optional[Path]:
-    frozen_root = getattr(sys, "_MEIPASS", None)
-    if frozen_root is None:
-        return None
-    candidate = Path(frozen_root) / "kokoro_payload"
-    return candidate if candidate.is_dir() else None
-
-
-def _prepare_kokoro_installation(logger):
-    try:
-        install_root = _kokoro_root()
-        bundle_root = _bundled_kokoro_root()
-        if bundle_root is not None:
-            return ensure_bundled_kokoro_payload(bundle_root, install_root), None
-        return inspect_kokoro_installation(install_root), None
-    except (OSError, ValueError, KeyError) as error:
-        logger.warning("Kokoro unavailable error_type=%s", type(error).__name__)
-        return (
-            None,
-            "Kokoro is unavailable because required installed files could not be found or read.",
-        )
 
 
 def _nano_root() -> Path:
@@ -215,9 +174,7 @@ def run_app(
     codex_stopped = False
     backend_manager = None
     backend_stopped = False
-    kokoro_startup = None
     nano_startup = None
-    kokoro_verification = None
     controller = None
     ui = None
     logger = None
@@ -235,9 +192,7 @@ def run_app(
             finally:
                 hotkeys_stopped = True
 
-    def cancel_kokoro_startup() -> None:
-        if kokoro_startup is not None:
-            kokoro_startup.cancel()
+    def cancel_backend_startup() -> None:
         if nano_startup is not None:
             nano_startup.cancel()
 
@@ -341,7 +296,7 @@ def run_app(
             getattr(logger, "info", lambda *_args: None)("shutdown complete")
 
     teardown = TeardownCoordinator(
-        cancel_startup=cancel_kokoro_startup,
+        cancel_startup=cancel_backend_startup,
         stop_hotkeys=stop_hotkeys,
         stop_power=stop_power_listener,
         stop_codex=stop_codex,
@@ -364,10 +319,9 @@ def run_app(
         else:
             logger = configure_logging(effective_level)
         ui = TkUi()
-        kokoro_verification = KokoroVerificationCoordinator(
-            lambda: verify_kokoro_installation(_kokoro_root()),
-            logger,
-        )
+        migration_notice = getattr(settings_result, "migration_notice", None)
+        if migration_notice:
+            ui.show_status(migration_notice)
         data_dirs = tuple(_voice_data_dirs())
         settings = settings_result.settings
         try:
@@ -421,13 +375,7 @@ def run_app(
             configured_path, configured_voice = selected_path, selected_voice
             del selected_voice
 
-        kokoro_installation = None
-        kokoro_unavailable_reason = None
-        kokoro_preparation_attempted = False
-
         def prepare_backend(engine: str, voice_id: str) -> BackendCandidate:
-            nonlocal kokoro_installation, kokoro_unavailable_reason
-            nonlocal kokoro_preparation_attempted
             if engine == "Piper":
                 path, voice = _load_configured_voice(
                     replace(settings, piper_voice=voice_id), data_dirs
@@ -454,36 +402,7 @@ def run_app(
                     ),
                     **preparation_options,
                 )
-            if engine != "Kokoro":
-                raise BackendPreparationError("Kokoro is unavailable")
-            if not kokoro_preparation_attempted:
-                kokoro_preparation_attempted = True
-                kokoro_installation, kokoro_unavailable_reason = (
-                    _prepare_kokoro_installation(logger)
-                )
-            if kokoro_installation is None:
-                raise BackendPreparationError("Kokoro is unavailable")
-            voice = kokoro_installation.voices.get(voice_id)
-            if voice is None:
-                raise BackendPreparationError("Unknown Kokoro voice")
-            if controller is not None:
-                controller.set_kokoro_voice_ids(
-                    tuple(sorted(kokoro_installation.voices))
-                )
-            config = KokoroWorkerConfig(
-                executable=kokoro_installation.worker_executable,
-                install_root=kokoro_installation.root,
-                manifest_sha256=kokoro_installation.manifest_sha256,
-                worker_version=kokoro_installation.worker_version,
-                kokoro_version=kokoro_installation.kokoro_version,
-            )
-            client = KokoroWorkerClient(config, voice_id)
-            try:
-                client.ensure_ready()
-            except (OSError, RuntimeError, ValueError) as error:
-                client.shutdown()
-                raise BackendPreparationError("Kokoro worker is unavailable") from error
-            return BackendCandidate("Kokoro", voice_id, client, client.shutdown)
+            raise BackendPreparationError("Unknown speech engine")
 
         backend_manager = BackendManager(
             "Piper",
@@ -496,12 +415,8 @@ def run_app(
             settings=settings,
             save_settings=save_settings,
             backend_manager=backend_manager,
-            kokoro_voice_ids=(),
-            kokoro_unavailable_reason=kokoro_unavailable_reason,
         )
-        if settings.engine == "Kokoro":
-            controller.begin_kokoro_startup()
-        elif settings.engine == "Chatterbox Nano":
+        if settings.engine == "Chatterbox Nano":
             controller.begin_nano_startup()
         controller.set_voice(configured_path, configured_voice)
         del configured_voice
@@ -523,7 +438,7 @@ def run_app(
 
         icon_path = Path(__file__).resolve().parents[1] / "img" / "logo.png"
         tray = TrayIcon(icon_path, controller.enqueue)
-        if settings.engine in {"Kokoro", "Chatterbox Nano"}:
+        if settings.engine == "Chatterbox Nano":
             tray.set_status("%s is loading" % settings.engine)
         if hasattr(tray, "set_snapshot_provider"):
             tray.set_snapshot_provider(controller.tray_snapshot)
@@ -532,33 +447,18 @@ def run_app(
             if nano_startup is not None:
                 nano_result = nano_startup.take_result()
                 if nano_result is not None:
+                    for stage, duration in nano_result.stage_durations.items():
+                        logger.info(
+                            "startup stage=%s duration_seconds=%.3f",
+                            stage,
+                            duration,
+                        )
                     if nano_result.candidate is not None:
                         controller.complete_nano_startup(nano_result.candidate)
                     else:
                         controller.fail_nano_startup(
                             "Chatterbox Nano is unavailable during startup."
                         )
-            if kokoro_startup is not None:
-                startup_result = kokoro_startup.take_result()
-                if startup_result is not None:
-                    for stage, duration in startup_result.stage_durations.items():
-                        logger.info(
-                            "startup stage=%s duration_seconds=%.3f",
-                            stage,
-                            duration,
-                        )
-                    if startup_result.candidate is not None:
-                        controller.complete_kokoro_startup(
-                            startup_result.candidate, startup_result.voice_ids
-                        )
-                    else:
-                        controller.fail_kokoro_startup(
-                            startup_result.unavailable_reason
-                            or "Kokoro is unavailable during startup."
-                        )
-            verification_result = kokoro_verification.take_result()
-            if verification_result is not None:
-                ui.update_settings_kokoro_verification(verification_result.message)
             command = controller.drain_once()
             if command is not None:
                 controller.handle(command)
@@ -584,7 +484,6 @@ def run_app(
                 snapshot,
                 controller.apply_settings,
                 controller.speak_manual_text,
-                kokoro_verification.start,
             ),
             update_settings_last_text=getattr(
                 ui, "update_settings_last_text", lambda _text: None
@@ -653,51 +552,6 @@ def run_app(
                 max(0.0, time.monotonic() - tray_hotkey_started),
             )
 
-        if settings.engine == "Kokoro":
-
-            def prepare_startup_candidate(cancel_event, record_timing):
-                nonlocal kokoro_installation, kokoro_unavailable_reason
-                nonlocal kokoro_preparation_attempted
-                kokoro_installation, kokoro_unavailable_reason = record_timing(
-                    "kokoro_asset_preparation",
-                    lambda: _prepare_kokoro_installation(logger),
-                )
-                kokoro_preparation_attempted = True
-                if kokoro_installation is None:
-                    raise RuntimeError(
-                        kokoro_unavailable_reason or "Kokoro unavailable"
-                    )
-                voice = kokoro_installation.voices.get(settings.kokoro_voice)
-                if voice is None:
-                    raise RuntimeError("Kokoro voice is unavailable")
-                config = KokoroWorkerConfig(
-                    executable=kokoro_installation.worker_executable,
-                    install_root=kokoro_installation.root,
-                    manifest_sha256=kokoro_installation.manifest_sha256,
-                    worker_version=kokoro_installation.worker_version,
-                    kokoro_version=kokoro_installation.kokoro_version,
-                )
-                client = KokoroWorkerClient(config, settings.kokoro_voice)
-                cancel_event.register_cancel_cleanup(client.shutdown)
-                try:
-                    record_timing(
-                        "kokoro_worker_readiness",
-                        lambda: client.ensure_ready(cancel_event),
-                    )
-                except Exception:
-                    client.shutdown()
-                    raise
-                if cancel_event.is_set():
-                    client.shutdown()
-                    raise RuntimeError("Kokoro startup was cancelled")
-                candidate = BackendCandidate(
-                    "Kokoro", settings.kokoro_voice, client, client.shutdown
-                )
-                return candidate, tuple(sorted(kokoro_installation.voices))
-
-            kokoro_startup = KokoroStartupCoordinator(prepare_startup_candidate, logger)
-            kokoro_startup.start()
-
         if settings.engine == "Chatterbox Nano":
 
             def prepare_nano_startup(cancel_event, record_timing):
@@ -708,7 +562,7 @@ def run_app(
                 )
                 return candidate, ()
 
-            nano_startup = KokoroStartupCoordinator(prepare_nano_startup, logger)
+            nano_startup = BackendStartupCoordinator(prepare_nano_startup, logger)
             nano_startup.start()
 
         power_listener = PowerBroadcastListener()
