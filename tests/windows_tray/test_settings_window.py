@@ -168,6 +168,7 @@ def install_fake_tk(monkeypatch, built_frames):
         Frame=FakeWidget,
         Button=FakeButton,
         Checkbutton=FakeButton,
+        Radiobutton=FakeButton,
         Entry=FakeEntry,
         Label=FakeLabel,
         Combobox=FakeEntry,

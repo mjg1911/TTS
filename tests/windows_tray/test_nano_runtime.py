@@ -95,6 +95,45 @@ def test_model_load_uses_local_cpu_nano_and_requires_default_voice(tmp_path):
     assert calls == [(tmp_path, {'device': 'cpu', 'nano': True})]
 
 
+def test_model_load_requests_cuda_for_nano_when_selected(tmp_path, monkeypatch):
+    _, runtime, _ = modules()
+    calls = []
+    class Torch:
+        class cuda:
+            @staticmethod
+            def is_available():
+                return True
+    class Model:
+        @classmethod
+        def from_local(cls, directory, **kwargs):
+            calls.append((directory, kwargs))
+            return SimpleNamespace(sr=22050, conds=object())
+    monkeypatch.setitem(__import__('sys').modules, 'torch', Torch())
+    loaded = runtime.load_model(tmp_path, model_class=Model, device='cuda')
+    assert loaded.sr == 22050
+    assert calls == [(tmp_path, {'device': 'cuda', 'nano': True})]
+
+
+def test_cuda_request_falls_back_to_cpu_with_message(tmp_path, monkeypatch):
+    _, runtime, _ = modules()
+    calls = []
+    class Torch:
+        class cuda:
+            @staticmethod
+            def is_available():
+                return False
+    class Model:
+        @classmethod
+        def from_local(cls, directory, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(sr=22050, conds=object())
+    monkeypatch.setitem(__import__('sys').modules, 'torch', Torch())
+    loaded = runtime.load_model(tmp_path, model_class=Model, device='cuda')
+    assert calls == [{'device': 'cpu', 'nano': True}]
+    assert loaded.effective_device == 'cpu'
+    assert loaded.device_message == 'CUDA unavailable; using CPU.'
+
+
 class Process:
     def __init__(self, frames):
         from piper.windows_tray.kokoro_protocol import write_frame
@@ -121,6 +160,60 @@ def test_client_dynamic_rate_and_pcm(tmp_path):
     assert list(result.chunks) == [b'\0\0']
     worker.shutdown()
     assert process.killed
+
+
+@pytest.mark.usefixtures('fake_model_hashes')
+def test_client_sends_device_and_exposes_effective_device_message(tmp_path):
+    _, _, client = modules()
+    process = Process([
+        {'type':'hello','engine':'Chatterbox Nano','protocol_version':1},
+        {'type':'ready','sample_rate':22050,'device':'cpu','device_message':'CUDA unavailable; using CPU.'},
+    ])
+    worker = client.NanoWorkerClient(installation(tmp_path), process_factory=lambda _: process, device='cuda')
+    worker.ensure_ready()
+    assert worker.device == 'cuda'
+    assert worker.effective_device == 'cpu'
+    assert worker.device_message == 'CUDA unavailable; using CPU.'
+    process.stdin.seek(0)
+    from piper.windows_tray.kokoro_protocol import read_frame
+    assert read_frame(process.stdin) == {
+        'type': 'initialize',
+        'manifest_sha256': worker.installation.manifest_sha256,
+        'device': 'cuda',
+    }
+    worker.shutdown()
+
+
+@pytest.mark.usefixtures('fake_model_hashes')
+def test_cpu_client_initialization_is_accepted_by_legacy_worker(tmp_path):
+    from piper.windows_tray.kokoro_protocol import read_frame, validate_initialize
+    _, _, client = modules()
+    process = Process([
+        {'type':'hello','engine':'Chatterbox Nano','protocol_version':1},
+        {'type':'ready','sample_rate':22050},
+    ])
+    worker = client.NanoWorkerClient(installation(tmp_path), process_factory=lambda _: process)
+    try:
+        worker.ensure_ready()
+        process.stdin.seek(0)
+        validate_initialize(read_frame(process.stdin))
+        assert worker.effective_device == 'cpu'
+    finally:
+        worker.shutdown()
+
+
+@pytest.mark.usefixtures('fake_model_hashes')
+def test_client_treats_legacy_ready_without_device_as_cpu_fallback(tmp_path):
+    _, _, client = modules()
+    process = Process([
+        {'type':'hello','engine':'Chatterbox Nano','protocol_version':1},
+        {'type':'ready','sample_rate':22050},
+    ])
+    worker = client.NanoWorkerClient(installation(tmp_path), process_factory=lambda _: process, device='cuda')
+    worker.ensure_ready()
+    assert worker.effective_device == 'cpu'
+    assert worker.device_message == 'CUDA unavailable; using CPU.'
+    worker.shutdown()
 
 
 @pytest.mark.usefixtures('fake_model_hashes')
@@ -156,6 +249,9 @@ def test_worker_protocol_loads_offline_and_emits_pcm(tmp_path, monkeypatch):
     from piper.nano_worker import main
     from piper.windows_tray.kokoro_protocol import write_frame, read_frame, decode_audio
     item = installation(tmp_path)
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'profile'))
+    monkeypatch.delenv('XDG_CACHE_HOME', raising=False)
+    monkeypatch.delenv('NUMBA_CACHE_DIR', raising=False)
     model = SimpleNamespace(sr=32000)
     monkeypatch.setattr(main, 'load_model', lambda directory: model)
     monkeypatch.setattr(main, 'generate_chunks', lambda loaded, text: iter([b'\x01\x00']))
@@ -166,9 +262,31 @@ def test_worker_protocol_loads_offline_and_emits_pcm(tmp_path, monkeypatch):
     main.serve(tmp_path, incoming, outgoing)
     outgoing.seek(0)
     assert read_frame(outgoing)['type'] == 'hello'
-    assert read_frame(outgoing) == {'type':'ready','sample_rate':32000}
+    assert read_frame(outgoing) == {'type':'ready','sample_rate':32000,'device':'cpu','device_message':''}
     assert decode_audio(read_frame(outgoing)['audio']) == b'\x01\x00'
     assert read_frame(outgoing)['type'] == 'response_end'
+
+
+@pytest.mark.usefixtures('fake_model_hashes')
+def test_worker_uses_requested_device_and_reports_effective_device(tmp_path, monkeypatch):
+    from piper.nano_worker import main
+    from piper.windows_tray.kokoro_protocol import write_frame, read_frame
+    item = installation(tmp_path)
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'profile'))
+    monkeypatch.delenv('XDG_CACHE_HOME', raising=False)
+    monkeypatch.delenv('NUMBA_CACHE_DIR', raising=False)
+    model = SimpleNamespace(sr=32000, effective_device='cuda', device_message=None)
+    calls = []
+    monkeypatch.setattr(main, 'load_model', lambda directory, device='cpu': calls.append((directory, device)) or model)
+    incoming, outgoing = io.BytesIO(), io.BytesIO()
+    for frame in ({'type':'initialize','manifest_sha256':item.manifest_sha256,'device':'cuda'}, {'type':'shutdown'}):
+        write_frame(incoming, frame)
+    incoming.seek(0)
+    main.serve(tmp_path, incoming, outgoing)
+    outgoing.seek(0)
+    assert read_frame(outgoing)['type'] == 'hello'
+    assert read_frame(outgoing) == {'type':'ready','sample_rate':32000,'device':'cuda','device_message':''}
+    assert calls == [(item.model_dir, 'cuda')]
 
 
 def test_offline_loader_rejects_missing_default_voice(tmp_path):
@@ -273,6 +391,15 @@ def test_nano_worker_bundles_requests_code_and_distribution_metadata():
     spec = (root / 'script/nano_worker.spec').read_text()
     assert "'requests')" in spec.split('collect_all(package)', 1)[0]
     assert "'requests')" in spec.split('copy_metadata(package)', 1)[0]
+
+
+def test_nano_worker_build_installs_cuda_enabled_torch():
+    root = Path(__file__).resolve().parents[2]
+    script = (root / 'script/build_nano_worker.ps1').read_text()
+    assert 'https://download.pytorch.org/whl/cu124' in script
+    assert '/whl/cpu' not in script
+    assert 'torch==2.6.0+cu124' in script
+    assert 'torchaudio==2.6.0+cu124' in script
 
 
 @pytest.mark.usefixtures('fake_model_hashes')

@@ -60,6 +60,7 @@ class SettingsWindow:
         self.pending_voice_path: Optional[Path] = None
         self.displayed_voice_path = snapshot.piper_voice_path
         self.engine_var = tk.StringVar(value=snapshot.engine)
+        self.chatterbox_device_var = tk.StringVar(value=snapshot.chatterbox_device)
         self.kokoro_voice_var = tk.StringVar(value=snapshot.kokoro_voice)
         self.hotkey_var = tk.StringVar(value=snapshot.hotkey)
         self.pitch_var = tk.StringVar(value=f"{snapshot.pitch_percent:g}")
@@ -68,7 +69,7 @@ class SettingsWindow:
         self.piper_sentence_streaming_var = tk.StringVar(
             value=("true" if snapshot.piper_sentence_streaming_enabled else "false")
         )
-        self.engine_status_var = tk.StringVar(value="")
+        self.engine_status_var = tk.StringVar(value=snapshot.chatterbox_device_message)
         self.kokoro_verify_status_var = tk.StringVar(value="")
         self._error_vars = {
             key: tk.StringVar(value="")
@@ -175,9 +176,21 @@ class SettingsWindow:
         self.nano_voice_frame = ttk.Frame(voice, style="Panel.Piper.TFrame")
         ttk.Label(
             self.nano_voice_frame,
-            text="Default English voice (CPU)",
+            text="Default English voice",
             style="Muted.Piper.TLabel",
         ).grid(row=0, column=0, sticky="w", pady=(10, 5))
+        device_controls = ttk.Frame(self.nano_voice_frame, style="Panel.Piper.TFrame")
+        device_controls.grid(row=1, column=0, sticky="w", pady=(3, 5))
+        ttk.Label(device_controls, text="Device", style="Muted.Piper.TLabel").grid(
+            row=0, column=0, padx=(0, 12)
+        )
+        for column, (label, value) in enumerate((("CPU", "cpu"), ("GPU", "cuda")), 1):
+            ttk.Radiobutton(
+                device_controls,
+                text=label,
+                value=value,
+                variable=self.chatterbox_device_var,
+            ).grid(row=0, column=column, padx=(0, 10))
         ttk.Label(
             voice,
             textvariable=self.engine_status_var,
@@ -534,6 +547,7 @@ class SettingsWindow:
         self._apply_in_progress = True
         self._apply_cancel_event = threading.Event()
         self.engine_status_var.set("Preparing Chatterbox Nano...")
+        device = self.chatterbox_device_var.get()
         results = Queue(maxsize=1)
 
         def apply_background():
@@ -541,7 +555,9 @@ class SettingsWindow:
                 owner = getattr(self._on_apply, "__self__", None)
                 if hasattr(owner, "cancel_nano_settings"):
                     result = self._on_apply(
-                        *arguments, cancel_event=self._apply_cancel_event
+                        *arguments,
+                        cancel_event=self._apply_cancel_event,
+                        chatterbox_device=device,
                     )
                 else:
                     result = self._on_apply(*arguments)
@@ -583,12 +599,17 @@ class SettingsWindow:
             return
         if result.snapshot is not None:
             self._refresh_from_snapshot(result.snapshot)
+            if result.snapshot.chatterbox_device_message:
+                self.engine_status_var.set(result.snapshot.chatterbox_device_message)
+                return
         self.close()
 
     def _refresh_from_snapshot(self, snapshot: SettingsWindowSnapshot) -> None:
         self.displayed_voice_path = snapshot.piper_voice_path
         self.pending_voice_path = None
         self.engine_var.set(snapshot.engine)
+        self.chatterbox_device_var.set(snapshot.chatterbox_device)
+        self.engine_status_var.set(snapshot.chatterbox_device_message)
         self.kokoro_voice_var.set(snapshot.kokoro_voice)
         self.hotkey_var.set(snapshot.hotkey)
         self.pitch_var.set(f"{snapshot.pitch_percent:g}")

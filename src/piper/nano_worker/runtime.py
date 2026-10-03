@@ -36,17 +36,39 @@ def pcm16(waveform):
     return np.clip(value * 32768, -32768, 32767).astype('<i2').tobytes()
 
 
-def load_model(directory, model_class=None):
+def resolve_device(device, torch_module=None):
+    if device not in ('cpu', 'cuda'):
+        raise ValueError('Nano device must be cpu or cuda')
+    if device == 'cpu':
+        return 'cpu', None
+    if torch_module is None:
+        try:
+            import torch as torch_module
+        except ImportError:
+            return 'cpu', 'CUDA unavailable; using CPU.'
+    try:
+        available = torch_module.cuda.is_available()
+    except (AttributeError, RuntimeError):
+        available = False
+    if not available:
+        return 'cpu', 'CUDA unavailable; using CPU.'
+    return 'cuda', ''
+
+
+def load_model(directory, model_class=None, device='cpu'):
     os.environ['HF_HUB_OFFLINE'] = '1'
     os.environ['TRANSFORMERS_OFFLINE'] = '1'
     if model_class is None:
         from chatterbox.tts_turbo import ChatterboxTurboTTS
         model_class = ChatterboxTurboTTS
-    model = model_class.from_local(Path(directory), device='cpu', nano=True)
+    effective_device, device_message = resolve_device(device)
+    model = model_class.from_local(Path(directory), device=effective_device, nano=True)
     if model.conds is None:
         raise ValueError('Nano default voice conditionals are missing')
     if type(model.sr) is not int or not 8000 <= model.sr <= 192000:
         raise ValueError('invalid Nano sample rate')
+    model.effective_device = effective_device
+    model.device_message = device_message or ''
     return model
 
 

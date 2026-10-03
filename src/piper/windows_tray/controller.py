@@ -119,6 +119,8 @@ class TraySnapshot:
 
 @dataclass(frozen=True, init=False)
 class SettingsWindowSnapshot:
+    chatterbox_device: str
+    chatterbox_device_message: str
     engine: str
     piper_voice_path: Optional[Path]
     piper_voice_reference: str
@@ -149,11 +151,15 @@ class SettingsWindowSnapshot:
         last_text: Optional[str] = None,
         piper_sentence_streaming_enabled: bool = True,
         *,
+        chatterbox_device: str = "cpu",
+        chatterbox_device_message: str = "",
         voice_path: Optional[Path] = None,
     ) -> None:
         if voice_path is not None and piper_voice_path is None:
             piper_voice_path = voice_path
         values = {
+            "chatterbox_device": chatterbox_device,
+            "chatterbox_device_message": chatterbox_device_message,
             "engine": engine,
             "piper_voice_path": piper_voice_path,
             "piper_voice_reference": piper_voice_reference,
@@ -306,6 +312,19 @@ class Controller:
 
     def complete_nano_startup(self, candidate: object) -> None:
         self.complete_kokoro_startup(candidate, ())
+        if (
+            self._backend_manager
+            and self._backend_manager.current() is candidate.backend
+        ):
+            self._notify_nano_device(candidate.backend)
+
+    def _notify_nano_device(self, backend) -> None:
+        message = getattr(backend, "device_message", "")
+        if message and not self.state.shutting_down:
+            try:
+                self._show_notification(message)
+            except (OSError, RuntimeError):
+                self._log_error(message)
 
     def fail_nano_startup(self, reason: str) -> None:
         self.fail_kokoro_startup(reason)
@@ -1189,6 +1208,12 @@ class Controller:
             if settings is None:
                 return None
             return SettingsWindowSnapshot(
+                chatterbox_device=settings.chatterbox_device,
+                chatterbox_device_message=(
+                    getattr(self._backend_manager.current(), "device_message", "")
+                    if settings.engine == "Chatterbox Nano" and self._backend_manager
+                    else ""
+                ),
                 engine=settings.engine,
                 piper_voice_path=self.state.voice_path,
                 piper_voice_reference=settings.piper_voice,
@@ -1209,6 +1234,11 @@ class Controller:
     def nano_preparation_cancel_event(self):
         return getattr(self._nano_preparation_context, "cancel_event", None)
 
+    def nano_preparation_device(self):
+        return getattr(self._nano_preparation_context, "device", None) or (
+            self.state.settings.chatterbox_device if self.state.settings else "cpu"
+        )
+
     def cancel_nano_settings(self) -> None:
         self.nano_settings_cancel_event.set()
 
@@ -1224,11 +1254,23 @@ class Controller:
         piper_sentence_streaming_enabled=None,
         *,
         cancel_event=None,
+        chatterbox_device=None,
     ) -> SettingsApplyResult:
         # Readiness can take minutes. Never hold the UI-facing state lock while
         # constructing Nano; the settings window runs this call off-thread.
         candidate = None
         with self._state_lock:
+            current = self.state.settings
+            device = (
+                chatterbox_device
+                if chatterbox_device is not None
+                else (current.chatterbox_device if current else "cpu")
+            )
+            if device not in ("cpu", "cuda"):
+                return SettingsApplyResult(
+                    False, (("engine", "Choose CPU or GPU for Chatterbox."),)
+                )
+            device_changed = current is not None and device != current.chatterbox_device
             self._settings_apply_generation += 1
             apply_generation = self._settings_apply_generation
             self.nano_settings_cancel_event.set()
@@ -1248,13 +1290,17 @@ class Controller:
         if (
             engine == "Chatterbox Nano"
             and self._backend_manager is not None
-            and self._backend_manager.current_identity() != (engine, "default")
+            and (
+                self._backend_manager.current_identity() != (engine, "default")
+                or device_changed
+            )
             and not self._validate_settings_scalars(
                 hotkey, pitch_text, speed_text, sentence_pause_text
             )[-1]
         ):
             try:
                 self._nano_preparation_context.cancel_event = cancel_event
+                self._nano_preparation_context.device = device
                 candidate = self._backend_manager.prepare(engine, "default")
             except BackendPreparationError:
                 return SettingsApplyResult(
@@ -1262,6 +1308,7 @@ class Controller:
                 )
             finally:
                 self._nano_preparation_context.cancel_event = None
+                self._nano_preparation_context.device = None
         try:
             if engine == "Chatterbox Nano" and cancel_event.is_set():
                 return SettingsApplyResult(
@@ -1279,6 +1326,7 @@ class Controller:
                 candidate,
                 apply_generation,
                 cancel_event,
+                device,
             )
         finally:
             if candidate is not None:
@@ -1297,6 +1345,7 @@ class Controller:
         prepared_candidate: Optional[BackendCandidate] = None,
         apply_generation: Optional[int] = None,
         cancel_event=None,
+        chatterbox_device=None,
     ) -> SettingsApplyResult:
         if (
             piper_sentence_streaming_enabled is not None
@@ -1472,6 +1521,7 @@ class Controller:
 
                 next_settings = replace(
                     current,
+                    chatterbox_device=chatterbox_device or current.chatterbox_device,
                     engine=engine,
                     piper_voice=piper_reference,
                     kokoro_voice=kokoro_voice,
@@ -1544,6 +1594,8 @@ class Controller:
                     self._backend_manager.commit(candidate)
                     committed = True
                 self.state.settings = next_settings
+                if engine == "Chatterbox Nano" and candidate is not None:
+                    self._notify_nano_device(candidate.backend)
                 if resolved_path is not None:
                     self.set_piper_voice_path(resolved_path)
 

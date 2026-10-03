@@ -269,7 +269,7 @@ def test_nano_app_startup_is_background_and_keeps_piper_until_ready(
     preparation_threads = []
     closed = []
 
-    def prepare(cancel_event=None):
+    def prepare(cancel_event=None, device="cpu"):
         preparation_threads.append(threading.get_ident())
         entered.set()
         assert release.wait(2)

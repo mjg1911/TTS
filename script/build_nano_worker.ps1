@@ -10,8 +10,8 @@ if (-not $Python) {
     }
 }
 if (-not $SkipInstall) {
-    & $Python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
-    if ($LASTEXITCODE -ne 0) { throw 'Nano CPU Torch installation failed' }
+    & $Python -m pip install torch==2.6.0+cu124 torchaudio==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+    if ($LASTEXITCODE -ne 0) { throw 'Nano CUDA Torch installation failed' }
     & $Python -m pip install -r requirements/nano-worker.in
     if ($LASTEXITCODE -ne 0) { throw 'Nano dependency installation failed' }
 }

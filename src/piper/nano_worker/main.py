@@ -45,14 +45,29 @@ def _configure_numba_cache(installation_root):
 def serve(root, incoming, outgoing):
     write_frame(outgoing, {'type': 'hello', 'engine': 'Chatterbox Nano', 'protocol_version': 1})
     request = read_frame(incoming)
-    validate_initialize(request)
+    if not isinstance(request, dict) or set(request) not in (
+        {'type', 'manifest_sha256'},
+        {'type', 'manifest_sha256', 'device'},
+    ):
+        raise ValueError('invalid Nano initialize message')
+    validate_initialize({key: request[key] for key in ('type', 'manifest_sha256')})
+    device = request.get('device', 'cpu')
+    if device not in ('cpu', 'cuda'):
+        raise ValueError('Nano device must be cpu or cuda')
     installation = inspect_nano_installation(root)
     if request['manifest_sha256'] != installation.manifest_sha256:
         raise ValueError('Nano manifest identity changed')
     _configure_numba_cache(installation.root)
     with contextlib.redirect_stdout(sys.stderr):
-        model = load_model(installation.model_dir)
-    write_frame(outgoing, {'type': 'ready', 'sample_rate': model.sr})
+        model = load_model(installation.model_dir, device=device) if device == 'cuda' else load_model(installation.model_dir)
+    effective_device = getattr(model, 'effective_device', 'cpu')
+    device_message = getattr(model, 'device_message', '') or ''
+    write_frame(outgoing, {
+        'type': 'ready',
+        'sample_rate': model.sr,
+        'device': effective_device,
+        'device_message': device_message,
+    })
     while True:
         try:
             request = read_frame(incoming)

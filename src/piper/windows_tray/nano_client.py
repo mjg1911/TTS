@@ -38,9 +38,14 @@ def launch_nano_worker(installation):
 
 
 class NanoWorkerClient:
-    def __init__(self, installation, process_factory=launch_nano_worker):
+    def __init__(self, installation, process_factory=launch_nano_worker, device='cpu'):
+        if device not in ('cpu', 'cuda'):
+            raise ValueError('Nano device must be cpu or cuda')
         self.installation = installation
         self._factory = process_factory
+        self.device = device
+        self.effective_device = 'cpu'
+        self.device_message = ''
         self._process = None
         self._queue = None
         self._sample_rate = None
@@ -53,6 +58,8 @@ class NanoWorkerClient:
         process, self._process = self._process, None
         self._queue = None
         self._sample_rate = None
+        self.effective_device = 'cpu'
+        self.device_message = ''
         self._active = False
         if process is None:
             return
@@ -125,12 +132,29 @@ class NanoWorkerClient:
                 hello = self._read(cancel_event, 10)
                 if hello != {'type':'hello','engine':'Chatterbox Nano','protocol_version':1}:
                     raise NanoUnavailable('incompatible Nano worker handshake')
-                write_frame(self._process.stdin, {'type':'initialize','manifest_sha256':self.installation.manifest_sha256})
+                initialize = {
+                    'type': 'initialize',
+                    'manifest_sha256': self.installation.manifest_sha256,
+                }
+                # Older workers accept manifest-only initialization and use CPU.
+                if self.device != 'cpu':
+                    initialize['device'] = self.device
+                write_frame(self._process.stdin, initialize)
                 ready = self._read(cancel_event)
                 rate = ready.get('sample_rate')
-                if ready.get('type') != 'ready' or type(rate) is not int or not 8000 <= rate <= 192000:
+                effective_device = ready.get('device', 'cpu')
+                device_message = ready.get('device_message', '')
+                if (ready.get('type') != 'ready' or type(rate) is not int
+                        or not 8000 <= rate <= 192000
+                        or effective_device not in ('cpu', 'cuda')
+                        or effective_device == 'cuda' and self.device != 'cuda'
+                        or not isinstance(device_message, str)):
                     raise NanoUnavailable('invalid Nano ready response')
                 self._sample_rate = rate
+                self.effective_device = effective_device
+                if self.device == 'cuda' and effective_device == 'cpu' and not device_message:
+                    device_message = 'CUDA unavailable; using CPU.'
+                self.device_message = device_message
             except Exception as error:
                 self._dispose()
                 if isinstance(error, NanoUnavailable):

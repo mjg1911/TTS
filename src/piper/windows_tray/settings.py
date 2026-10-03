@@ -65,6 +65,7 @@ def validate_sentence_pause_ms(value: object) -> int:
 
 @dataclass(frozen=True, init=False)
 class TraySettings:
+    chatterbox_device: Literal["cpu", "cuda"] = "cpu"
     schema_version: int = SETTINGS_SCHEMA_VERSION
     engine: Literal["Piper", "Kokoro", "Chatterbox Nano"] = "Piper"
     piper_voice: str = DEFAULT_VOICE
@@ -97,6 +98,7 @@ class TraySettings:
             DEFAULT_PIPER_SENTENCE_STREAMING_ENABLED
         ),
         *,
+        chatterbox_device: Literal["cpu", "cuda"] = "cpu",
         voice: Optional[str] = None,
     ) -> None:
         if voice is not None and piper_voice == DEFAULT_VOICE:
@@ -132,6 +134,9 @@ def _validated(data: object) -> TraySettings:
         raise ValueError("unsupported settings schema")
 
     engine = data.get("engine", "Piper")
+    chatterbox_device = data.get("chatterbox_device", "cpu")
+    if chatterbox_device not in ("cpu", "cuda"):
+        raise ValueError("invalid Chatterbox device")
     piper_voice = data.get("piper_voice")
     kokoro_voice = data.get("kokoro_voice", DEFAULT_KOKORO_VOICE)
     hotkey = data.get("hotkey")
@@ -180,6 +185,7 @@ def _validated(data: object) -> TraySettings:
     if type(browser_chatgpt_enabled) is not bool:
         raise ValueError("browser_chatgpt_enabled must be a boolean")
     return TraySettings(
+        chatterbox_device=chatterbox_device,
         engine=engine,
         piper_voice=piper_voice.strip(),
         kokoro_voice=kokoro_voice.strip(),

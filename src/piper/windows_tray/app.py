@@ -114,12 +114,12 @@ def _prepare_nano_installation():
     )
 
 
-def _prepare_nano_backend(cancel_event=None) -> BackendCandidate:
+def _prepare_nano_backend(cancel_event=None, device="cpu") -> BackendCandidate:
     from .nano_client import NanoWorkerClient
 
     try:
         installation = _prepare_nano_installation()
-        client = NanoWorkerClient(installation)
+        client = NanoWorkerClient(installation, device=device)
         if cancel_event is not None:
             register_cleanup = getattr(cancel_event, "register_cancel_cleanup", None)
             if register_cleanup is not None:
@@ -411,9 +411,16 @@ def run_app(
                 if voice_id != "default":
                     raise BackendPreparationError("Unknown Nano voice")
                 return _prepare_nano_backend(
-                    controller.nano_preparation_cancel_event()
-                    if controller is not None
-                    else None
+                    (
+                        controller.nano_preparation_cancel_event()
+                        if controller is not None
+                        else None
+                    ),
+                    device=(
+                        controller.nano_preparation_device()
+                        if controller is not None
+                        else settings.chatterbox_device
+                    ),
                 )
             if engine != "Kokoro":
                 raise BackendPreparationError("Kokoro is unavailable")
@@ -663,7 +670,10 @@ def run_app(
 
             def prepare_nano_startup(cancel_event, record_timing):
                 candidate = record_timing(
-                    "nano_readiness", lambda: _prepare_nano_backend(cancel_event)
+                    "nano_readiness",
+                    lambda: _prepare_nano_backend(
+                        cancel_event, device=settings.chatterbox_device
+                    ),
                 )
                 return candidate, ()
 
