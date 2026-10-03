@@ -1,3 +1,6 @@
+import gc
+import weakref
+
 import pytest
 
 from piper.windows_tray.backend_manager import (
@@ -15,12 +18,47 @@ class FakeBackend:
         self.shutdown_calls += 1
 
 
+def make_manager(current, prepare, close=None):
+    return BackendManager(
+        "Piper",
+        "old.onnx",
+        current,
+        close or current.shutdown,
+        prepare,
+    )
+
+
+def test_current_identity_reports_initial_backend():
+    current = FakeBackend()
+    manager = make_manager(
+        current,
+        lambda engine, voice: BackendCandidate(engine, voice, FakeBackend()),
+    )
+
+    assert manager.current_identity() == ("Piper", "old.onnx")
+
+
+def test_commit_updates_backend_and_identity_atomically():
+    current = FakeBackend()
+    prepared = FakeBackend()
+    manager = make_manager(
+        current,
+        lambda engine, voice: BackendCandidate(
+            engine, voice, prepared, prepared.shutdown
+        ),
+    )
+
+    manager.commit(manager.prepare("Kokoro", "af_heart"))
+
+    assert manager.current() is prepared
+    assert manager.current_identity() == ("Kokoro", "af_heart")
+
+
 def test_prepare_does_not_replace_current_backend():
     current = FakeBackend()
     prepared_backend = FakeBackend()
-    manager = BackendManager(
+    manager = make_manager(
         current,
-        current.shutdown,
         lambda engine, voice: BackendCandidate(
             engine, voice, prepared_backend, prepared_backend.shutdown
         ),
@@ -33,9 +71,8 @@ def test_prepare_does_not_replace_current_backend():
 def test_discard_closes_uncommitted_candidate_exactly_once():
     current = FakeBackend()
     prepared_backend = FakeBackend()
-    manager = BackendManager(
+    manager = make_manager(
         current,
-        current.shutdown,
         lambda engine, voice: BackendCandidate(
             engine, voice, prepared_backend, prepared_backend.shutdown
         ),
@@ -50,9 +87,8 @@ def test_discard_closes_uncommitted_candidate_exactly_once():
 def test_commit_transfers_candidate_ownership_and_closes_old_backend():
     current = FakeBackend()
     prepared_backend = FakeBackend()
-    manager = BackendManager(
+    manager = make_manager(
         current,
-        current.shutdown,
         lambda engine, voice: BackendCandidate(
             engine, voice, prepared_backend, prepared_backend.shutdown
         ),
@@ -69,9 +105,8 @@ def test_commit_transfers_candidate_ownership_and_closes_old_backend():
 def test_commit_defers_closing_backend_until_lease_is_released():
     current = FakeBackend()
     prepared_backend = FakeBackend()
-    manager = BackendManager(
+    manager = make_manager(
         current,
-        current.shutdown,
         lambda engine, voice: BackendCandidate(
             engine, voice, prepared_backend, prepared_backend.shutdown
         ),
@@ -87,7 +122,7 @@ def test_commit_defers_closing_backend_until_lease_is_released():
 
 def test_shutdown_defers_closing_backend_until_lease_is_released():
     current = FakeBackend()
-    manager = BackendManager(current, current.shutdown, lambda *_: None)
+    manager = make_manager(current, lambda *_: None)
     _backend, release = manager.acquire()
 
     manager.shutdown()
@@ -100,9 +135,8 @@ def test_shutdown_defers_closing_backend_until_lease_is_released():
 def test_candidate_cannot_be_committed_after_discard():
     current = FakeBackend()
     prepared_backend = FakeBackend()
-    manager = BackendManager(
+    manager = make_manager(
         current,
-        current.shutdown,
         lambda engine, voice: BackendCandidate(
             engine, voice, prepared_backend, prepared_backend.shutdown
         ),
@@ -115,9 +149,8 @@ def test_candidate_cannot_be_committed_after_discard():
 
 def test_shutdown_closes_active_backend_once():
     current = FakeBackend()
-    manager = BackendManager(
+    manager = make_manager(
         current,
-        current.shutdown,
         lambda engine, voice: (_ for _ in ()).throw(
             BackendPreparationError("unused")
         ),
@@ -125,3 +158,29 @@ def test_shutdown_closes_active_backend_once():
     manager.shutdown()
     manager.shutdown()
     assert current.shutdown_calls == 1
+
+
+def test_replaced_backend_is_collectible_after_last_lease_releases():
+    current = FakeBackend()
+    current_ref = weakref.ref(current)
+    replacement = FakeBackend()
+    manager = BackendManager(
+        "Piper",
+        "old.onnx",
+        current,
+        lambda: None,
+        lambda engine, voice: BackendCandidate(
+            engine, voice, replacement, replacement.shutdown
+        ),
+    )
+    leased, release = manager.acquire()
+    manager.commit(manager.prepare("Kokoro", "af_heart"))
+
+    del current
+    gc.collect()
+    assert current_ref() is leased
+
+    del leased
+    release()
+    gc.collect()
+    assert current_ref() is None

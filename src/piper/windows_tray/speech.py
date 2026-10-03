@@ -345,12 +345,14 @@ class SpeechWorker:
                 self._active_request = request
                 self._active_cancel_event = cancel_event
 
-            self._speak(request, cancel_event)
-
-            with self._condition:
-                self._active_request = None
-                self._active_cancel_event = None
-                self._active_player = None
+            try:
+                self._speak(request, cancel_event)
+            finally:
+                with self._condition:
+                    self._active_request = None
+                    self._active_cancel_event = None
+                    self._active_player = None
+                del request
 
     def _has_pending_locked(self) -> bool:
         return (

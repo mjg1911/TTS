@@ -377,6 +377,92 @@ def _patch_primary_app(monkeypatch, events):
     return app, instance, ui, tray
 
 
+def test_primary_bootstrap_tracks_canonical_piper_backend_identity(monkeypatch):
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    managers = []
+    real_manager = app.BackendManager
+    model_path = Path("voice.onnx").resolve()
+    voice = object()
+
+    monkeypatch.setattr(
+        app,
+        "_load_configured_voice",
+        lambda _settings, _dirs: (model_path, voice),
+    )
+
+    def record_manager(engine, voice_id, backend, close_backend, prepare_backend):
+        manager = real_manager(
+            engine,
+            voice_id,
+            backend,
+            close_backend,
+            prepare_backend,
+        )
+        managers.append(manager)
+        return manager
+
+    monkeypatch.setattr(app, "BackendManager", record_manager)
+    ui.root.mainloop = lambda: None
+
+    assert app.run_app([]) == 0
+    assert managers[0].current_identity() == ("Piper", str(model_path))
+
+
+@pytest.mark.parametrize("recover", [False, True])
+def test_startup_piper_is_collectible_while_mainloop_runs(monkeypatch, recover):
+    import gc
+    import weakref
+
+    events = []
+    app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
+    controllers = []
+    references = []
+    original_controller = app.Controller
+    model_path = Path("voice.onnx").resolve()
+
+    class Piper:
+        pass
+
+    def load_voice(*_args):
+        voice = Piper()
+        references.append(weakref.ref(voice))
+        return model_path, voice
+
+    def load_configured(*args):
+        if recover:
+            raise FileNotFoundError("configured model missing")
+        return load_voice(*args)
+
+    def record_controller(*args, **kwargs):
+        controller = original_controller(*args, **kwargs)
+        controllers.append(controller)
+        return controller
+
+    monkeypatch.setattr(app, "Controller", record_controller)
+    monkeypatch.setattr(app, "_load_configured_voice", load_configured)
+    monkeypatch.setattr(app, "load_voice_candidate", load_voice)
+    monkeypatch.setattr(app, "save_settings", lambda _settings: None)
+    ui.choose_voice_model = lambda: model_path
+
+    def mainloop():
+        controller = controllers[0]
+        # Drive the real controller completion path deterministically.
+        controller.begin_kokoro_startup()
+        controller.complete_kokoro_startup(
+            app.BackendCandidate("Kokoro", "af_heart", object()), ["af_heart"]
+        )
+        assert controller._backend_manager.current_identity() == ("Kokoro", "af_heart")
+        assert controller.state.voice is None
+        assert controller._voice_manager.current() is None
+        assert len(references) == 1
+        gc.collect()
+        assert references[0]() is None
+
+    ui.root.mainloop = mainloop
+    assert app.run_app([]) == 0
+
+
 def test_bundled_kokoro_deploy_failure_does_not_block_piper_startup(monkeypatch):
     events = []
     app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)

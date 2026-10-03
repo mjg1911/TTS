@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from piper.windows_tray.backend_manager import (
     BackendCandidate,
     BackendManager,
@@ -42,7 +44,9 @@ def _controller_with_kokoro_prepare_failure(reason, kokoro_voice_ids=("af_heart"
         backend = MatrixBackend(engine)
         return BackendCandidate(engine, voice_id, backend, backend.shutdown)
 
-    manager = BackendManager(piper, piper.shutdown, prepare_backend)
+    manager = BackendManager(
+        "Piper", settings.piper_voice, piper, piper.shutdown, prepare_backend
+    )
     controller = Controller(
         settings=settings,
         save_settings=saved.append,
@@ -50,6 +54,7 @@ def _controller_with_kokoro_prepare_failure(reason, kokoro_voice_ids=("af_heart"
         backend_manager=manager,
         kokoro_voice_ids=kokoro_voice_ids,
     )
+    controller.configure_runtime(resolve_voice=lambda reference: Path(reference))
     return controller, manager, piper, saved
 
 
@@ -118,7 +123,7 @@ def test_piper_settings_apply_when_kokoro_voice_list_is_empty():
     )
 
     assert result.applied
-    assert manager.current().name == "Piper"
-    assert piper.shutdown_calls == 1
+    assert manager.current() is piper
+    assert piper.shutdown_calls == 0
     assert controller.state.settings.engine == "Piper"
     assert saved == [controller.state.settings]
