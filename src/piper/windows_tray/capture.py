@@ -4,7 +4,7 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Callable, Optional, Any
+from typing import Any, Callable, Optional
 
 from .logging_setup import log_exception_safe
 
@@ -43,6 +43,41 @@ class SelectionCapture:
         self._sleep = sleep
 
     def capture(self, timeout_s: float = 1.0, poll_s: float = 0.05) -> CaptureResult:
+        try:
+            snapshot = self._clipboard.snapshot()
+        except OSError as error:
+            log_exception_safe(
+                _LOGGER, "capture access failure", error, stage="clipboard_snapshot"
+            )
+            return CaptureResult(CaptureStatus.ACCESS_ERROR, detail=str(error))
+
+        restore_error: Optional[OSError] = None
+        try:
+            result = self._capture_selection(timeout_s, poll_s)
+        finally:
+            # Restore before returning the captured text to the speech worker,
+            # including when copy or polling fails. Clipboard locks are transient.
+            for attempt in range(3):
+                try:
+                    self._clipboard.restore(snapshot)
+                except OSError as error:
+                    if attempt == 2:
+                        log_exception_safe(
+                            _LOGGER,
+                            "capture access failure",
+                            error,
+                            stage="clipboard_restore",
+                        )
+                        restore_error = error
+                        break
+                    self._sleep(0.05)
+                else:
+                    break
+        if restore_error is not None:
+            return CaptureResult(CaptureStatus.ACCESS_ERROR, detail=str(restore_error))
+        return result
+
+    def _capture_selection(self, timeout_s: float, poll_s: float) -> CaptureResult:
         try:
             before = self._clipboard.sequence_number()
             self._sleep(HOTKEY_RELEASE_DELAY_S)
