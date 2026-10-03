@@ -1,4 +1,6 @@
 from pathlib import Path
+from queue import Queue, Empty
+import threading
 import tkinter as tk
 from tkinter import filedialog, ttk
 from typing import Callable, Optional
@@ -160,7 +162,7 @@ class SettingsWindow:
         self.engine_combo = ttk.Combobox(
             voice,
             textvariable=self.engine_var,
-            values=("Piper", "Kokoro"),
+            values=("Piper", "Kokoro", "Chatterbox Nano"),
             state="readonly",
             style="Piper.TCombobox",
             font=("Segoe UI", 10),
@@ -170,13 +172,18 @@ class SettingsWindow:
             "<<ComboboxSelected>>", lambda _: self._refresh_voice_controls()
         )
         self._error_label(voice, "engine", 3)
-        if not snapshot.kokoro_available and snapshot.kokoro_unavailable_reason:
-            ttk.Label(
-                voice,
-                textvariable=self.engine_status_var,
-                style="Muted.Piper.TLabel",
-                wraplength=310,
-            ).grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        self.nano_voice_frame = ttk.Frame(voice, style="Panel.Piper.TFrame")
+        ttk.Label(
+            self.nano_voice_frame,
+            text="Default English voice (CPU)",
+            style="Muted.Piper.TLabel",
+        ).grid(row=0, column=0, sticky="w", pady=(10, 5))
+        ttk.Label(
+            voice,
+            textvariable=self.engine_status_var,
+            style="Muted.Piper.TLabel",
+            wraplength=310,
+        ).grid(row=4, column=0, sticky="ew", pady=(6, 0))
         self.piper_voice_frame = ttk.Frame(voice, style="Panel.Piper.TFrame")
         self.piper_voice_frame.columnconfigure(0, weight=1)
         ttk.Label(
@@ -216,7 +223,11 @@ class SettingsWindow:
         )
         self.kokoro_voice_combo.grid(row=1, column=0, sticky="ew")
         self._error_label(self.kokoro_voice_frame, "kokoro_voice", 2)
-        if not snapshot.kokoro_available and snapshot.kokoro_unavailable_reason:
+        if (
+            snapshot.engine == "Kokoro"
+            and not snapshot.kokoro_available
+            and snapshot.kokoro_unavailable_reason
+        ):
             self.engine_status_var.set(snapshot.kokoro_unavailable_reason)
             self.engine_var.set("Piper")
         self._refresh_voice_controls()
@@ -429,7 +440,10 @@ class SettingsWindow:
 
     def _refresh_voice_controls(self) -> None:
         kokoro = self.engine_var.get() == "Kokoro"
-        self._show_frame(self.piper_voice_frame, not kokoro)
+        self._show_frame(self.piper_voice_frame, self.engine_var.get() == "Piper")
+        self._show_frame(
+            self.nano_voice_frame, self.engine_var.get() == "Chatterbox Nano"
+        )
         self._show_frame(self.kokoro_voice_frame, kokoro)
 
     @staticmethod
@@ -502,16 +516,59 @@ class SettingsWindow:
     def _apply(self) -> None:
         self._clear_errors()
         self._render_errors()
-        result = self._on_apply(
+        if getattr(self, "_apply_in_progress", False):
+            return
+        arguments = (
             self.engine_var.get(),
             self.hotkey_var.get(),
             self.pitch_var.get(),
             self.speed_var.get(),
-            self.pending_voice_path,
+            self.pending_voice_path if self.engine_var.get() == "Piper" else None,
             self.kokoro_voice_var.get(),
             self.sentence_pause_var.get(),
             self.piper_sentence_streaming_var.get() == "true",
         )
+        if arguments[0] != "Chatterbox Nano":
+            self._finish_apply(self._on_apply(*arguments))
+            return
+        self._apply_in_progress = True
+        self._apply_cancel_event = threading.Event()
+        self.engine_status_var.set("Preparing Chatterbox Nano...")
+        results = Queue(maxsize=1)
+
+        def apply_background():
+            try:
+                owner = getattr(self._on_apply, "__self__", None)
+                if hasattr(owner, "cancel_nano_settings"):
+                    result = self._on_apply(
+                        *arguments, cancel_event=self._apply_cancel_event
+                    )
+                else:
+                    result = self._on_apply(*arguments)
+            except Exception:
+                result = SettingsApplyResult(
+                    False, (("engine", "Chatterbox Nano is not available."),)
+                )
+            results.put(result)
+
+        def poll():
+            if self._closed:
+                return
+            try:
+                result = results.get_nowait()
+            except Empty:
+                self.window.after(25, poll)
+                return
+            self._apply_in_progress = False
+            self.engine_status_var.set("")
+            self._finish_apply(result)
+
+        threading.Thread(
+            target=apply_background, name="nano-settings", daemon=True
+        ).start()
+        self.window.after(25, poll)
+
+    def _finish_apply(self, result):
         if not result.applied:
             for key, message in result.errors:
                 target = "piper_voice" if key == "voice" else key
@@ -577,6 +634,8 @@ class SettingsWindow:
     def close(self) -> None:
         if self._closed:
             return
+        if getattr(self, "_apply_in_progress", False):
+            self._apply_cancel_event.set()
         self._closed = True
         try:
             self.window.destroy()

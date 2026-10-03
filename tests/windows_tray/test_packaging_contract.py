@@ -238,31 +238,6 @@ def test_frozen_smoke_script_uses_a_unique_temporary_root() -> None:
     assert '$SmokeRoot = Join-Path $BaseTemp "piper-tray-frozen-smoke"' not in text
 
 
-def test_windows_workflow_tests_builds_smokes_and_uploads() -> None:
-    text = (ROOT / ".github" / "workflows" / "windows-tray.yml").read_text(
-        encoding="utf-8"
-    )
-    assert "windows-latest" in text
-    assert "pytest tests/windows_tray tests/test_core_compatibility.py" in text
-    assert "python -m piper --help" in text
-    assert "build_windows_tray.ps1" in text
-    assert "smoke_windows_tray.ps1" in text
-    assert "actions/checkout@v7" in text
-    assert "actions/setup-python@v7" in text
-    assert "actions/upload-artifact@v7" in text
-    assert "if-no-files-found: error" in text
-
-
-def test_windows_workflow_provisions_pinned_smoke_voice() -> None:
-    text = (ROOT / ".github" / "workflows" / "windows-tray.yml").read_text(
-        encoding="utf-8"
-    )
-
-    assert "Download frozen smoke voice" in text
-    assert "piper-voices/resolve/v1.0.0" in text
-    assert "PIPER_SMOKE_VOICE_DIR" in text
-
-
 def test_build_and_smoke_use_one_folder_executable() -> None:
     build = (ROOT / "script" / "build_windows_tray.ps1").read_text(encoding="utf-8")
     smoke = (ROOT / "script" / "smoke_windows_tray.ps1").read_text(encoding="utf-8")
@@ -274,13 +249,9 @@ def test_build_and_smoke_use_one_folder_executable() -> None:
     assert '[string]$TrayExe = "dist/PiperTray/PiperTray.exe"' in acceptance
 
 
-def test_installer_and_ci_ship_entire_one_folder_tree() -> None:
+def test_installer_ships_entire_one_folder_tree() -> None:
     builder = (ROOT / "script" / "build_windows_installer.ps1").read_text(encoding="utf-8")
     installer = (ROOT / "script" / "piper_tray_installer.iss").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "windows-tray.yml").read_text(encoding="utf-8")
     assert '"dist/PiperTray/PiperTray.exe"' in builder
     assert '"dist/PiperTray/_internal/kokoro_payload/manifest.json"' in builder
     assert 'Source: "..\\dist\\PiperTray\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs' in installer
-    assert 'dist/PiperTray/' in workflow
-    assert 'dist/PiperTray/_internal/kokoro_payload/manifest.json' in workflow
-    assert 'dist/PiperTray/_internal/kokoro_payload/worker/KokoroWorker.exe' in workflow

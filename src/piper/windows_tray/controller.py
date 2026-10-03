@@ -238,14 +238,12 @@ class Controller:
         self._commands = Queue()  # type: Queue[Command]
         self._save_settings = save_settings
         self._choose_voice: Callable[[], Optional[Path]] = lambda: None
-        self._load_voice: Callable[[str], Tuple[Path, object]] = (
-            lambda _reference: (_ for _ in ()).throw(
-                RuntimeError("voice loader is not configured")
-            )
-        )
-        self._resolve_voice: Callable[[str], Path] = (
-            lambda reference: self._load_voice(reference)[0]
-        )
+        self._load_voice: Callable[[str], Tuple[Path, object]] = lambda _reference: (
+            _ for _ in ()
+        ).throw(RuntimeError("voice loader is not configured"))
+        self._resolve_voice: Callable[[str], Path] = lambda reference: self._load_voice(
+            reference
+        )[0]
         self._show_status: Callable[[str], None] = lambda _message: None
         self._set_tray_status: Callable[[str], None] = lambda _message: None
         self._show_notification: Callable[[str], None] = lambda _message: None
@@ -260,7 +258,9 @@ class Controller:
         self._ensure_tray_visible: Callable[[], None] = lambda: None
         self._request_teardown: Callable[[], None] = lambda: None
         self._capture = capture or (
-            lambda: CaptureResult(CaptureStatus.ACCESS_ERROR, detail="capture is not configured")
+            lambda: CaptureResult(
+                CaptureStatus.ACCESS_ERROR, detail="capture is not configured"
+            )
         )
         self._capture_submit = capture_submit or _start_daemon_job
         self._capture_pending = False
@@ -283,6 +283,10 @@ class Controller:
         self._backend_manager = backend_manager
         self._kokoro_voice_ids = tuple(sorted(kokoro_voice_ids))
         self._kokoro_unavailable_reason = kokoro_unavailable_reason
+        self._nano_preparation_context = threading.local()
+        self._settings_apply_generation = 0
+        self.nano_settings_cancel_event = threading.Event()
+        self._startup_engine = "Kokoro"
         self._startup_piper_backend = None
         self._startup_status_pending_or_active = False
         self._startup_status_generation: Optional[int] = None
@@ -297,10 +301,20 @@ class Controller:
         with self._state_lock:
             self._kokoro_voice_ids = tuple(sorted(voice_ids))
 
-    def begin_kokoro_startup(self) -> None:
+    def begin_nano_startup(self) -> None:
+        self.begin_kokoro_startup("Chatterbox Nano")
+
+    def complete_nano_startup(self, candidate: object) -> None:
+        self.complete_kokoro_startup(candidate, ())
+
+    def fail_nano_startup(self, reason: str) -> None:
+        self.fail_kokoro_startup(reason)
+
+    def begin_kokoro_startup(self, engine: str = "Kokoro") -> None:
         with self._state_lock:
             if self.state.shutting_down:
                 return
+            self._startup_engine = engine
             self.state.kokoro_startup_state = KokoroStartupState.LOADING
             self._startup_status_pending_or_active = False
             self._startup_status_generation = None
@@ -309,7 +323,7 @@ class Controller:
                 if self._backend_manager is not None
                 else self.state.voice
             )
-            self._set_tray_status("Kokoro is loading")
+            self._set_tray_status("%s is loading" % self._startup_engine)
 
     def complete_kokoro_startup(
         self, candidate: object, voice_ids: Sequence[str]
@@ -339,12 +353,13 @@ class Controller:
                 return
             self.clear_voice_backend()
             self._startup_piper_backend = None
-            self._kokoro_voice_ids = tuple(sorted(voice_ids))
-            self._kokoro_unavailable_reason = None
+            if self._startup_engine == "Kokoro":
+                self._kokoro_voice_ids = tuple(sorted(voice_ids))
+                self._kokoro_unavailable_reason = None
             self._startup_status_pending_or_active = False
             self._startup_status_generation = None
             self.state.kokoro_startup_state = KokoroStartupState.READY
-            self._set_tray_status("Kokoro is ready")
+            self._set_tray_status("%s is ready" % self._startup_engine)
 
     def fail_kokoro_startup(self, reason: str) -> None:
         with self._state_lock:
@@ -353,15 +368,28 @@ class Controller:
                 or self.state.kokoro_startup_state is not KokoroStartupState.LOADING
             ):
                 return
-            self._kokoro_unavailable_reason = reason
+            if (
+                self._startup_engine == "Chatterbox Nano"
+                and self.state.settings is not None
+            ):
+                self.state.settings = replace(self.state.settings, engine="Piper")
+            else:
+                self._kokoro_unavailable_reason = reason
             self._startup_piper_backend = None
             self._startup_status_pending_or_active = False
             self._startup_status_generation = None
             self.state.kokoro_startup_state = KokoroStartupState.UNAVAILABLE
-            self._set_tray_status("Kokoro unavailable; Piper is ready")
+            self._set_tray_status(
+                "%s unavailable; Piper is ready" % self._startup_engine
+            )
             self._show_status(
-                "Kokoro is unavailable. Piper will continue to be used. "
-                "Open Settings and run Verify Kokoro files."
+                (
+                    (
+                        "Chatterbox Nano is unavailable. Piper will continue to be used. Check the installed Nano payload."
+                        if self._startup_engine == "Chatterbox Nano"
+                        else "Kokoro is unavailable. Piper will continue to be used. Open Settings and run Verify Kokoro files."
+                    )
+                )
             )
 
     def configure_runtime(
@@ -435,7 +463,11 @@ class Controller:
             self._speech_worker = speech_worker
         if voice_manager is not None:
             self._voice_manager = voice_manager
-        elif self._voice_manager is None and self.state.voice is not None and load_voice is not None:
+        elif (
+            self._voice_manager is None
+            and self.state.voice is not None
+            and load_voice is not None
+        ):
             self._voice_manager = VoiceManager(self.state.voice, load_voice)
         if codex_monitor is not None:
             self._codex_monitor = codex_monitor
@@ -492,9 +524,7 @@ class Controller:
                 command.kind is CommandKind.CAPTURE_REQUEST
                 and command.capture_is_startup_status is None
             ):
-                loading = (
-                    self.state.kokoro_startup_state is KokoroStartupState.LOADING
-                )
+                loading = self.state.kokoro_startup_state is KokoroStartupState.LOADING
                 command = replace(
                     command,
                     capture_is_startup_status=loading,
@@ -536,12 +566,18 @@ class Controller:
     def enqueue_codex_response(self, response: CodexCompletedResponse) -> None:
         with self._codex_epoch_lock:
             epoch = self._codex_monitor_epoch
-        self.enqueue(Command(CommandKind.CODEX_RESPONSE, CodexDelivery(epoch, response)))
+        self.enqueue(
+            Command(CommandKind.CODEX_RESPONSE, CodexDelivery(epoch, response))
+        )
 
     def enqueue_codex_status(self, status: object) -> None:
         with self._codex_epoch_lock:
             epoch = self._codex_monitor_epoch
-        self.enqueue(Command(CommandKind.CODEX_MONITOR_STATUS, CodexStatusDelivery(epoch, status)))
+        self.enqueue(
+            Command(
+                CommandKind.CODEX_MONITOR_STATUS, CodexStatusDelivery(epoch, status)
+            )
+        )
 
     def start_configured_codex_monitoring(self) -> bool:
         settings = self.state.settings
@@ -565,7 +601,9 @@ class Controller:
             return False
         return True
 
-    def _record_codex_outcome(self, response: CodexCompletedResponse, outcome: str) -> None:
+    def _record_codex_outcome(
+        self, response: CodexCompletedResponse, outcome: str
+    ) -> None:
         self._codex_diagnostic(response.response_id, len(response.text), outcome)
 
     def announce_ready(self) -> None:
@@ -650,7 +688,10 @@ class Controller:
                 )
             else:
                 self._request_capture()
-        elif command.kind in (CommandKind.CAPTURE_SUCCEEDED, CommandKind.CAPTURE_FAILED):
+        elif command.kind in (
+            CommandKind.CAPTURE_SUCCEEDED,
+            CommandKind.CAPTURE_FAILED,
+        ):
             self._complete_capture(command)
         elif command.kind is CommandKind.SHOW_LAST_TEXT:
             self._show_last_text(self.state.last_text)
@@ -747,7 +788,10 @@ class Controller:
             or value.epoch != self.codex_monitor_epoch
         ):
             return
-        if self.state.capture_in_progress or self.state.playback is PlaybackState.SPEAKING:
+        if (
+            self.state.capture_in_progress
+            or self.state.playback is PlaybackState.SPEAKING
+        ):
             self._record_codex_outcome(value.response, "skipped_foreground")
             return
         text = prepare_codex_speech(value.response.text)
@@ -758,7 +802,9 @@ class Controller:
         accepted = bool(
             self._speech_worker is not None
             and self._speech_worker.submit(
-                SpeechRequest(self.state.auxiliary_generation, text, SpeechPurpose.CODEX)
+                SpeechRequest(
+                    self.state.auxiliary_generation, text, SpeechPurpose.CODEX
+                )
             )
         )
         self._record_codex_outcome(
@@ -892,7 +938,11 @@ class Controller:
             self.state.playback = PlaybackState.STOPPED
 
         settings = self.state.settings
-        if settings is not None and settings.codex_enabled and self._codex_monitor is not None:
+        if (
+            settings is not None
+            and settings.codex_enabled
+            and self._codex_monitor is not None
+        ):
             self._advance_codex_epoch()
             self._cancel_codex_speech()
             try:
@@ -905,10 +955,7 @@ class Controller:
 
         self._ensure_tray_visible()
 
-        restored = (
-            self._hotkeys is not None
-            and bool(self._hotkeys.reregister())
-        )
+        restored = self._hotkeys is not None and bool(self._hotkeys.reregister())
 
         if not restored:
             self._report_runtime_error(UserError.HOTKEY_CONFLICT)
@@ -923,8 +970,7 @@ class Controller:
                 hotkey = getattr(spec, "canonical", "unavailable")
 
         self._log_info(
-            "system resume playback=%s hotkey=%s"
-            % (self.state.playback.name, hotkey)
+            "system resume playback=%s hotkey=%s" % (self.state.playback.name, hotkey)
         )
 
     def _request_capture(self) -> None:
@@ -1032,10 +1078,7 @@ class Controller:
         text: str,
         purpose: SpeechPurpose,
     ) -> None:
-        if (
-            self.state.shutting_down
-            or self._speech_worker is None
-        ):
+        if self.state.shutting_down or self._speech_worker is None:
             return
 
         self.state.auxiliary_generation += 1
@@ -1061,7 +1104,7 @@ class Controller:
         submitted = self._speech_worker.submit(
             SpeechRequest(
                 generation,
-                "Kokoro is loading, please wait.",
+                "%s is loading, please wait." % self._startup_engine,
                 SpeechPurpose.STARTUP_STATUS,
                 backend_override=(
                     backend_override
@@ -1080,10 +1123,16 @@ class Controller:
         if event.generation != self.state.voice_generation:
             return
         if not event.success:
-            self._log_error("Selected Piper voice could not be loaded: %s" % event.error)
+            self._log_error(
+                "Selected Piper voice could not be loaded: %s" % event.error
+            )
             self._show_status(user_message(UserError.VOICE_LOAD_REPLACEMENT))
             return
-        if event.model_path is None or event.voice is None or self._voice_manager is None:
+        if (
+            event.model_path is None
+            or event.voice is None
+            or self._voice_manager is None
+        ):
             return
         self.install_voice(event.model_path, event.voice, persist=True)
 
@@ -1121,9 +1170,7 @@ class Controller:
 
             if self.state.playback is PlaybackState.SPEAKING:
                 if self._speech_worker is not None:
-                    self._speech_worker.cancel_active(
-                        self.state.speech_generation
-                    )
+                    self._speech_worker.cancel_active(self.state.speech_generation)
 
             self.state.speech_generation += 1
             self.state.playback = PlaybackState.SPEAKING
@@ -1159,7 +1206,85 @@ class Controller:
                 ),
             )
 
+    def nano_preparation_cancel_event(self):
+        return getattr(self._nano_preparation_context, "cancel_event", None)
+
+    def cancel_nano_settings(self) -> None:
+        self.nano_settings_cancel_event.set()
+
     def apply_settings(
+        self,
+        engine,
+        hotkey,
+        pitch_text,
+        speed_text,
+        piper_voice_path,
+        kokoro_voice,
+        sentence_pause_text=None,
+        piper_sentence_streaming_enabled=None,
+        *,
+        cancel_event=None,
+    ) -> SettingsApplyResult:
+        # Readiness can take minutes. Never hold the UI-facing state lock while
+        # constructing Nano; the settings window runs this call off-thread.
+        candidate = None
+        with self._state_lock:
+            self._settings_apply_generation += 1
+            apply_generation = self._settings_apply_generation
+            self.nano_settings_cancel_event.set()
+        if engine == "Chatterbox Nano":
+            with self._state_lock:
+                if self.state.shutting_down:
+                    return SettingsApplyResult(
+                        False, (("engine", "Piper is shutting down."),)
+                    )
+                if self.state.kokoro_startup_state is KokoroStartupState.LOADING:
+                    return SettingsApplyResult(
+                        False,
+                        (("engine", "%s is still starting." % self._startup_engine),),
+                    )
+                cancel_event = cancel_event or threading.Event()
+                self.nano_settings_cancel_event = cancel_event
+        if (
+            engine == "Chatterbox Nano"
+            and self._backend_manager is not None
+            and self._backend_manager.current_identity() != (engine, "default")
+            and not self._validate_settings_scalars(
+                hotkey, pitch_text, speed_text, sentence_pause_text
+            )[-1]
+        ):
+            try:
+                self._nano_preparation_context.cancel_event = cancel_event
+                candidate = self._backend_manager.prepare(engine, "default")
+            except BackendPreparationError:
+                return SettingsApplyResult(
+                    False, (("engine", "Chatterbox Nano is not available."),)
+                )
+            finally:
+                self._nano_preparation_context.cancel_event = None
+        try:
+            if engine == "Chatterbox Nano" and cancel_event.is_set():
+                return SettingsApplyResult(
+                    False, (("engine", "Chatterbox Nano preparation was cancelled."),)
+                )
+            return self._apply_settings(
+                engine,
+                hotkey,
+                pitch_text,
+                speed_text,
+                piper_voice_path,
+                kokoro_voice,
+                sentence_pause_text,
+                piper_sentence_streaming_enabled,
+                candidate,
+                apply_generation,
+                cancel_event,
+            )
+        finally:
+            if candidate is not None:
+                candidate.discard()
+
+    def _apply_settings(
         self,
         engine: str,
         hotkey: str,
@@ -1169,6 +1294,9 @@ class Controller:
         kokoro_voice: str,
         sentence_pause_text: Optional[str] = None,
         piper_sentence_streaming_enabled: Optional[bool] = None,
+        prepared_candidate: Optional[BackendCandidate] = None,
+        apply_generation: Optional[int] = None,
+        cancel_event=None,
     ) -> SettingsApplyResult:
         if (
             piper_sentence_streaming_enabled is not None
@@ -1176,21 +1304,31 @@ class Controller:
         ):
             return SettingsApplyResult(
                 False,
-                ((
-                    "piper_sentence_streaming",
-                    "Piper sentence streaming must be enabled or disabled.",
-                ),),
+                (
+                    (
+                        "piper_sentence_streaming",
+                        "Piper sentence streaming must be enabled or disabled.",
+                    ),
+                ),
             )
         if self.state.settings_recovery_required:
             return SettingsApplyResult(
                 False,
-                ((
-                    "general",
-                    "Settings state is uncertain. Restart Piper Tray before changing settings again.",
-                ),),
+                (
+                    (
+                        "general",
+                        "Settings state is uncertain. Restart Piper Tray before changing settings again.",
+                    ),
+                ),
             )
-        if not isinstance(engine, str) or engine not in {"Piper", "Kokoro"}:
-            return SettingsApplyResult(False, (("engine", "Choose Piper or Kokoro."),))
+        if not isinstance(engine, str) or engine not in {
+            "Piper",
+            "Kokoro",
+            "Chatterbox Nano",
+        }:
+            return SettingsApplyResult(
+                False, (("engine", "Choose Piper, Kokoro or Chatterbox Nano."),)
+            )
 
         (
             candidate_hotkey,
@@ -1207,7 +1345,15 @@ class Controller:
         with self._state_lock:
             current = self.state.settings
             if (
-                current is None
+                apply_generation is not None
+                and apply_generation != self._settings_apply_generation
+            ) or (cancel_event is not None and cancel_event.is_set()):
+                return SettingsApplyResult(
+                    False, (("engine", "Settings preparation was cancelled."),)
+                )
+            if (
+                self.state.shutting_down
+                or current is None
                 or self._save_settings is None
                 or self._hotkeys is None
                 or candidate_hotkey is None
@@ -1226,10 +1372,12 @@ class Controller:
             ):
                 return SettingsApplyResult(
                     False,
-                    ((
-                        "engine",
-                        "Kokoro is still starting. Wait for startup to finish before applying Kokoro settings.",
-                    ),),
+                    (
+                        (
+                            "engine",
+                            "Kokoro is still starting. Wait for startup to finish before applying Kokoro settings.",
+                        ),
+                    ),
                 )
 
             resolved_path: Optional[Path] = None
@@ -1267,12 +1415,16 @@ class Controller:
                     (("kokoro_voice", "The selected Kokoro voice is not installed."),),
                 )
 
-            active_voice = piper_reference if engine == "Piper" else kokoro_voice
+            active_voice = (
+                piper_reference
+                if engine == "Piper"
+                else "default" if engine == "Chatterbox Nano" else kokoro_voice
+            )
             desired_identity = (engine, active_voice)
             current_identity = self._backend_manager.current_identity()
-            candidate = None
+            candidate = prepared_candidate
             loaded_piper_voice = None
-            if desired_identity != current_identity:
+            if desired_identity != current_identity and candidate is None:
                 if engine == "Piper" and piper_voice_path is not None:
                     try:
                         loaded_path, loaded_piper_voice = self._load_voice(
@@ -1301,9 +1453,7 @@ class Controller:
                     )
                 else:
                     try:
-                        candidate = self._backend_manager.prepare(
-                            engine, active_voice
-                        )
+                        candidate = self._backend_manager.prepare(engine, active_voice)
                     except BackendPreparationError:
                         return SettingsApplyResult(
                             False, (("engine", "%s is not available." % engine),)
@@ -1312,7 +1462,9 @@ class Controller:
             committed = candidate is None
             hotkey_changed = candidate_hotkey.canonical != current.hotkey
             try:
-                if hotkey_changed and not self._hotkeys.prepare_rebind(candidate_hotkey):
+                if hotkey_changed and not self._hotkeys.prepare_rebind(
+                    candidate_hotkey
+                ):
                     return SettingsApplyResult(
                         False,
                         (("hotkey", user_message(UserError.HOTKEY_CONFLICT)),),
@@ -1351,12 +1503,16 @@ class Controller:
                         self.state.settings_recovery_required = True
                         return SettingsApplyResult(
                             False,
-                            ((
-                                "general",
-                                "Settings state is uncertain. Restart Piper Tray before changing settings again.",
-                            ),),
+                            (
+                                (
+                                    "general",
+                                    "Settings state is uncertain. Restart Piper Tray before changing settings again.",
+                                ),
+                            ),
                         )
-                    return SettingsApplyResult(False, (("general", "Piper settings could not be saved."),))
+                    return SettingsApplyResult(
+                        False, (("general", "Piper settings could not be saved."),)
+                    )
 
                 if hotkey_changed and not self._hotkeys.commit_rebind():
                     compensation_failed = False
@@ -1373,12 +1529,16 @@ class Controller:
                         self.state.settings_recovery_required = True
                         return SettingsApplyResult(
                             False,
-                            ((
-                                "general",
-                                "Settings state is uncertain. Restart Piper Tray before changing settings again.",
-                            ),),
+                            (
+                                (
+                                    "general",
+                                    "Settings state is uncertain. Restart Piper Tray before changing settings again.",
+                                ),
+                            ),
                         )
-                    return SettingsApplyResult(False, (("general", "Piper settings could not be applied."),))
+                    return SettingsApplyResult(
+                        False, (("general", "Piper settings could not be applied."),)
+                    )
 
                 if candidate is not None:
                     self._backend_manager.commit(candidate)
@@ -1400,7 +1560,9 @@ class Controller:
                     self._set_tray_status(
                         "Piper is ready" if engine == "Piper" else "Kokoro is ready"
                     )
-                return SettingsApplyResult(True, snapshot=self.settings_window_snapshot())
+                return SettingsApplyResult(
+                    True, snapshot=self.settings_window_snapshot()
+                )
             finally:
                 if candidate is not None and not committed:
                     self._backend_manager.discard(candidate)
@@ -1445,7 +1607,8 @@ class Controller:
         if (
             event.purpose is SpeechPurpose.STARTUP_STATUS
             and event.generation == self._startup_status_generation
-            and event.kind in {
+            and event.kind
+            in {
                 SpeechEventKind.FINISHED,
                 SpeechEventKind.CANCELLED,
                 SpeechEventKind.FAILED,
@@ -1460,7 +1623,8 @@ class Controller:
             elif (
                 event.generation == self.state.auxiliary_active_generation
                 and event.purpose is self.state.auxiliary_active_purpose
-                and event.kind in {
+                and event.kind
+                in {
                     SpeechEventKind.FINISHED,
                     SpeechEventKind.CANCELLED,
                     SpeechEventKind.FAILED,
@@ -1468,7 +1632,10 @@ class Controller:
             ):
                 self.state.auxiliary_active_generation = None
                 self.state.auxiliary_active_purpose = None
-            if event.purpose is SpeechPurpose.CODEX and event.kind is SpeechEventKind.FAILED:
+            if (
+                event.purpose is SpeechPurpose.CODEX
+                and event.kind is SpeechEventKind.FAILED
+            ):
                 self._show_status(
                     user_message(
                         UserError.SYNTHESIS
@@ -1497,6 +1664,7 @@ class Controller:
             return
 
         self.state.shutting_down = True
+        self.cancel_nano_settings()
         self._advance_codex_epoch()
         if self._speech_worker is not None:
             self._speech_worker.cancel_auxiliary()

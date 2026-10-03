@@ -66,7 +66,7 @@ def validate_sentence_pause_ms(value: object) -> int:
 @dataclass(frozen=True, init=False)
 class TraySettings:
     schema_version: int = SETTINGS_SCHEMA_VERSION
-    engine: Literal["Piper", "Kokoro"] = "Piper"
+    engine: Literal["Piper", "Kokoro", "Chatterbox Nano"] = "Piper"
     piper_voice: str = DEFAULT_VOICE
     kokoro_voice: str = DEFAULT_KOKORO_VOICE
     hotkey: str = DEFAULT_HOTKEY
@@ -82,7 +82,7 @@ class TraySettings:
     def __init__(
         self,
         schema_version: int = SETTINGS_SCHEMA_VERSION,
-        engine: Literal["Piper", "Kokoro"] = "Piper",
+        engine: Literal["Piper", "Kokoro", "Chatterbox Nano"] = "Piper",
         piper_voice: str = DEFAULT_VOICE,
         kokoro_voice: str = DEFAULT_KOKORO_VOICE,
         hotkey: str = DEFAULT_HOTKEY,
@@ -154,7 +154,11 @@ def _validated(data: object) -> TraySettings:
             DEFAULT_PIPER_SENTENCE_STREAMING_ENABLED,
         )
     )
-    if not isinstance(engine, str) or engine not in {"Piper", "Kokoro"}:
+    if not isinstance(engine, str) or engine not in {
+        "Piper",
+        "Kokoro",
+        "Chatterbox Nano",
+    }:
         raise ValueError("invalid engine")
     if not isinstance(piper_voice, str) or not piper_voice.strip():
         raise ValueError("piper_voice must be a non-empty string")
