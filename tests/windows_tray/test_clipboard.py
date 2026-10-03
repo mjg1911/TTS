@@ -136,6 +136,90 @@ def test_snapshot_refuses_handle_formats_before_copy_can_destroy_them():
     memory.user32.EmptyClipboard.assert_not_called()
 
 
+@pytest.mark.parametrize("image_format", [8, 17])
+def test_snapshot_restore_preserves_bitmap_through_dib(image_format):
+    dib = b"saved bitmap pixels"
+    memory = ClipboardMemory({2: b"gdi handle", 9: b"palette", image_format: dib})
+
+    snapshot = memory.adapter.snapshot()
+    memory.empty()
+    memory.adapter.restore(snapshot)
+
+    assert snapshot == {image_format: dib}
+    assert bytes(memory.memory[memory.formats[image_format]]) == dib
+    assert 2 not in memory.formats
+
+
+def test_snapshot_refuses_bitmap_without_readable_dib():
+    memory = ClipboardMemory({2: b"gdi handle", 8: b"pixels"})
+    memory.user32.GetClipboardData.side_effect = lambda _format: None
+
+    with pytest.raises(OSError):
+        memory.adapter.snapshot()
+
+    memory.user32.EmptyClipboard.assert_not_called()
+
+
+def test_snapshot_restore_preserves_registered_empty_marker():
+    memory = ClipboardMemory({49152: b""})
+
+    def marker_data(_format):
+        ctypes.set_last_error(0)
+        return None
+
+    memory.user32.GetClipboardData.side_effect = marker_data
+
+    def marker_name(_format, buffer, _size):
+        buffer.value = "ExcludeClipboardContentFromMonitorProcessing"
+        return len(buffer.value)
+
+    memory.user32.GetClipboardFormatNameW.side_effect = marker_name
+
+    snapshot = memory.adapter.snapshot()
+    memory.empty()
+    memory.adapter.restore(snapshot)
+
+    assert snapshot == {49152: b""}
+    assert bytes(memory.memory[memory.formats[49152]]) == b"\x00"
+
+
+def test_snapshot_refuses_unrendered_registered_data_without_error():
+    memory = ClipboardMemory({49152: b"saved"})
+    memory.user32.GetClipboardData.side_effect = lambda _format: None
+    memory.user32.GetClipboardFormatNameW.return_value = 0
+
+    with pytest.raises(OSError):
+        memory.adapter.snapshot()
+
+    memory.user32.EmptyClipboard.assert_not_called()
+
+
+def test_snapshot_restore_preserves_zero_size_memory():
+    memory = ClipboardMemory({49152: b""})
+
+    snapshot = memory.adapter.snapshot()
+    memory.empty()
+    memory.adapter.restore(snapshot)
+
+    assert snapshot == {49152: b""}
+    assert bytes(memory.memory[memory.formats[49152]]) == b"\x00"
+
+
+def test_snapshot_does_not_treat_failed_registered_data_as_empty():
+    memory = ClipboardMemory({49152: b"saved"})
+
+    def failed_data(_format):
+        ctypes.set_last_error(5)
+        return None
+
+    memory.user32.GetClipboardData.side_effect = failed_data
+
+    with pytest.raises(OSError):
+        memory.adapter.snapshot()
+
+    memory.user32.EmptyClipboard.assert_not_called()
+
+
 def test_input_structure_matches_win32_size():
     expected_size = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
 

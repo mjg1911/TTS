@@ -5,7 +5,11 @@ from ctypes import wintypes
 from typing import Any, Dict, Optional
 
 
+CF_BITMAP = 2
+CF_DIB = 8
+CF_PALETTE = 9
 CF_UNICODETEXT = 13
+CF_DIBV5 = 17
 GMEM_MOVEABLE = 0x0002
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
@@ -78,6 +82,10 @@ class Win32Clipboard:
         self._user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
         self._user32.GetClipboardData.argtypes = [wintypes.UINT]
         self._user32.GetClipboardData.restype = ctypes.c_void_p
+        self._user32.GetClipboardFormatNameW.argtypes = [
+            wintypes.UINT, wintypes.LPWSTR, ctypes.c_int
+        ]
+        self._user32.GetClipboardFormatNameW.restype = ctypes.c_int
         self._user32.CloseClipboard.argtypes = []
         self._user32.CloseClipboard.restype = wintypes.BOOL
         self._user32.EnumClipboardFormats.argtypes = [wintypes.UINT]
@@ -163,21 +171,49 @@ class Win32Clipboard:
         try:
             snapshot = {}
             format_id = 0
+            saw_image_handle = False
             while True:
                 ctypes.set_last_error(0)
                 format_id = self._user32.EnumClipboardFormats(format_id)
                 if not format_id:
                     if ctypes.get_last_error():
                         raise _last_error("EnumClipboardFormats failed")
+                    if saw_image_handle and not any(
+                        snapshot.get(fmt) for fmt in (CF_DIB, CF_DIBV5)
+                    ):
+                        raise OSError("Clipboard bitmap cannot be safely preserved")
                     return snapshot
+                # Windows synthesizes bitmap/palette handles from DIB data.
+                # Save pixels and their color table instead of GDI handles.
+                if format_id in (CF_BITMAP, CF_PALETTE):
+                    saw_image_handle = True
+                    continue
                 if format_id in _HANDLE_FORMATS or 0x200 <= format_id <= 0x3FF:
                     raise OSError("Clipboard format cannot be safely preserved")
+                ctypes.set_last_error(0)
                 handle = self._user32.GetClipboardData(format_id)
                 if not handle:
+                    # This Windows privacy marker has no meaningful payload.
+                    # Other NULL formats may be failed delayed rendering and
+                    # must still abort capture to avoid losing their contents.
+                    if format_id >= 0xC000 and not ctypes.get_last_error():
+                        name = ctypes.create_unicode_buffer(256)
+                        name_length = self._user32.GetClipboardFormatNameW(
+                            format_id, name, len(name)
+                        )
+                        if name_length and name.value == (
+                            "ExcludeClipboardContentFromMonitorProcessing"
+                        ):
+                            snapshot[format_id] = b""
+                            continue
                     raise _last_error("GetClipboardData failed")
+                ctypes.set_last_error(0)
                 size = self._kernel32.GlobalSize(handle)
                 if not size:
-                    raise _last_error("GlobalSize failed")
+                    if ctypes.get_last_error():
+                        raise _last_error("GlobalSize failed")
+                    snapshot[format_id] = b""
+                    continue
                 pointer = self._kernel32.GlobalLock(handle)
                 if not pointer:
                     raise _last_error("GlobalLock failed")
@@ -199,6 +235,10 @@ class Win32Clipboard:
             # Allocate everything before clearing the clipboard. Allocation
             # failures must not destroy its current contents.
             for format_id, data in snapshot.items():
+                # Empty formats are presence markers. A zero-size movable
+                # allocation is a discarded handle and SetClipboardData
+                # rejects it; give Windows one initialized byte instead.
+                data = data or b"\x00"
                 handle = self._kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
                 if not handle:
                     raise _last_error("GlobalAlloc failed")
