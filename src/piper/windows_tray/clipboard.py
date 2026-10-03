@@ -2,15 +2,22 @@
 
 import ctypes
 from ctypes import wintypes
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 
+CF_BITMAP = 2
+CF_DIB = 8
+CF_PALETTE = 9
 CF_UNICODETEXT = 13
+CF_DIBV5 = 17
 GMEM_MOVEABLE = 0x0002
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 VK_CONTROL = 0x11
 VK_C = 0x43
+# These formats contain GDI handles or private pointers rather than HGLOBAL
+# bytes. Refuse capture rather than silently discarding data we cannot restore.
+_HANDLE_FORMATS = {2, 3, 9, 14, 0x80, 0x82, 0x83, 0x8E}
 
 
 class _KEYBDINPUT(ctypes.Structure):
@@ -75,8 +82,41 @@ class Win32Clipboard:
         self._user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
         self._user32.GetClipboardData.argtypes = [wintypes.UINT]
         self._user32.GetClipboardData.restype = ctypes.c_void_p
+        self._user32.GetClipboardFormatNameW.argtypes = [
+            wintypes.UINT, wintypes.LPWSTR, ctypes.c_int
+        ]
+        self._user32.GetClipboardFormatNameW.restype = ctypes.c_int
         self._user32.CloseClipboard.argtypes = []
         self._user32.CloseClipboard.restype = wintypes.BOOL
+        self._user32.EnumClipboardFormats.argtypes = [wintypes.UINT]
+        self._user32.EnumClipboardFormats.restype = wintypes.UINT
+        self._user32.EmptyClipboard.argtypes = []
+        self._user32.EmptyClipboard.restype = wintypes.BOOL
+        self._user32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
+        self._user32.SetClipboardData.restype = ctypes.c_void_p
+        self._user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.HWND,
+            wintypes.HMENU,
+            wintypes.HINSTANCE,
+            ctypes.c_void_p,
+        ]
+        self._user32.CreateWindowExW.restype = wintypes.HWND
+        self._user32.DestroyWindow.argtypes = [wintypes.HWND]
+        self._user32.DestroyWindow.restype = wintypes.BOOL
+        self._kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
+        self._kernel32.GlobalSize.restype = ctypes.c_size_t
+        self._kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        self._kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        self._kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+        self._kernel32.GlobalFree.restype = ctypes.c_void_p
         self._kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
         self._kernel32.GlobalLock.restype = ctypes.c_void_p
         self._kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
@@ -120,6 +160,120 @@ class Win32Clipboard:
                 self._kernel32.GlobalUnlock(handle)
         finally:
             self._user32.CloseClipboard()
+
+    def snapshot(self) -> Dict[int, bytes]:
+        """Copy clipboard memory, never retaining handles invalidated by Ctrl+C."""
+        self._load_libraries()
+        assert self._user32 is not None
+        assert self._kernel32 is not None
+        if not self._user32.OpenClipboard(None):
+            raise _last_error("OpenClipboard failed")
+        try:
+            snapshot = {}
+            format_id = 0
+            saw_image_handle = False
+            while True:
+                ctypes.set_last_error(0)
+                format_id = self._user32.EnumClipboardFormats(format_id)
+                if not format_id:
+                    if ctypes.get_last_error():
+                        raise _last_error("EnumClipboardFormats failed")
+                    if saw_image_handle and not any(
+                        snapshot.get(fmt) for fmt in (CF_DIB, CF_DIBV5)
+                    ):
+                        raise OSError("Clipboard bitmap cannot be safely preserved")
+                    return snapshot
+                # Windows synthesizes bitmap/palette handles from DIB data.
+                # Save pixels and their color table instead of GDI handles.
+                if format_id in (CF_BITMAP, CF_PALETTE):
+                    saw_image_handle = True
+                    continue
+                if format_id in _HANDLE_FORMATS or 0x200 <= format_id <= 0x3FF:
+                    raise OSError("Clipboard format cannot be safely preserved")
+                ctypes.set_last_error(0)
+                handle = self._user32.GetClipboardData(format_id)
+                if not handle:
+                    # This Windows privacy marker has no meaningful payload.
+                    # Other NULL formats may be failed delayed rendering and
+                    # must still abort capture to avoid losing their contents.
+                    if format_id >= 0xC000 and not ctypes.get_last_error():
+                        name = ctypes.create_unicode_buffer(256)
+                        name_length = self._user32.GetClipboardFormatNameW(
+                            format_id, name, len(name)
+                        )
+                        if name_length and name.value == (
+                            "ExcludeClipboardContentFromMonitorProcessing"
+                        ):
+                            snapshot[format_id] = b""
+                            continue
+                    raise _last_error("GetClipboardData failed")
+                ctypes.set_last_error(0)
+                size = self._kernel32.GlobalSize(handle)
+                if not size:
+                    if ctypes.get_last_error():
+                        raise _last_error("GlobalSize failed")
+                    snapshot[format_id] = b""
+                    continue
+                pointer = self._kernel32.GlobalLock(handle)
+                if not pointer:
+                    raise _last_error("GlobalLock failed")
+                try:
+                    snapshot[format_id] = ctypes.string_at(pointer, size)
+                finally:
+                    self._kernel32.GlobalUnlock(handle)
+        finally:
+            self._user32.CloseClipboard()
+
+    def restore(self, snapshot: Dict[int, bytes]) -> None:
+        """Restore saved formats, transferring new memory handles to Windows."""
+        self._load_libraries()
+        assert self._user32 is not None
+        assert self._kernel32 is not None
+        handles = {}
+        window = None
+        try:
+            # Allocate everything before clearing the clipboard. Allocation
+            # failures must not destroy its current contents.
+            for format_id, data in snapshot.items():
+                # Empty formats are presence markers. A zero-size movable
+                # allocation is a discarded handle and SetClipboardData
+                # rejects it; give Windows one initialized byte instead.
+                data = data or b"\x00"
+                handle = self._kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+                if not handle:
+                    raise _last_error("GlobalAlloc failed")
+                handles[format_id] = handle
+                pointer = self._kernel32.GlobalLock(handle)
+                if not pointer:
+                    raise _last_error("GlobalLock failed")
+                try:
+                    ctypes.memmove(pointer, data, len(data))
+                finally:
+                    self._kernel32.GlobalUnlock(handle)
+
+            # EmptyClipboard requires an owner window for SetClipboardData.
+            # A message-only STATIC window belongs to this capture thread.
+            window = self._user32.CreateWindowExW(
+                0, "STATIC", "", 0, 0, 0, 0, 0, -3, None, None, None
+            )
+            if not window:
+                raise _last_error("CreateWindowExW failed")
+            if not self._user32.OpenClipboard(window):
+                raise _last_error("OpenClipboard failed")
+            try:
+                if not self._user32.EmptyClipboard():
+                    raise _last_error("EmptyClipboard failed")
+                for format_id in list(handles):
+                    if not self._user32.SetClipboardData(format_id, handles[format_id]):
+                        raise _last_error("SetClipboardData failed")
+                    del handles[format_id]  # Windows now owns this allocation.
+            finally:
+                self._user32.CloseClipboard()
+        finally:
+            for handle in handles.values():
+                self._kernel32.GlobalFree(handle)
+            if window:
+                self._user32.DestroyWindow(window)
 
     def send_ctrl_c(self) -> None:
         self._load_libraries()

@@ -46,6 +46,9 @@ class FakeUi:
     def show_status(self, message):
         self.statuses.append(message)
 
+    def show_startup_status(self, message):
+        self.statuses.append(message)
+
     def show_last_text(self, text):
         self.last_text_calls.append(text)
 

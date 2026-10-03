@@ -24,6 +24,15 @@ class FakeClipboard:
     ) -> None:
         self.sequences = iter(sequences)
         self.reads = iter(reads)
+        self.contents = "hello"
+        self.restored = []
+
+    def snapshot(self):
+        return self.contents
+
+    def restore(self, snapshot):
+        self.contents = snapshot
+        self.restored.append(snapshot)
 
     def sequence_number(self) -> int:
         return next(self.sequences)
@@ -32,6 +41,7 @@ class FakeClipboard:
         value = next(self.reads)
         if isinstance(value, Exception):
             raise value
+        self.contents = value
         return value
 
 
@@ -52,6 +62,7 @@ def test_unchanged_clipboard_never_returns_preexisting_text() -> None:
 
     assert result.status is CaptureStatus.TIMEOUT
     assert result.text is None
+    assert clipboard.restored == ["hello"]
 
 
 def test_changed_sequence_retries_until_non_whitespace_text() -> None:
@@ -159,3 +170,108 @@ def test_null_only_clipboard_text_is_not_success(value: str) -> None:
     result = make_capture(clipboard, clock).capture(timeout_s=0.10, poll_s=0.05)
 
     assert result.status is CaptureStatus.EMPTY
+
+
+@pytest.mark.parametrize("original", ["hello", "", b"non-text clipboard"])
+def test_capture_restores_clipboard_immediately_after_read(original):
+    clock = FakeClock()
+    clipboard = FakeClipboard([1, 2], ["read this"])
+    clipboard.contents = original
+
+    def copy():
+        assert clipboard.contents == original
+        clipboard.contents = "read this"
+
+    capture = SelectionCapture(clipboard, copy, clock.monotonic, clock.sleep)
+    result = capture.capture()
+
+    assert result.status is CaptureStatus.SUCCESS
+    assert result.text == "read this"
+    assert clipboard.contents == original
+    assert clipboard.restored == [original]
+    assert clock.now == 0.15
+
+
+@pytest.mark.parametrize(
+    "reads, status",
+    [
+        (["", ""], CaptureStatus.EMPTY),
+        ([OSError("busy"), OSError("busy")], CaptureStatus.ACCESS_ERROR),
+    ],
+)
+def test_capture_restores_clipboard_on_unsuccessful_read(reads, status):
+    clock = FakeClock()
+    clipboard = FakeClipboard([1, 2, 2], reads)
+
+    result = make_capture(clipboard, clock).capture(timeout_s=0.10)
+
+    assert result.status is status
+    assert clipboard.contents == "hello"
+    assert clipboard.restored == ["hello"]
+
+
+def test_capture_restores_after_copy_raises():
+    clock = FakeClock()
+    clipboard = FakeClipboard([1], [])
+
+    def copy():
+        clipboard.contents = "changed before failure"
+        raise OSError("copy failed")
+
+    result = SelectionCapture(clipboard, copy, clock.monotonic, clock.sleep).capture()
+
+    assert result.status is CaptureStatus.ACCESS_ERROR
+    assert clipboard.contents == "hello"
+    assert clipboard.restored == ["hello"]
+
+
+def test_snapshot_failure_does_not_send_copy():
+    clock = FakeClock()
+    clipboard = FakeClipboard([1, 1, 1], [])
+    copied = []
+
+    def snapshot():
+        raise OSError("snapshot failed")
+
+    clipboard.snapshot = snapshot
+    result = SelectionCapture(
+        clipboard, lambda: copied.append(True), clock.monotonic, clock.sleep
+    ).capture()
+
+    assert result.status is CaptureStatus.ACCESS_ERROR
+    assert copied == []
+    assert clipboard.restored == []
+
+
+def test_capture_retries_temporarily_busy_restore():
+    clock = FakeClock()
+    clipboard = FakeClipboard([1, 2], ["read this"])
+    restore = clipboard.restore
+    attempts = []
+
+    def busy_restore(snapshot):
+        attempts.append(snapshot)
+        if len(attempts) == 1:
+            raise OSError("busy")
+        restore(snapshot)
+
+    clipboard.restore = busy_restore
+    result = make_capture(clipboard, clock).capture()
+
+    assert result.status is CaptureStatus.SUCCESS
+    assert clipboard.contents == "hello"
+    assert attempts == ["hello", "hello"]
+
+
+def test_restore_failure_is_reported():
+    clock = FakeClock()
+    clipboard = FakeClipboard([1, 2], ["read this"])
+
+    def restore(_snapshot):
+        raise OSError("restore failed")
+
+    clipboard.restore = restore
+    result = make_capture(clipboard, clock).capture()
+
+    assert result.status is CaptureStatus.ACCESS_ERROR
+    assert result.detail == "restore failed"
