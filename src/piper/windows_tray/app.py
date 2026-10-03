@@ -339,7 +339,7 @@ def run_app(
                 logger.error(
                     "Selected Piper voice could not be loaded: %s", candidate_error
                 )
-                ui.show_status(user_message(UserError.VOICE_LOAD_STARTUP))
+                ui.show_startup_status(user_message(UserError.VOICE_LOAD_STARTUP))
                 return 1
             try:
                 settings = replace(settings, piper_voice=str(selected_path))
@@ -530,14 +530,12 @@ def run_app(
         except (OSError, ValueError) as error:
             logger.error("Piper hotkeys could not be started: %s", error)
             if getattr(error, "role", "capture") == "cancel":
-                ui.show_status(
+                ui.show_startup_status(
                     "Piper could not register F8 for cancellation; resolve the "
                     "Windows hotkey conflict."
                 )
             else:
-                ui.show_status(
-                    user_message(UserError.HOTKEY_CONFLICT)
-                )
+                ui.show_startup_status(user_message(UserError.HOTKEY_CONFLICT))
             logger.info(
                 "startup stage=tray_hotkey_failed duration_seconds=%.3f error_type=%s",
                 max(0.0, time.monotonic() - tray_hotkey_started),

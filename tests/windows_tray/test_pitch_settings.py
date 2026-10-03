@@ -86,13 +86,13 @@ def test_prompt_pitch_rejects_invalid_input(monkeypatch, entered) -> None:
         lambda *_args, **_kwargs: entered,
     )
     monkeypatch.setattr(
-        ui_module.messagebox,
-        "showerror",
-        lambda title, message, **kwargs: errors.append((title, message, kwargs)),
+        ui,
+        "show_status",
+        errors.append,
     )
 
     assert ui.prompt_pitch(26) is None
-    assert errors and "-50%" in errors[0][1] and "100%" in errors[0][1]
+    assert errors and "-50%" in errors[0] and "100%" in errors[0]
 
 
 def test_configure_pitch_command_uses_current_value_and_persists_choice() -> None:
@@ -153,13 +153,13 @@ def test_prompt_speed_rejects_invalid_input(monkeypatch, entered) -> None:
     errors = []
     monkeypatch.setattr(ui_module.simpledialog, "askstring", lambda *_args, **_kwargs: entered)
     monkeypatch.setattr(
-        ui_module.messagebox,
-        "showerror",
-        lambda title, message, **kwargs: errors.append((title, message, kwargs)),
+        ui,
+        "show_status",
+        errors.append,
     )
 
     assert ui.prompt_speed(0) is None
-    assert errors and "-50%" in errors[0][1] and "100%" in errors[0][1]
+    assert errors and "-50%" in errors[0] and "100%" in errors[0]
 
 
 def test_configure_speed_command_uses_current_value_and_persists_choice() -> None:

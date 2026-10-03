@@ -202,6 +202,9 @@ class FakeUi:
     def show_status(self, message):
         self.statuses.append(message)
 
+    def show_startup_status(self, message):
+        self.statuses.append(message)
+
     def show_last_text(self, _text):
         pass
 

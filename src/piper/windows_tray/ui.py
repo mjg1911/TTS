@@ -1,7 +1,7 @@
 from pathlib import Path
 import threading
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox, simpledialog, ttk
 from typing import Optional
 
 from .settings import validate_pitch_percent, validate_speed_percent
@@ -15,6 +15,8 @@ class TkUi:
         self.root.withdraw()
         self._thread_id = threading.get_ident()
         self._settings_window: Optional[SettingsWindow] = None
+        self._status_window: Optional[tk.Toplevel] = None
+        self._status_message = tk.StringVar(master=self.root)
 
     def _assert_main_thread(self) -> None:
         if threading.get_ident() != self._thread_id:
@@ -61,6 +63,38 @@ class TkUi:
             self._settings_window.update_kokoro_verification(message)
 
     def show_status(self, message: str) -> None:
+        """Show a runtime message without pausing the command pump."""
+        self._assert_main_thread()
+        self._status_message.set(message)
+        if self._status_window is not None:
+            self._status_window.deiconify()
+            return
+
+        window = tk.Toplevel(self.root)
+        self._status_window = window
+        window.title("Piper")
+        # The root is withdrawn: making this window transient would hide it too.
+        window.resizable(False, False)
+        window.protocol("WM_DELETE_WINDOW", self._close_status)
+        window.bind("<Escape>", lambda _event: self._close_status())
+        body = ttk.Frame(window, padding=20)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            textvariable=self._status_message,
+            wraplength=420,
+            justify="left",
+        ).pack(fill="x", pady=(0, 16))
+        ttk.Button(body, text="Dismiss", command=self._close_status).pack(anchor="e")
+
+    def _close_status(self) -> None:
+        self._assert_main_thread()
+        if self._status_window is not None:
+            self._status_window.destroy()
+            self._status_window = None
+
+    def show_startup_status(self, message: str) -> None:
+        """Keep fatal startup messages visible until acknowledged before exit."""
         self._assert_main_thread()
         messagebox.showinfo("Piper", message, parent=self.root)
 
@@ -96,11 +130,7 @@ class TkUi:
         try:
             return validate_pitch_percent(float(value.strip()))
         except (ValueError, OverflowError):
-            messagebox.showerror(
-                "Piper",
-                "Pitch must be between -50% and 100%.",
-                parent=self.root,
-            )
+            self.show_status("Pitch must be between -50% and 100%.")
             return None
 
     def prompt_speed(self, current: float) -> Optional[float]:
@@ -116,15 +146,12 @@ class TkUi:
         try:
             return validate_speed_percent(float(value.strip()))
         except (ValueError, OverflowError):
-            messagebox.showerror(
-                "Piper",
-                "Speed must be between -50% and 100%.",
-                parent=self.root,
-            )
+            self.show_status("Speed must be between -50% and 100%.")
             return None
 
     def close(self) -> None:
         self._assert_main_thread()
+        self._close_status()
         if self._settings_window is not None:
             self._settings_window.close()
             self._settings_window = None
