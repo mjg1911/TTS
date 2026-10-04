@@ -196,6 +196,9 @@ class FakeUi:
     def choose_voice_model(self):
         return None
 
+    def choose_startup_engine(self, current):
+        return current
+
     def show_status(self, message):
         self.statuses.append(message)
 

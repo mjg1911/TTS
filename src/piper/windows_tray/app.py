@@ -372,6 +372,10 @@ def run_app(
             ui.show_status(migration_notice)
         data_dirs = tuple(_voice_data_dirs())
         settings = settings_result.settings
+        selected_engine = ui.choose_startup_engine(settings.engine)
+        if selected_engine is None:
+            return 0
+        settings = replace(settings, engine=selected_engine)
         try:
             capture_hotkey = parse_hotkey(settings.hotkey)
         except ValueError as error:

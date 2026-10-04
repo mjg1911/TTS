@@ -34,6 +34,9 @@ class FakeRoot:
 
 
 class FakeUi:
+    def choose_startup_engine(self, current):
+        return current
+
     def __init__(self, events):
         self.events = events
         self.root = FakeRoot(events)
