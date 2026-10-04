@@ -36,6 +36,12 @@ def import_managed_reference_clip(source: Path) -> Path:
     return import_reference_clip(source)
 
 
+def list_reference_voices(current: str = "") -> dict[str, str]:
+    from .chatterbox_voice import list_reference_voices as list_voices
+
+    return list_voices(current)
+
+
 def choose_voice_model(parent: tk.Misc) -> Optional[Path]:
     selected = filedialog.askopenfilename(
         parent=parent,
@@ -103,6 +109,8 @@ class SettingsWindow:
         self.reference_clip_name_var = tk.StringVar(value="")
         self.reference_clip_path_var = tk.StringVar(value="")
         self.reference_clip_status_var = tk.StringVar(value="")
+        self.reference_voice_var = tk.StringVar(value="")
+        self._reference_voice_choices: dict[str, str] = {}
         self._reference_import_pending = False
         self.hotkey_var = tk.StringVar(value=snapshot.hotkey)
         self.pitch_var = tk.StringVar(value=f"{snapshot.pitch_percent:g}")
@@ -225,27 +233,29 @@ class SettingsWindow:
         self._error_label(voice, "engine", 3)
         self.nano_voice_frame = ttk.Frame(voice, style="Panel.Piper.TFrame")
         self.nano_voice_frame.columnconfigure(0, weight=1)
-        ttk.Label(
-            self.nano_voice_frame,
-            text="Chatterbox voice",
-            style="Muted.Piper.TLabel",
-        ).grid(row=0, column=0, sticky="w", pady=(10, 5))
         self.chatterbox_device_controls = ttk.Frame(
             self.nano_voice_frame, style="Panel.Piper.TFrame"
         )
-        self.chatterbox_device_controls.grid(row=1, column=0, sticky="w", pady=(3, 5))
+        self.chatterbox_device_controls.columnconfigure((0, 1), weight=1)
         ttk.Label(
             self.chatterbox_device_controls,
-            text="Device",
+            text="Processing device",
             style="Muted.Piper.TLabel",
-        ).grid(row=0, column=0, padx=(0, 12))
-        for column, (label, value) in enumerate((("CPU", "cpu"), ("GPU", "cuda")), 1):
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(12, 6))
+        for column, (label, value) in enumerate((("CPU", "cpu"), ("GPU", "cuda"))):
             ttk.Radiobutton(
                 self.chatterbox_device_controls,
                 text=label,
                 value=value,
                 variable=self.chatterbox_device_var,
-            ).grid(row=0, column=column, padx=(0, 10))
+                style="Device.Piper.TRadiobutton",
+                takefocus=True,
+            ).grid(
+                row=1,
+                column=column,
+                sticky="ew",
+                padx=(0, 6) if column == 0 else (6, 0),
+            )
         self.multilingual_options_frame = ttk.Frame(
             self.nano_voice_frame, style="Panel.Piper.TFrame"
         )
@@ -291,58 +301,68 @@ class SettingsWindow:
             style="Muted.Piper.TLabel",
             wraplength=310,
         ).grid(row=9, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        self.import_reference_clip_button = ttk.Button(
+        self.reference_voice_frame = ttk.Frame(
             self.nano_voice_frame,
-            text="Import reference clip…",
-            command=self._choose_reference_clip,
-            style="Piper.TButton",
+            style="Panel.Piper.TFrame",
+            padding=(0, 16, 0, 0),
         )
-        self.import_reference_clip_button.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        self.reference_voice_frame.grid(row=3, column=0, sticky="ew")
+        self.reference_voice_frame.columnconfigure(0, weight=1)
         ttk.Label(
-            self.nano_voice_frame,
-            textvariable=self.reference_clip_name_var,
-            style="Piper.TLabel",
-            wraplength=310,
-            justify="left",
-        ).grid(row=4, column=0, sticky="ew", pady=(6, 0))
-        ttk.Label(
-            self.nano_voice_frame,
-            textvariable=self.reference_clip_path_var,
+            self.reference_voice_frame,
+            text="Saved voices",
             style="Muted.Piper.TLabel",
-            wraplength=310,
-            justify="left",
-        ).grid(row=5, column=0, sticky="ew")
+        ).grid(row=0, column=0, sticky="w")
+        self.reference_voice_combo = ttk.Combobox(
+            self.reference_voice_frame,
+            textvariable=self.reference_voice_var,
+            state="readonly",
+            style="Piper.TCombobox",
+            font=("Segoe UI", 10),
+            width=20,
+            height=8,
+        )
+        self.reference_voice_combo.grid(row=1, column=0, sticky="ew", pady=(6, 8))
+        self.reference_voice_combo.bind(
+            "<<ComboboxSelected>>", self._select_reference_voice
+        )
         self.chatterbox_custom_voice_checkbutton = ttk.Checkbutton(
-            self.nano_voice_frame,
-            text="Use custom voice",
+            self.reference_voice_frame,
+            text="Use saved voice",
             variable=self.chatterbox_custom_voice_var,
+            command=self._toggle_saved_voice,
             onvalue=True,
             offvalue=False,
             style="Piper.TCheckbutton",
         )
-        self.chatterbox_custom_voice_checkbutton.grid(
-            row=6, column=0, sticky="w", pady=(8, 0)
+        self.chatterbox_custom_voice_checkbutton.grid(row=2, column=0, sticky="w")
+        self.import_reference_clip_button = ttk.Button(
+            self.reference_voice_frame,
+            text="Import voice…",
+            command=self._choose_reference_clip,
+            style="Piper.TButton",
+        )
+        self.import_reference_clip_button.grid(
+            row=3, column=0, sticky="ew", pady=(10, 8)
         )
         self.reference_clip_error_label = self._error_label(
-            self.nano_voice_frame, "reference_clip", 7
+            self.reference_voice_frame, "reference_clip", 5
         )
         ttk.Label(
-            self.nano_voice_frame,
-            text=(
-                "Choose a clear WAV recording longer than 5 seconds. "
-                "Piper keeps a local copy for Chatterbox."
-            ),
+            self.reference_voice_frame,
+            text="A clear WAV clip, longer than 5 seconds.\nImported voices stay in your library.",
             style="Muted.Piper.TLabel",
             wraplength=310,
             justify="left",
-        ).grid(row=8, column=0, sticky="ew", pady=(6, 0))
+        ).grid(row=4, column=0, sticky="ew")
         ttk.Label(
-            self.nano_voice_frame,
+            self.reference_voice_frame,
             textvariable=self.reference_clip_status_var,
             style="Muted.Piper.TLabel",
             wraplength=310,
-        ).grid(row=9, column=0, sticky="ew", pady=(4, 0))
+        ).grid(row=6, column=0, sticky="ew", pady=(8, 0))
         self._set_reference_clip_labels(snapshot.chatterbox_reference_clip)
+        self._refresh_reference_voices(snapshot.chatterbox_reference_clip)
         ttk.Label(
             voice,
             textvariable=self.engine_status_var,
@@ -778,6 +798,86 @@ class SettingsWindow:
         )
         self.reference_clip_path_var.set(str(path) if path else "")
 
+    def _refresh_reference_voices(self, reference: str) -> None:
+        try:
+            self._reference_voice_choices = list_reference_voices(reference)
+        except (OSError, ValueError) as error:
+            # Keep a known selection usable if the library folder cannot be read.
+            if reference and reference not in self._reference_voice_choices.values():
+                label = Path(reference).stem
+                while label in self._reference_voice_choices:
+                    label += " (saved)"
+                self._reference_voice_choices[label] = reference
+            self._error_vars["reference_clip"].set(str(error))
+            self._render_errors()
+        selected = next(
+            (
+                label
+                for label, path in self._reference_voice_choices.items()
+                if reference and Path(path).resolve() == Path(reference).resolve()
+            ),
+            (
+                "Choose a saved voice"
+                if self._reference_voice_choices
+                else "No saved voices yet"
+            ),
+        )
+        self.reference_voice_combo.configure(
+            values=tuple(self._reference_voice_choices)
+        )
+        self.reference_voice_var.set(selected)
+        self._set_reference_voice_state()
+        self._update_reference_voice_status()
+
+    def _set_reference_voice_state(self) -> None:
+        busy = self._reference_import_pending or getattr(
+            self, "_apply_in_progress", False
+        )
+        self.reference_voice_combo.configure(
+            state=(
+                "readonly" if self._reference_voice_choices and not busy else "disabled"
+            )
+        )
+
+    def _select_reference_voice(self, _event=None) -> None:
+        if self._reference_import_pending or getattr(self, "_apply_in_progress", False):
+            return
+        reference = self._reference_voice_choices.get(self.reference_voice_var.get())
+        if reference is None:
+            return
+        self.pending_reference_clip = reference
+        self.displayed_reference_clip = reference
+        self.chatterbox_custom_voice_var.set(True)
+        self._set_reference_clip_labels(reference)
+        self._error_vars["reference_clip"].set("")
+        self._update_reference_voice_status(changed=True)
+        self._render_errors()
+        self.apply_status_var.set("")
+
+    def _toggle_saved_voice(self) -> None:
+        self._update_reference_voice_status(changed=True)
+        self.apply_status_var.set("")
+
+    def _update_reference_voice_status(self, changed: bool = False) -> None:
+        changed = changed or self.pending_reference_clip is not None
+        enabled = self.chatterbox_custom_voice_var.get() in (True, "true", "1")
+        reference = self.displayed_reference_clip
+        if enabled and reference and not Path(reference).is_file():
+            message = (
+                "This saved voice is unavailable. Import it again or choose another."
+            )
+        elif not enabled:
+            message = "Using the bundled default voice."
+            if changed:
+                message = "Default voice selected. Save to apply."
+        elif not reference:
+            message = "Import or choose a saved voice to use it."
+        elif changed:
+            message = "Voice selected. Save to apply."
+        else:
+            message = "Using your saved voice."
+        self.reference_clip_status_var.set(message)
+
     def _choose_reference_clip(self) -> None:
         if self._reference_import_pending or getattr(self, "_apply_in_progress", False):
             return
@@ -787,6 +887,7 @@ class SettingsWindow:
 
         results = Queue(maxsize=1)
         self._reference_import_pending = True
+        self._set_reference_voice_state()
         self.import_reference_clip_button.configure(state="disabled")
         self.reference_clip_status_var.set("Importing reference clip…")
 
@@ -806,6 +907,7 @@ class SettingsWindow:
                 return
 
             self._reference_import_pending = False
+            self._set_reference_voice_state()
             self.import_reference_clip_button.configure(state="normal")
             if error is not None:
                 if isinstance(error, ValueError):
@@ -818,17 +920,18 @@ class SettingsWindow:
                         "Check that it is readable and try again."
                     )
                 self._error_vars["reference_clip"].set(message)
-                self.reference_clip_status_var.set("")
+                self._update_reference_voice_status()
                 self._render_errors()
                 return
 
             self.pending_reference_clip = str(imported_path)
             self.displayed_reference_clip = self.pending_reference_clip
+            self.chatterbox_custom_voice_var.set(True)
             self._set_reference_clip_labels(self.displayed_reference_clip)
             self._error_vars["reference_clip"].set("")
-            self.reference_clip_status_var.set(
-                "Imported. Save changes to use this clip."
-            )
+            self._refresh_reference_voices(self.displayed_reference_clip)
+            self.reference_clip_status_var.set("Voice imported. Save to apply.")
+            self.apply_status_var.set("")
             self._render_errors()
 
         threading.Thread(
@@ -1061,7 +1164,7 @@ class SettingsWindow:
         )
         self._set_voice_label(snapshot.piper_voice_path)
         self._set_reference_clip_labels(snapshot.chatterbox_reference_clip)
-        self.reference_clip_status_var.set("")
+        self._refresh_reference_voices(snapshot.chatterbox_reference_clip)
         self._refresh_voice_controls()
 
     def focus(self) -> None:

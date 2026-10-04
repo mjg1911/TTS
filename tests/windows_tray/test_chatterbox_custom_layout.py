@@ -1,15 +1,20 @@
 """Real Tk layout for Chatterbox reference options."""
 
+import pytest
+
 from piper.windows_tray.controller import SettingsApplyResult, SettingsWindowSnapshot
 from piper.windows_tray.settings_window import SettingsWindow
 from tests.windows_tray.test_settings_window_layout import tk_root
 
 
-def test_reference_import_remains_accessible_in_small_settings_window(tk_root):
+@pytest.mark.parametrize(
+    "engine", ["Chatterbox Nano", "Chatterbox Multilingual V3 (500M)"]
+)
+def test_reference_import_remains_accessible_in_small_settings_window(tk_root, engine):
     window = SettingsWindow(
         tk_root,
         SettingsWindowSnapshot(
-            engine="Chatterbox Nano",
+            engine=engine,
             chatterbox_reference_clip=(
                 "C:/Piper/" + "reference" * 10 + "-" + "a" * 32 + ".wav"
             ),
@@ -28,16 +33,19 @@ def test_reference_import_remains_accessible_in_small_settings_window(tk_root):
         assert button.winfo_width() >= button.winfo_reqwidth()
         assert button.winfo_rooty() >= window.settings_canvas.winfo_rooty()
         assert button.winfo_rooty() + button.winfo_height() <= (
-            window.settings_canvas.winfo_rooty()
-            + window.settings_canvas.winfo_height()
+            window.settings_canvas.winfo_rooty() + window.settings_canvas.winfo_height()
         )
-        filename_label = next(
-            widget
+        combo = window.reference_voice_combo
+        assert combo.winfo_viewable()
+        assert combo.winfo_width() >= 200
+        assert combo.winfo_rootx() + combo.winfo_width() <= (
+            window.settings_canvas.winfo_rootx() + window.settings_canvas.winfo_width()
+        )
+        assert not any(
+            widget.winfo_class() == "TLabel"
+            and str(widget.cget("textvariable")) == str(window.reference_clip_path_var)
             for widget in window.nano_voice_frame.winfo_children()
-            if widget.winfo_class() == "TLabel"
-            and str(widget.cget("textvariable")) == str(window.reference_clip_name_var)
         )
-        assert filename_label.winfo_reqwidth() <= window.settings_canvas.winfo_width()
         assert window.save_button.winfo_viewable()
         assert window.save_button.winfo_rooty() + window.save_button.winfo_height() <= (
             window.window.winfo_rooty() + window.window.winfo_height()
