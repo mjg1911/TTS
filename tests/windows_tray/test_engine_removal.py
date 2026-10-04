@@ -16,7 +16,7 @@ def test_removed_engine_cannot_be_applied():
     controller = Controller(settings=TraySettings())
     result = controller.apply_settings("Kokoro", "alt+backtick", "26", "0", None)
     assert not result.applied
-    assert result.error_map() == {"engine": "Choose Piper or Chatterbox Nano."}
+    assert result.error_map() == {"engine": "Choose Piper or a supported Chatterbox engine."}
 
 
 @pytest.mark.parametrize("missing_model", [False, True])

@@ -1,6 +1,27 @@
 from pathlib import Path
+import os
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_worker_entry_does_not_create_bytecode_in_payload(tmp_path):
+    """Source-only bundled dependencies must leave manifest inventory unchanged."""
+    package = tmp_path / 'piper' / 'nano_worker'
+    package.mkdir(parents=True)
+    (package.parent / '__init__.py').write_text('')
+    (package / '__init__.py').write_text('')
+    (package / 'main.py').write_text('def main(): return 0\n')
+    entry = (ROOT / 'script/nano_worker_entry.py').read_text()
+    environment = os.environ.copy()
+    environment.pop('PYTHONDONTWRITEBYTECODE', None)
+    result = subprocess.run(
+        [sys.executable, '-c', entry], cwd=tmp_path,
+        capture_output=True, text=True, env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not list(tmp_path.rglob('*.pyc'))
 
 
 def test_nano_package_is_included_in_distribution():

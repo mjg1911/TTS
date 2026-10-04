@@ -47,6 +47,16 @@ if nano_payload_text:
     nano_payload_datas = _runtime_tree(nano_payload_root, "nano_payload")
 elif os.environ.get("PIPER_REQUIRE_NANO_PAYLOAD") == "1":
     raise RuntimeError("release build requires PIPER_NANO_PAYLOAD_DIR")
+multilingual_payload_datas = []
+multilingual_payload_text = os.environ.get("PIPER_MULTILINGUAL_PAYLOAD_DIR")
+if multilingual_payload_text:
+    from piper.multilingual_assets import inspect_multilingual_installation
+
+    multilingual_payload_root = Path(multilingual_payload_text).resolve()
+    inspect_multilingual_installation(multilingual_payload_root)
+    multilingual_payload_datas = _runtime_tree(multilingual_payload_root, "multilingual_payload")
+elif os.environ.get("PIPER_REQUIRE_MULTILINGUAL_PAYLOAD") == "1":
+    raise RuntimeError("release build requires PIPER_MULTILINGUAL_PAYLOAD_DIR")
 if not piper_extensions:
     raise RuntimeError(
         "The compiled piper.espeakbridge extension was not built. "
@@ -67,7 +77,7 @@ a = Analysis(
     [str(SPEC_DIR / "piper_tray_entry.py")],
     pathex=[str(ROOT / "src")],
     binaries=piper_binaries + piper_extensions + tkinter_binaries,
-    datas=piper_datas + tkinter_datas + nano_payload_datas,
+    datas=piper_datas + tkinter_datas + nano_payload_datas + multilingual_payload_datas,
     hookspath=[str(SPEC_DIR / "pyinstaller_hooks")],
     hiddenimports=hiddenimports,
     noarchive=False,

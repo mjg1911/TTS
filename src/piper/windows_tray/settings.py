@@ -7,6 +7,13 @@ from pathlib import Path
 import tempfile
 from typing import Literal, Optional
 
+from piper.multilingual_options import (
+    ENGINE as MULTILINGUAL_ENGINE,
+    validate_cfg_weight,
+    validate_exaggeration,
+    validate_language,
+)
+
 from . import (
     DEFAULT_HOTKEY,
     DEFAULT_VOICE,
@@ -23,6 +30,9 @@ DEFAULT_SENTENCE_PAUSE_MS: int = 180
 MIN_SENTENCE_PAUSE_MS: int = 0
 MAX_SENTENCE_PAUSE_MS: int = 2000
 DEFAULT_PIPER_SENTENCE_STREAMING_ENABLED: bool = True
+DEFAULT_MULTILINGUAL_LANGUAGE = "en"
+DEFAULT_MULTILINGUAL_EXAGGERATION = 0.5
+DEFAULT_MULTILINGUAL_CFG_WEIGHT = 0.5
 
 
 def validate_piper_sentence_streaming_enabled(value: object) -> bool:
@@ -82,7 +92,9 @@ class TraySettings:
     chatterbox_custom_voice_enabled: bool = False
     chatterbox_reference_clip: str = ""
     schema_version: int = SETTINGS_SCHEMA_VERSION
-    engine: Literal["Piper", "Chatterbox Nano"] = "Piper"
+    engine: Literal[
+        "Piper", "Chatterbox Nano", "Chatterbox Multilingual V3 (500M)"
+    ] = "Piper"
     piper_voice: str = DEFAULT_VOICE
     hotkey: str = DEFAULT_HOTKEY
     log_level: str = "INFO"
@@ -93,11 +105,16 @@ class TraySettings:
     speed_percent: float = DEFAULT_SPEED_PERCENT
     sentence_pause_ms: int = DEFAULT_SENTENCE_PAUSE_MS
     piper_sentence_streaming_enabled: bool = DEFAULT_PIPER_SENTENCE_STREAMING_ENABLED
+    multilingual_language: str = DEFAULT_MULTILINGUAL_LANGUAGE
+    multilingual_exaggeration: float = DEFAULT_MULTILINGUAL_EXAGGERATION
+    multilingual_cfg_weight: float = DEFAULT_MULTILINGUAL_CFG_WEIGHT
 
     def __init__(
         self,
         schema_version: int = SETTINGS_SCHEMA_VERSION,
-        engine: Literal["Piper", "Chatterbox Nano"] = "Piper",
+        engine: Literal[
+            "Piper", "Chatterbox Nano", "Chatterbox Multilingual V3 (500M)"
+        ] = "Piper",
         piper_voice: str = DEFAULT_VOICE,
         hotkey: str = DEFAULT_HOTKEY,
         log_level: str = "INFO",
@@ -114,6 +131,9 @@ class TraySettings:
         chatterbox_device: Literal["cpu", "cuda"] = "cpu",
         chatterbox_custom_voice_enabled: bool = False,
         chatterbox_reference_clip: str = "",
+        multilingual_language: str = DEFAULT_MULTILINGUAL_LANGUAGE,
+        multilingual_exaggeration: float = DEFAULT_MULTILINGUAL_EXAGGERATION,
+        multilingual_cfg_weight: float = DEFAULT_MULTILINGUAL_CFG_WEIGHT,
         voice: Optional[str] = None,
     ) -> None:
         if voice is not None and piper_voice == DEFAULT_VOICE:
@@ -157,6 +177,15 @@ def _validated(data: object) -> TraySettings:
     chatterbox_reference_clip = validate_chatterbox_reference_clip(
         data.get("chatterbox_reference_clip", "")
     )
+    multilingual_language = validate_language(
+        data.get("multilingual_language", DEFAULT_MULTILINGUAL_LANGUAGE)
+    )
+    multilingual_exaggeration = validate_exaggeration(
+        data.get("multilingual_exaggeration", DEFAULT_MULTILINGUAL_EXAGGERATION)
+    )
+    multilingual_cfg_weight = validate_cfg_weight(
+        data.get("multilingual_cfg_weight", DEFAULT_MULTILINGUAL_CFG_WEIGHT)
+    )
     if chatterbox_device not in ("cpu", "cuda"):
         raise ValueError("invalid Chatterbox device")
     piper_voice = data.get("piper_voice")
@@ -183,6 +212,7 @@ def _validated(data: object) -> TraySettings:
     if not isinstance(engine, str) or engine not in {
         "Piper",
         "Chatterbox Nano",
+        MULTILINGUAL_ENGINE,
     }:
         raise ValueError("invalid engine")
     if not isinstance(piper_voice, str) or not piper_voice.strip():
@@ -206,6 +236,9 @@ def _validated(data: object) -> TraySettings:
         chatterbox_device=chatterbox_device,
         chatterbox_custom_voice_enabled=chatterbox_custom_voice_enabled,
         chatterbox_reference_clip=chatterbox_reference_clip,
+        multilingual_language=multilingual_language,
+        multilingual_exaggeration=multilingual_exaggeration,
+        multilingual_cfg_weight=multilingual_cfg_weight,
         engine=engine,
         piper_voice=piper_voice.strip(),
         hotkey=hotkey.strip(),
