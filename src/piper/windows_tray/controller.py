@@ -1296,6 +1296,16 @@ class Controller:
     def cancel_nano_settings(self) -> None:
         self.nano_settings_cancel_event.set()
 
+    def begin_shortcut_recording(self) -> bool:
+        return self._hotkeys is not None and self._hotkeys.suspend_capture()
+
+    def end_shortcut_recording(self) -> bool:
+        restored = self._hotkeys is not None and self._hotkeys.resume_capture()
+        if not restored:
+            self._log_error("Capture shortcut registration could not be restored.")
+            self._show_status("Capture shortcut could not be restored. Restart Piper to try again.")
+        return restored
+
     def apply_settings(
         self,
         engine,
@@ -1697,6 +1707,12 @@ class Controller:
             committed = candidate is None
             hotkey_changed = candidate_hotkey.canonical != current.hotkey
             try:
+                # Loading a Piper voice can take time; cancellation may arrive
+                # after the earlier check and before any settings are persisted.
+                if cancel_event is not None and cancel_event.is_set():
+                    return SettingsApplyResult(
+                        False, (("engine", "Settings preparation was cancelled."),)
+                    )
                 if hotkey_changed and not self._hotkeys.prepare_rebind(
                     candidate_hotkey
                 ):

@@ -336,7 +336,8 @@ def test_nano_settings_window_applies_off_thread_and_finishes_on_ui(monkeypatch)
     release.set()
     assert done.wait(2)
     callbacks.pop(0)()
-    assert window._closed
+    assert not window._closed
+    assert window.apply_status_var.get().startswith("Saved")
 
 
 def test_newer_nano_apply_supersedes_older_preparation():

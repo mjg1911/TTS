@@ -9,6 +9,8 @@ from piper.multilingual_options import ENGINE as MULTILINGUAL_ENGINE
 from piper.multilingual_options import SUPPORTED_LANGUAGES
 
 from .controller import SettingsApplyResult, SettingsWindowSnapshot
+from .settings import MIN_SPEED_PERCENT, MAX_SPEED_PERCENT
+from .shortcut_recorder import ShortcutRecorder
 from .settings_theme import (
     ACCENT,
     BACKGROUND,
@@ -105,6 +107,14 @@ class SettingsWindow:
         self.hotkey_var = tk.StringVar(value=snapshot.hotkey)
         self.pitch_var = tk.StringVar(value=f"{snapshot.pitch_percent:g}")
         self.speed_var = tk.StringVar(value=f"{snapshot.speed_percent:g}")
+        self.speed_value_var = tk.StringVar(
+            value=self._format_speed_value(snapshot.speed_percent)
+        )
+        self.shortcut_status_var = tk.StringVar(
+            value="Click the shortcut, then press your keys. Esc cancels recording."
+        )
+        self.apply_status_var = tk.StringVar(value="")
+        self.help_controls = {}
         self.sentence_pause_var = tk.StringVar(value=str(snapshot.sentence_pause_ms))
         self.piper_sentence_streaming_var = tk.StringVar(
             value=("true" if snapshot.piper_sentence_streaming_enabled else "false")
@@ -211,9 +221,7 @@ class SettingsWindow:
             font=("Segoe UI", 10),
         )
         self.engine_combo.grid(row=2, column=0, sticky="ew")
-        self.engine_combo.bind(
-            "<<ComboboxSelected>>", lambda _: self._refresh_voice_controls()
-        )
+        self.engine_combo.bind("<<ComboboxSelected>>", self._select_engine)
         self._error_label(voice, "engine", 3)
         self.nano_voice_frame = ttk.Frame(voice, style="Panel.Piper.TFrame")
         self.nano_voice_frame.columnconfigure(0, weight=1)
@@ -225,16 +233,12 @@ class SettingsWindow:
         self.chatterbox_device_controls = ttk.Frame(
             self.nano_voice_frame, style="Panel.Piper.TFrame"
         )
-        self.chatterbox_device_controls.grid(
-            row=1, column=0, sticky="w", pady=(3, 5)
-        )
+        self.chatterbox_device_controls.grid(row=1, column=0, sticky="w", pady=(3, 5))
         ttk.Label(
             self.chatterbox_device_controls,
             text="Device",
             style="Muted.Piper.TLabel",
-        ).grid(
-            row=0, column=0, padx=(0, 12)
-        )
+        ).grid(row=0, column=0, padx=(0, 12))
         for column, (label, value) in enumerate((("CPU", "cpu"), ("GPU", "cuda")), 1):
             ttk.Radiobutton(
                 self.chatterbox_device_controls,
@@ -293,9 +297,7 @@ class SettingsWindow:
             command=self._choose_reference_clip,
             style="Piper.TButton",
         )
-        self.import_reference_clip_button.grid(
-            row=3, column=0, sticky="w", pady=(8, 0)
-        )
+        self.import_reference_clip_button.grid(row=3, column=0, sticky="w", pady=(8, 0))
         ttk.Label(
             self.nano_voice_frame,
             textvariable=self.reference_clip_name_var,
@@ -379,7 +381,26 @@ class SettingsWindow:
         tuning.columnconfigure(0, weight=1)
         tuning.columnconfigure(1, weight=1)
         self._number_field(tuning, "Pitch", self.pitch_var, "pitch", "%", 0)
-        self._number_field(tuning, "Speed", self.speed_var, "speed", "%", 1)
+        speed = ttk.Frame(tuning, style="Panel.Piper.TFrame")
+        speed.grid(row=0, column=1, sticky="nsew")
+        speed.columnconfigure(0, weight=1)
+        ttk.Label(speed, text="Speed", style="Muted.Piper.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(speed, textvariable=self.speed_value_var, style="Piper.TLabel").grid(
+            row=0, column=1, sticky="e"
+        )
+        self.speed_scale = ttk.Scale(
+            speed,
+            from_=MIN_SPEED_PERCENT,
+            to=MAX_SPEED_PERCENT,
+            orient="horizontal",
+            variable=self.speed_var,
+            command=self._set_speed_value,
+            style="Piper.Horizontal.TScale",
+        )
+        self.speed_scale.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self._error_label(speed, "speed", 2, columnspan=2)
         ttk.Label(
             speech,
             text="0% keeps the voice’s natural pitch and speed.",
@@ -417,15 +438,25 @@ class SettingsWindow:
         self.pause_frame.grid(row=3, column=0, sticky="ew")
 
         shortcut = self._panel(self.controls, "Capture shortcut", 2)
-        ttk.Entry(
+        self.shortcut_entry = ttk.Entry(
             shortcut,
             textvariable=self.hotkey_var,
+            state="readonly",
             style="Piper.TEntry",
             font=("Segoe UI", 10),
-        ).grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        )
+        self.shortcut_entry.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        apply_owner = getattr(self._on_apply, "__self__", None)
+        self.shortcut_recorder = ShortcutRecorder(
+            self.shortcut_entry,
+            self.hotkey_var,
+            self.shortcut_status_var,
+            on_start=getattr(apply_owner, "begin_shortcut_recording", None),
+            on_finish=getattr(apply_owner, "end_shortcut_recording", None),
+        )
         ttk.Label(
             shortcut,
-            text="Read selected text with your shortcut. E.g. ctrl+shift+q",
+            textvariable=self.shortcut_status_var,
             style="Muted.Piper.TLabel",
             wraplength=310,
         ).grid(row=2, column=0, sticky="w", pady=(6, 0))
@@ -498,21 +529,50 @@ class SettingsWindow:
             justify="left",
         )
         general.grid(row=0, column=0, sticky="w", padx=(0, 12))
+        self.apply_progress = ttk.Progressbar(
+            footer,
+            mode="indeterminate",
+            length=110,
+            style="Piper.Horizontal.TProgressbar",
+        )
+        self.apply_progress.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.apply_progress.grid_remove()
+        ttk.Label(
+            footer,
+            textvariable=self.apply_status_var,
+            style="Subtitle.Piper.TLabel",
+            wraplength=390,
+        ).grid(row=1, column=0, sticky="w", padx=(0, 12))
+        general.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
         self.cancel_button = ttk.Button(
             footer, text="Cancel", command=self.close, style="Piper.TButton"
         )
-        self.cancel_button.grid(row=0, column=1, padx=(0, 10))
+        self.cancel_button.grid(row=1, column=1, padx=(0, 10))
         self.save_button = ttk.Button(
             footer,
-            text="Save changes",
+            text="Save",
             command=self._apply,
+            style="Piper.TButton",
+        )
+        self.save_button.grid(row=1, column=2, padx=(0, 10))
+        self.save_close_button = ttk.Button(
+            footer,
+            text="Save & Close",
+            command=lambda: self._apply(close_after=True),
             style="Primary.Piper.TButton",
         )
-        self.save_button.grid(row=0, column=2)
+        self.save_close_button.grid(row=1, column=3)
         self._refresh_voice_controls()
         self._bind_settings_scroll(self.controls)
         self.settings_canvas.bind("<MouseWheel>", self._scroll_settings)
-        self.window.bind("<Escape>", lambda _: self.close())
+        self.window.bind("<Escape>", self._escape)
+
+    def _escape(self, _event=None):
+        if self.shortcut_recorder.is_recording:
+            self.shortcut_recorder.cancel()
+        else:
+            self.close()
+        return "break"
 
     def _panel(self, parent, title, row):
         frame = ttk.Frame(parent, style="Panel.Piper.TFrame", padding=16)
@@ -538,14 +598,59 @@ class SettingsWindow:
 
     @staticmethod
     def _format_slider_value(value) -> str:
-        return f"{float(value):g}"
+        return f"{float(value):.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _format_speed_value(value) -> str:
+        value = float(value)
+        return "0%" if value == 0 else f"{value:+g}%"
+
+    def _set_speed_value(self, value):
+        value = round(float(value))
+        self.speed_var.set(f"{value:g}")
+        self.speed_value_var.set(self._format_speed_value(value))
 
     def _multilingual_slider(
         self, parent, title, variable, value_variable, minimum, maximum, row
     ):
-        ttk.Label(parent, text=title, style="Muted.Piper.TLabel").grid(
-            row=row, column=0, sticky="w", pady=(8, 2)
+        heading = ttk.Frame(parent, style="Panel.Piper.TFrame")
+        heading.grid(row=row, column=0, sticky="ew", pady=(8, 2))
+        heading.columnconfigure(0, weight=1)
+        ttk.Label(heading, text=title, style="Muted.Piper.TLabel").grid(
+            row=0, column=0, sticky="w"
         )
+        help_text = {
+            "Expressiveness": "Adds emotion and emphasis. Higher values sound more dramatic and may change pacing. Default: 0.5.",
+            "Voice/style guidance": "Controls how closely speech follows the reference voice and style. Lower values can help when changing languages. Default: 0.5.",
+        }[title]
+        explanation = ttk.Label(
+            heading,
+            text=help_text,
+            style="Muted.Piper.TLabel",
+            wraplength=265,
+            justify="left",
+        )
+        explanation.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        explanation.grid_remove()
+        shown = [False]
+
+        def toggle_help():
+            shown[0] = not shown[0]
+            if shown[0]:
+                explanation.grid()
+            else:
+                explanation.grid_remove()
+
+        help_button = ttk.Button(
+            heading,
+            text="?",
+            width=2,
+            command=toggle_help,
+            style="Help.Piper.TButton",
+            takefocus=True,
+        )
+        help_button.grid(row=0, column=1, padx=(6, 8))
+        self.help_controls[title] = (help_button, explanation)
         ttk.Label(
             parent,
             textvariable=value_variable,
@@ -557,9 +662,7 @@ class SettingsWindow:
             to=maximum,
             orient="horizontal",
             variable=variable,
-            command=lambda value: value_variable.set(
-                self._format_slider_value(value)
-            ),
+            command=lambda value: value_variable.set(self._format_slider_value(value)),
             style="Piper.Horizontal.TScale",
         )
         scale.grid(row=row + 1, column=0, columnspan=2, sticky="ew")
@@ -606,6 +709,13 @@ class SettingsWindow:
                 engine == MULTILINGUAL_ENGINE,
                 row=2,
             )
+
+    def _select_engine(self, _event=None):
+        self._refresh_voice_controls()
+        self.engine_status_var.set(
+            f"{self.engine_var.get()} selected. Save to load this model."
+        )
+        self.apply_status_var.set("")
 
     @staticmethod
     def _show_frame(frame, visible: bool, row: int = 5) -> None:
@@ -669,9 +779,7 @@ class SettingsWindow:
         self.reference_clip_path_var.set(str(path) if path else "")
 
     def _choose_reference_clip(self) -> None:
-        if self._reference_import_pending or getattr(
-            self, "_apply_in_progress", False
-        ):
+        if self._reference_import_pending or getattr(self, "_apply_in_progress", False):
             return
         selected = choose_reference_clip(self.window)
         if selected is None:
@@ -743,7 +851,56 @@ class SettingsWindow:
     def error_text(self, key: str) -> str:
         return self._error_vars[key].get()
 
-    def _apply(self) -> None:
+    def _set_apply_busy(self, busy: bool) -> None:
+        if busy:
+            self._apply_widget_states = []
+            recorder = getattr(self, "shortcut_recorder", None)
+            if recorder is not None and recorder.is_recording:
+                recorder.cancel()
+            widgets = [
+                self.save_button,
+                self.save_close_button,
+                self.speak_text_button,
+                self.engine_combo,
+                self.import_reference_clip_button,
+            ]
+
+            def collect(parent):
+                for child in parent.winfo_children():
+                    widgets.append(child)
+                    collect(child)
+
+            collect(self.controls)
+            seen = set()
+            for widget in widgets:
+                if id(widget) in seen:
+                    continue
+                seen.add(id(widget))
+                try:
+                    state = str(widget.cget("state"))
+                    if state not in ("normal", "readonly", "disabled"):
+                        continue
+                    self._apply_widget_states.append((widget, state))
+                    widget.configure(state="disabled")
+                except (AttributeError, tk.TclError):
+                    continue
+            self.apply_progress.grid()
+            self.apply_progress.start(12)
+            message = "Preparing %s… (this may take a moment)" % self._apply_engine
+            self.apply_status_var.set(message)
+            self.engine_status_var.set(message)
+            return
+
+        self.apply_progress.stop()
+        self.apply_progress.grid_remove()
+        for widget, state in getattr(self, "_apply_widget_states", ()):
+            try:
+                widget.configure(state=state)
+            except (AttributeError, tk.TclError):
+                pass
+        self._apply_widget_states = []
+
+    def _apply(self, close_after: bool = False) -> None:
         self._clear_errors()
         self._render_errors()
         if getattr(self, "_apply_in_progress", False):
@@ -771,42 +928,22 @@ class SettingsWindow:
             else self.displayed_reference_clip
         )
         owner = getattr(self._on_apply, "__self__", None)
-        chatterbox_engine = arguments[0] in {"Chatterbox Nano", MULTILINGUAL_ENGINE}
-        if not chatterbox_engine:
-            if hasattr(owner, "cancel_nano_settings"):
-                result = self._on_apply(
-                    *arguments,
-                    chatterbox_custom_voice_enabled=custom_voice_enabled,
-                    chatterbox_reference_clip=reference_clip,
-                )
-            else:
-                result = self._on_apply(*arguments)
-            self._finish_apply(result)
-            return
-        self._apply_in_progress = True
-        self.import_reference_clip_button.configure(state="disabled")
-        self._apply_cancel_event = threading.Event()
-        self.engine_status_var.set("Preparing %s..." % arguments[0])
+        supports_cancel = hasattr(owner, "cancel_nano_settings")
         engine = arguments[0]
         device = self.chatterbox_device_var.get()
-        multilingual_options = (
-            {
-                "multilingual_language": self._selected_multilingual_language(),
-                "multilingual_exaggeration": float(
-                    self.multilingual_exaggeration_var.get()
-                ),
-                "multilingual_cfg_weight": float(
-                    self.multilingual_cfg_weight_var.get()
-                ),
-            }
-            if engine == MULTILINGUAL_ENGINE
-            else {}
-        )
+        multilingual_language = self._selected_multilingual_language()
+        multilingual_exaggeration = self.multilingual_exaggeration_var.get()
+        multilingual_cfg_weight = self.multilingual_cfg_weight_var.get()
+        self._apply_in_progress = True
+        self._apply_cancel_event = threading.Event()
+        self._apply_engine = engine
+        self._apply_previous_engine_status = self.engine_status_var.get()
+        self._set_apply_busy(True)
         results = Queue(maxsize=1)
 
         def apply_background():
             try:
-                if hasattr(owner, "cancel_nano_settings"):
+                if supports_cancel:
                     options = {
                         "cancel_event": self._apply_cancel_event,
                         "chatterbox_custom_voice_enabled": custom_voice_enabled,
@@ -814,19 +951,29 @@ class SettingsWindow:
                     }
                     if engine == "Chatterbox Nano":
                         options["chatterbox_device"] = device
-                    else:
-                        options.update(multilingual_options)
+                    elif engine == MULTILINGUAL_ENGINE:
+                        options.update(
+                            {
+                                "multilingual_language": multilingual_language,
+                                "multilingual_exaggeration": float(
+                                    multilingual_exaggeration
+                                ),
+                                "multilingual_cfg_weight": float(
+                                    multilingual_cfg_weight
+                                ),
+                            }
+                        )
                     result = self._on_apply(*arguments, **options)
                 else:
                     result = self._on_apply(*arguments)
-            except Exception:
-                message = (
-                    "Chatterbox Multilingual V3 is not available. CUDA is required."
-                    if engine == MULTILINGUAL_ENGINE
-                    else "Chatterbox Nano is not available."
-                )
+                if not isinstance(result, SettingsApplyResult):
+                    raise TypeError(
+                        "Settings apply callback returned an invalid result"
+                    )
+            except Exception as error:
                 result = SettingsApplyResult(
-                    False, (("engine", message),)
+                    False,
+                    (("general", "Could not save settings: %s" % error),),
                 )
             results.put(result)
 
@@ -839,22 +986,18 @@ class SettingsWindow:
                 self.window.after(25, poll)
                 return
             self._apply_in_progress = False
-            self.import_reference_clip_button.configure(state="normal")
-            self.engine_status_var.set("")
-            self._finish_apply(result)
+            self._set_apply_busy(False)
+            self.engine_status_var.set(self._apply_previous_engine_status)
+            self._finish_apply(result, close_after=close_after)
 
         threading.Thread(
             target=apply_background,
-            name=(
-                "multilingual-settings"
-                if engine == MULTILINGUAL_ENGINE
-                else "nano-settings"
-            ),
+            name="settings-apply",
             daemon=True,
         ).start()
         self.window.after(25, poll)
 
-    def _finish_apply(self, result):
+    def _finish_apply(self, result, close_after: bool = False):
         if not result.applied:
             for key, message in result.errors:
                 target = "piper_voice" if key == "voice" else key
@@ -866,13 +1009,16 @@ class SettingsWindow:
                 if self._error_vars[key].get():
                     self._reveal_setting(label)
                     break
+            self.apply_status_var.set("")
             return
         if result.snapshot is not None:
             self._refresh_from_snapshot(result.snapshot)
             if result.snapshot.chatterbox_device_message:
                 self.engine_status_var.set(result.snapshot.chatterbox_device_message)
-                return
-        self.close()
+        if close_after:
+            self.close()
+        else:
+            self.apply_status_var.set("Saved.")
 
     def _selected_multilingual_language(self) -> str:
         display_name = self.multilingual_language_var.get()
@@ -909,13 +1055,13 @@ class SettingsWindow:
         self.pitch_var.set(f"{snapshot.pitch_percent:g}")
         self.speed_var.set(f"{snapshot.speed_percent:g}")
         self.sentence_pause_var.set(str(snapshot.sentence_pause_ms))
+        self.speed_value_var.set(self._format_speed_value(snapshot.speed_percent))
         self.piper_sentence_streaming_var.set(
             "true" if snapshot.piper_sentence_streaming_enabled else "false"
         )
         self._set_voice_label(snapshot.piper_voice_path)
         self._set_reference_clip_labels(snapshot.chatterbox_reference_clip)
         self.reference_clip_status_var.set("")
-        self.update_last_text(snapshot.last_text)
         self._refresh_voice_controls()
 
     def focus(self) -> None:
@@ -940,8 +1086,13 @@ class SettingsWindow:
     def close(self) -> None:
         if self._closed:
             return
+        self.shortcut_recorder.cancel()
         if getattr(self, "_apply_in_progress", False):
             self._apply_cancel_event.set()
+            owner = getattr(self._on_apply, "__self__", None)
+            cancel = getattr(owner, "cancel_nano_settings", None)
+            if cancel is not None:
+                cancel()
         self._closed = True
         try:
             self.window.destroy()

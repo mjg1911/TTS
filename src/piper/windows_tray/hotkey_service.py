@@ -124,6 +124,7 @@ class HotkeyManager:
         self._owned_registrations = set()  # type: Set[int]
         self._pending_capture_id: Optional[int] = None
         self._pending_capture_spec = None
+        self._capture_suspended = False
         self._lock = threading.RLock()
         self._commands = queue.Queue()
         self._direct_test_mode = False
@@ -169,6 +170,8 @@ class HotkeyManager:
     def rebind(self, candidate: Any) -> bool:
         def command() -> bool:
             with self._lock:
+                if self._capture_suspended:
+                    return False
                 if self.capture_spec is None:
                     self._register_capture_set(candidate)
                     return True
@@ -205,7 +208,11 @@ class HotkeyManager:
     def prepare_rebind(self, candidate: Any) -> bool:
         def command() -> bool:
             with self._lock:
-                if self.capture_spec is None or self._pending_capture_id is not None:
+                if (
+                    self.capture_spec is None
+                    or self._pending_capture_id is not None
+                    or self._capture_suspended
+                ):
                     return False
                 inactive = (
                     CAPTURE_IDS[1]
@@ -281,18 +288,21 @@ class HotkeyManager:
             with self._lock:
                 if self.capture_spec is None:
                     return False
+                capture_suspended = self._capture_suspended
                 for hotkey_id in CAPTURE_IDS:
                     self._api.unregister(hotkey_id)
                     self._owned_registrations.discard(hotkey_id)
                 self._api.unregister(CANCEL_ID)
                 self._owned_registrations.discard(CANCEL_ID)
                 self._cancel_registered = False
-                if not self._register_capture(self._active_capture_id, self.capture_spec):
-                    return False
-                self._owned_registrations.add(self._active_capture_id)
+                if not capture_suspended:
+                    if not self._register_capture(self._active_capture_id, self.capture_spec):
+                        return False
+                    self._owned_registrations.add(self._active_capture_id)
                 if not self._api.register(CANCEL_ID, MOD_NOREPEAT, VK_F8):
-                    self._api.unregister(self._active_capture_id)
-                    self._owned_registrations.discard(self._active_capture_id)
+                    if not capture_suspended:
+                        self._api.unregister(self._active_capture_id)
+                        self._owned_registrations.discard(self._active_capture_id)
                     return False
                 self._cancel_registered = True
                 self._owned_registrations.add(CANCEL_ID)
@@ -305,6 +315,71 @@ class HotkeyManager:
                 return bool(command())
             return False
         except OSError:
+            return False
+
+    def suspend_capture(self) -> bool:
+        """Temporarily unregister the active capture hotkey, leaving F8 active."""
+
+        def command() -> bool:
+            with self._lock:
+                if self._capture_suspended:
+                    return True
+                if self.capture_spec is None:
+                    return False
+                try:
+                    self._api.unregister(self._active_capture_id)
+                except OSError as error:
+                    self._notify_failure(error)
+                    return False
+                self._owned_registrations.discard(self._active_capture_id)
+                self._capture_suspended = True
+                return True
+
+        try:
+            if self._message_thread_is_running():
+                return bool(self._run_on_message_thread(command))
+            if self._direct_test_mode:
+                return bool(command())
+            return False
+        except OSError as error:
+            self._notify_failure(error)
+            return False
+
+    def resume_capture(self) -> bool:
+        """Restore the saved capture hotkey after shortcut recording."""
+
+        def command() -> bool:
+            with self._lock:
+                if not self._capture_suspended:
+                    return self.capture_spec is not None
+                if self.capture_spec is None:
+                    return False
+                try:
+                    registered = self._register_capture(
+                        self._active_capture_id, self.capture_spec
+                    )
+                except OSError as error:
+                    self._notify_failure(error)
+                    return False
+                if not registered:
+                    self._notify_failure(
+                        HotkeyRegistrationError(
+                            "capture hotkey resume failed", "capture"
+                        )
+                    )
+                    return False
+                self._owned_registrations.add(self._active_capture_id)
+                self._capture_suspended = False
+                return True
+
+        try:
+            if self._message_thread_is_running():
+                return bool(self._run_on_message_thread(command))
+            if self._direct_test_mode:
+                return bool(command())
+            return False
+        except OSError as error:
+            self._notify_failure(error)
             return False
 
     def dispatch_message(
@@ -321,7 +396,7 @@ class HotkeyManager:
         capture = on_capture if on_capture is not None else self._on_capture
         cancel = on_cancel if on_cancel is not None else self._on_cancel
         if hotkey_id in CAPTURE_IDS and hotkey_id == self._active_capture_id:
-            if capture is not None:
+            if not self._capture_suspended and capture is not None:
                 capture()
         elif hotkey_id == CANCEL_ID and cancel is not None:
             cancel()
@@ -393,6 +468,7 @@ class HotkeyManager:
             )
             self._owned_registrations.clear()
             self._cancel_registered = False
+            self._capture_suspended = False
             self.capture_spec = None
         first_error = None
         for hotkey_id in owned:
@@ -435,6 +511,7 @@ class HotkeyManager:
                     self._api.unregister(hotkey_id)
                 self._api.unregister(CANCEL_ID)
                 self._cancel_registered = False
+                self._capture_suspended = False
                 self.capture_spec = None
 
         thread = self._message_thread

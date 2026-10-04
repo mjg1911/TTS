@@ -118,6 +118,22 @@ def configure_studio_theme(window):
         darkcolor=ACCENT,
     )
     style.map("Piper.Horizontal.TScale", background=[("active", "#96ecd3")])
+    style.configure(
+        "Help.Piper.TButton",
+        background=PANEL,
+        foreground=ACCENT,
+        bordercolor=BORDER,
+        padding=(3, 0),
+        font=("Segoe UI", 9, "bold"),
+    )
+    style.configure(
+        "Piper.Horizontal.TProgressbar",
+        background=ACCENT,
+        troughcolor=INPUT,
+        bordercolor=BACKGROUND,
+        lightcolor=ACCENT,
+        darkcolor=ACCENT,
+    )
     window.configure(background=BACKGROUND)
     window.option_add("*TCombobox*Listbox.background", INPUT)
     window.option_add("*TCombobox*Listbox.foreground", TEXT)
