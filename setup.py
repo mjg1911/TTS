@@ -122,6 +122,7 @@ setup(
         "piper",
         "piper.windows_tray",
         "piper.nano_worker",
+        "piper.multilingual_worker",
         "piper.tashkeel",
         "piper.hebrew",
         "piper.train",

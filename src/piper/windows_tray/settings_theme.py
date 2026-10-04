@@ -109,6 +109,15 @@ def configure_studio_theme(window):
         arrowsize=11,
     )
     style.map("Piper.Vertical.TScrollbar", background=[("active", "#506873")])
+    style.configure(
+        "Piper.Horizontal.TScale",
+        background=ACCENT,
+        troughcolor=INPUT,
+        bordercolor=PANEL,
+        lightcolor=ACCENT,
+        darkcolor=ACCENT,
+    )
+    style.map("Piper.Horizontal.TScale", background=[("active", "#96ecd3")])
     window.configure(background=BACKGROUND)
     window.option_add("*TCombobox*Listbox.background", INPUT)
     window.option_add("*TCombobox*Listbox.foreground", TEXT)

@@ -29,6 +29,7 @@ class FakeWidget:
 
     def grid(self, **kwargs):
         self.grid_options = kwargs
+        self.hidden = False
 
     def grid_remove(self):
         self.hidden = True
@@ -173,6 +174,7 @@ def install_fake_tk(monkeypatch, built_frames):
         Label=FakeLabel,
         Combobox=FakeEntry,
         Scrollbar=FakeWidget,
+        Scale=FakeWidget,
     )
     monkeypatch.setattr(settings_window, "tk", fake_tk)
     monkeypatch.setattr(settings_window, "ttk", fake_ttk)
@@ -213,7 +215,11 @@ def test_window_initializes_staged_settings_from_snapshot(monkeypatch):
     assert window.displayed_voice_path == Path("C:/voices/alba.onnx")
     assert window.last_text_value == "hello world"
     assert window.last_text.configured["state"] == "normal"
-    assert window.engine_combo.kwargs["values"] == ("Piper", "Chatterbox Nano")
+    assert window.engine_combo.kwargs["values"] == (
+        "Piper",
+        "Chatterbox Nano",
+        "Chatterbox Multilingual V3 (500M)",
+    )
     assert not hasattr(window, "kokoro_voice_var")
     assert all("Kokoro" not in frame.text for frame in built_frames)
 

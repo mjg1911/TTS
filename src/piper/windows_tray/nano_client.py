@@ -18,9 +18,9 @@ class NanoSynthesisResult:
     chunks: object
 
 
-def launch_nano_worker(installation):
-    python = os.environ.get('PIPER_NANO_WORKER_PYTHON')
-    command = ([python, '-m', 'piper.nano_worker.main'] if python else [str(installation.worker_executable)])
+def launch_nano_worker(installation, *, python_env='PIPER_NANO_WORKER_PYTHON', module='piper.nano_worker.main'):
+    python = os.environ.get(python_env)
+    command = ([python, '-m', module] if python else [str(installation.worker_executable)])
     environment = os.environ.copy()
     environment.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1')
     process = subprocess.Popen(command + ['--root', str(installation.root)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0)
@@ -51,6 +51,8 @@ def launch_nano_worker(installation):
 
 
 class NanoWorkerClient:
+    engine = 'Chatterbox Nano'
+
     def __init__(self, installation, process_factory=launch_nano_worker, device='cpu', reference_clip=None):
         if device not in ('cpu', 'cuda'):
             raise ValueError('Nano device must be cpu or cuda')
@@ -73,6 +75,19 @@ class NanoWorkerClient:
         self._active = False
         self._drain_done = Event()
         self._drain_done.set()
+
+    def _initialize_message(self):
+        message = {'type': 'initialize', 'manifest_sha256': self.installation.manifest_sha256}
+        # Older Nano workers accept manifest-only initialization and use CPU.
+        if self.device != 'cpu':
+            message['device'] = self.device
+        if self.reference_clip is not None:
+            message['reference_clip'] = str(self.reference_clip)
+        return message
+
+    def _validate_engine_ready(self, ready):
+        """Additional readiness constraints for workers sharing this lifecycle."""
+        return None
 
     def _dispose(self):
         process, self._process = self._process, None
@@ -155,19 +170,11 @@ class NanoWorkerClient:
                                 pass
                 Thread(target=reader, name='nano-response-reader', daemon=True).start()
                 hello = self._read(cancel_event, 10)
-                if hello != {'type':'hello','engine':'Chatterbox Nano','protocol_version':1}:
+                if hello != {'type':'hello','engine':self.engine,'protocol_version':1}:
                     raise NanoUnavailable('incompatible Nano worker handshake')
-                initialize = {
-                    'type': 'initialize',
-                    'manifest_sha256': self.installation.manifest_sha256,
-                }
-                # Older workers accept manifest-only initialization and use CPU.
-                if self.device != 'cpu':
-                    initialize['device'] = self.device
-                if self.reference_clip is not None:
-                    initialize['reference_clip'] = str(self.reference_clip)
-                write_frame(self._process.stdin, initialize)
+                write_frame(self._process.stdin, self._initialize_message())
                 ready = self._read(cancel_event)
+                self._validate_engine_ready(ready)
                 rate = ready.get('sample_rate')
                 effective_device = ready.get('device', 'cpu')
                 device_message = ready.get('device_message', '')

@@ -267,11 +267,11 @@ def test_kokoro_only_packaging_inputs_are_removed() -> None:
     assert all(not (ROOT / path).exists() for path in removed_paths)
 
 
-def test_current_user_docs_describe_two_engines_and_kokoro_migration() -> None:
+def test_current_user_docs_describe_three_engines_and_kokoro_migration() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").lower()
 
-    assert "offers two speech engines" in readme
+    assert "offers three speech engines" in readme
     assert "kokoro was removed" in readme
     assert "piper is now selected" in readme
     assert "remove kokoro" in changelog

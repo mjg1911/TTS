@@ -35,6 +35,17 @@ if ($hasNanoModel) {
     & "$Root/script/stage_nano_payload.ps1"
     $env:PIPER_NANO_PAYLOAD_DIR = (Resolve-Path "build/nano-payload").Path
 }
+$requireMultilingual = $env:PIPER_REQUIRE_MULTILINGUAL_PAYLOAD -eq "1"
+$hasMultilingualModel = -not [string]::IsNullOrWhiteSpace($env:PIPER_MULTILINGUAL_MODEL_DIR)
+if ($requireMultilingual -and -not $hasMultilingualModel -and
+    [string]::IsNullOrWhiteSpace($env:PIPER_MULTILINGUAL_PAYLOAD_DIR)) {
+    throw "release build requires a local Multilingual V3 model directory or staged payload"
+}
+if ($hasMultilingualModel) {
+    & "$Root/script/build_multilingual_worker.ps1"
+    & "$Root/script/stage_multilingual_payload.ps1"
+    $env:PIPER_MULTILINGUAL_PAYLOAD_DIR = (Resolve-Path "build/multilingual-payload").Path
+}
 python -m PyInstaller --clean --noconfirm script/piper_tray.spec
 if ($LASTEXITCODE -ne 0) { throw "Piper Tray packaging failed" }
 
@@ -45,6 +56,9 @@ if ($requireNano -and -not (Test-Path (Join-Path $DistDir "_internal\nano_payloa
     throw "Required Chatterbox Nano payload was not collected"
 }
 if ($File.Length -le 0) { throw "Built executable is empty: $Exe" }
+if ($requireMultilingual -and -not (Test-Path (Join-Path $DistDir "_internal\multilingual_payload\manifest.json") -PathType Leaf)) {
+    throw "Required Chatterbox Multilingual V3 payload was not collected"
+}
 $Hash = Get-FileHash -Algorithm SHA256 $Exe
 Write-Host "Built $DistDir"
 Write-Host "Launcher size: $($File.Length) bytes"

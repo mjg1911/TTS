@@ -2,7 +2,7 @@
 
 Piper is a Windows desktop app that makes it easy to listen to text while you work. It stays in the system tray, ready to read selected text aloud with a keyboard shortcut.
 
-The app offers two speech engines for different needs. Piper is exceptionally lightweight and quick, making it a good choice for everyday speech with minimal overhead. Chatterbox Nano adds an expressive English default voice that runs locally on your CPU or NVIDIA GPU.
+The app offers three speech engines for different needs. Piper is exceptionally lightweight and quick, making it a good choice for everyday speech with minimal overhead. Chatterbox Nano adds an expressive English default voice that runs locally on your CPU or NVIDIA GPU. Chatterbox Multilingual V3 (500M) supports 23 languages and requires an NVIDIA GPU with CUDA.
 
 Kokoro was removed. If Kokoro was selected in a previous installation, Piper is now selected after upgrade and your other saved preferences are preserved.
 
@@ -10,7 +10,41 @@ Switch between engines and voices to find the sound that suits you. You can also
 
 Piper can also read completed Codex responses aloud. Enable Codex monitoring and new answers are spoken using your selected voice, so you can keep up with responses while your attention is elsewhere.
 
-Speech is generated locally using voice models on your computer. Choose your engine in Settings; speed, pitch, Stop, replay, and automatic reading also work with Chatterbox Nano.
+Speech is generated locally using voice models on your computer. Choose your engine in Settings; speed, pitch, Stop, replay, and automatic reading also work with both Chatterbox engines.
+
+## Chatterbox Multilingual V3 setup
+
+Select **Chatterbox Multilingual V3 (500M)** in Settings. This engine runs exclusively on an NVIDIA CUDA GPU. If CUDA is unavailable or loading fails, the app shows an error and keeps the working engine; it never runs Multilingual on CPU.
+
+Choose **Language** to match the text you want spoken (this does not translate text). The dropdown supports Arabic, Chinese, Danish, Dutch, English, Finnish, French, German, Greek, Hebrew, Hindi, Italian, Japanese, Korean, Malay, Norwegian, Polish, Portuguese, Russian, Spanish, Swedish, Swahili, and Turkish. English is selected initially.
+
+**Expressiveness** controls emotion exaggeration from 0.25 to 2.0. **Voice/style guidance** controls how strongly generation follows the reference voice/style from 0 to 1. Both start at 0.5; higher expressiveness can also affect pacing. Click **Save changes** to apply and remember these settings. Reference clip import and **Use custom voice** work as for Nano; the imported clip is shared between the Chatterbox engines. For cross-language voice cloning, a reference in the selected language generally produces a more natural accent; lowering guidance can help with language transfer. The upstream audio watermark is preserved.
+
+Build a separate worker and stage its pinned V3 models from the repository root:
+
+```powershell
+& .\script\build_multilingual_worker.ps1
+& .\script\stage_multilingual_payload.ps1
+```
+
+Setup downloads approximately 3.2 GB of model files plus the CUDA worker runtime. Normal speech is offline, including the Chinese tokenizer mapping. To use existing weights, set `PIPER_MULTILINGUAL_MODEL_DIR`. Staging needs a fresh output directory; pass `-OutputDir` when rebuilding.
+
+For the source app, stage to its installation directory:
+
+```powershell
+& .\script\stage_multilingual_payload.ps1 -OutputDir "$env:APPDATA\Piper\ChatterboxMultilingual"
+```
+
+To bundle the payload with the Windows app and installer:
+
+```powershell
+$env:PIPER_MULTILINGUAL_PAYLOAD_DIR = (Resolve-Path '.\build\multilingual-payload').Path
+$env:PIPER_REQUIRE_MULTILINGUAL_PAYLOAD = '1'
+& .\script\build_windows_tray.ps1
+& .\script\build_windows_installer.ps1
+```
+
+`PIPER_MULTILINGUAL_WORKER_PYTHON` selects a dedicated Python environment for worker builds or source-worker development. Leave it unset for the packaged worker. Install Python 3.11, Git, and a compatible NVIDIA driver before building.
 
 ## Chatterbox Nano setup
 
