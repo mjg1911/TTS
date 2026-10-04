@@ -307,7 +307,7 @@ def test_client_treats_legacy_ready_without_device_as_cpu_fallback(tmp_path):
 
 
 @pytest.mark.usefixtures('fake_model_hashes')
-def test_cancel_terminates_worker_and_next_request_restarts(tmp_path):
+def test_cancel_before_sending_keeps_loaded_worker(tmp_path):
     _, _, client = modules()
     processes = []
     def factory(_):
@@ -319,10 +319,184 @@ def test_cancel_terminates_worker_and_next_request_restarts(tmp_path):
     result = worker.synthesize('Hello', cancel)
     cancel.set()
     assert list(result.chunks) == []
-    assert processes[0].killed
+    assert not processes[0].killed
     worker.ensure_ready()
-    assert len(processes) == 2
+    assert len(processes) == 1
     worker.shutdown()
+
+
+@pytest.mark.usefixtures('fake_model_hashes')
+@pytest.mark.parametrize('close_iterator', [False, True])
+def test_cancel_discards_remaining_audio_and_reuses_worker(tmp_path, close_iterator):
+    from piper.windows_tray.worker_protocol import encode_audio
+    _, _, client = modules()
+    process = Process([
+        {'type': 'hello', 'engine': 'Chatterbox Nano', 'protocol_version': 1},
+        {'type': 'ready', 'sample_rate': 24000},
+        {'type': 'audio', 'request_id': 1, 'audio': encode_audio(b'\0\0')},
+        *[{'type': 'audio', 'request_id': 1, 'audio': encode_audio(b'\1\0')} for _ in range(20)],
+        {'type': 'response_end', 'request_id': 1},
+        {'type': 'audio', 'request_id': 2, 'audio': encode_audio(b'\2\0')},
+        {'type': 'response_end', 'request_id': 2},
+    ])
+    launches = []
+    def factory(_):
+        launches.append(True)
+        return process
+    worker = client.NanoWorkerClient(installation(tmp_path), process_factory=factory)
+    try:
+        cancel = Event()
+        chunks = worker.synthesize('Old sentence', cancel).chunks
+        assert next(chunks) == b'\0\0'
+        cancel.set()
+        if close_iterator:
+            chunks.close()
+        else:
+            assert list(chunks) == []
+        assert list(worker.synthesize('New sentence', Event()).chunks) == [b'\2\0']
+        assert launches == [True]
+        assert not process.killed
+    finally:
+        worker.shutdown()
+
+
+@pytest.mark.usefixtures('fake_model_hashes')
+def test_cancel_next_request_while_draining_keeps_model_ready(tmp_path):
+    import os
+    import threading
+    from piper.windows_tray.worker_protocol import write_frame, encode_audio
+    _, _, client = modules()
+    process = Process([])
+    reader, writer = os.pipe()
+    process.stdout = os.fdopen(reader, 'rb', buffering=0)
+    pipe = os.fdopen(writer, 'wb', buffering=0)
+    original_terminate = process.terminate
+    def terminate():
+        original_terminate()
+        pipe.close()
+    process.terminate = terminate
+    launches = []
+    def factory(_):
+        launches.append(True)
+        return process
+    for frame in (
+        {'type': 'hello', 'engine': 'Chatterbox Nano', 'protocol_version': 1},
+        {'type': 'ready', 'sample_rate': 24000},
+        {'type': 'audio', 'request_id': 1, 'audio': encode_audio(b'\0\0')},
+    ):
+        write_frame(pipe, frame)
+    worker = client.NanoWorkerClient(installation(tmp_path), process_factory=factory)
+    thread = None
+    try:
+        chunks = worker.synthesize('Old sentence', Event()).chunks
+        assert next(chunks) == b'\0\0'
+        chunks.close()
+        next_cancel = Event()
+        waiting = Event()
+        finished = Event()
+        errors = []
+        def next_request():
+            waiting.set()
+            try:
+                worker.synthesize('Cancelled while waiting', next_cancel)
+            except client.NanoUnavailable as error:
+                errors.append(str(error))
+            finally:
+                finished.set()
+        thread = threading.Thread(target=next_request)
+        thread.start()
+        assert waiting.wait(1)
+        assert not finished.wait(0.1)
+        next_cancel.set()
+        assert finished.wait(1)
+        assert errors == ['Nano request cancelled']
+        assert not process.killed
+        write_frame(pipe, {'type': 'response_end', 'request_id': 1})
+        worker.ensure_ready()
+        write_frame(pipe, {'type': 'audio', 'request_id': 2, 'audio': encode_audio(b'\2\0')})
+        write_frame(pipe, {'type': 'response_end', 'request_id': 2})
+        assert list(worker.synthesize('New sentence', Event()).chunks) == [b'\2\0']
+        assert launches == [True]
+    finally:
+        worker.shutdown()
+        pipe.close()
+        if thread is not None:
+            thread.join(1)
+
+
+@pytest.mark.usefixtures('fake_model_hashes')
+def test_invalid_cancelled_response_discards_unusable_worker(tmp_path):
+    from piper.windows_tray.worker_protocol import encode_audio
+    _, _, client = modules()
+    process = Process([
+        {'type': 'hello', 'engine': 'Chatterbox Nano', 'protocol_version': 1},
+        {'type': 'ready', 'sample_rate': 24000},
+        {'type': 'audio', 'request_id': 1, 'audio': encode_audio(b'\0\0')},
+        {'type': 'response_end', 'request_id': 999},
+    ])
+    worker = client.NanoWorkerClient(installation(tmp_path), process_factory=lambda _: process)
+    try:
+        chunks = worker.synthesize('Old sentence', Event()).chunks
+        assert next(chunks) == b'\0\0'
+        chunks.close()
+        assert worker._drain_done.wait(1)
+        assert process.killed
+    finally:
+        worker.shutdown()
+
+
+@pytest.mark.usefixtures('fake_model_hashes')
+def test_speech_stop_then_new_message_reuses_nano_without_stale_audio(tmp_path):
+    from piper.windows_tray.speech import SpeechWorker, SpeechRequest, SpeechEventKind
+    from piper.windows_tray.worker_protocol import encode_audio, read_frame
+    _, _, client = modules()
+    process = Process([
+        {'type': 'hello', 'engine': 'Chatterbox Nano', 'protocol_version': 1},
+        {'type': 'ready', 'sample_rate': 24000},
+        {'type': 'audio', 'request_id': 1, 'audio': encode_audio(b'\0\0')},
+        {'type': 'audio', 'request_id': 1, 'audio': encode_audio(b'\1\0')},
+        {'type': 'response_end', 'request_id': 1},
+        {'type': 'audio', 'request_id': 2, 'audio': encode_audio(b'\2\0')},
+        {'type': 'response_end', 'request_id': 2},
+    ])
+    launches = []
+    def factory(_):
+        launches.append(True)
+        return process
+    backend = client.NanoWorkerClient(installation(tmp_path), process_factory=factory)
+    finished = Event()
+    events = []
+    played = []
+    def on_event(event):
+        events.append(event)
+        if event.generation == 2 and event.kind is not SpeechEventKind.STARTED:
+            finished.set()
+    class Player:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def stop(self): pass
+        def play(self, audio):
+            played.append(audio)
+            if audio == b'\0\0':
+                speech.cancel_active(1)
+                speech.submit(SpeechRequest(2, 'New message.'))
+    speech = SpeechWorker(lambda: backend, on_event, player_factory=lambda rate: Player())
+    try:
+        speech.submit(SpeechRequest(1, 'Old sentence. Never generate this sentence.'))
+        assert finished.wait(2)
+        assert [(e.generation, e.kind) for e in events] == [
+            (1, SpeechEventKind.STARTED), (1, SpeechEventKind.CANCELLED),
+            (2, SpeechEventKind.STARTED), (2, SpeechEventKind.FINISHED),
+        ]
+        assert played == [b'\0\0', b'\2\0']
+        assert launches == [True]
+        process.stdin.seek(0)
+        read_frame(process.stdin)  # initialize
+        assert read_frame(process.stdin)['text'] == 'Old sentence.'
+        assert read_frame(process.stdin)['text'] == 'New message.'
+    finally:
+        speech.shutdown()
+        backend.shutdown()
 
 
 @pytest.mark.usefixtures('fake_model_hashes')
@@ -581,7 +755,8 @@ def test_cancel_during_blocked_inference_stops_promptly(tmp_path):
     started = time.monotonic()
     assert list(chunks) == []
     assert time.monotonic() - started < 1
-    assert process.killed
+    assert not process.killed
+    worker.shutdown()
     pipe.close()
     timer.join()
 

@@ -460,6 +460,7 @@ class SpeechWorker:
         phase = "synthesis"
         synthesis_seconds = 0.0
         release_backend = None
+        audio_chunks = None
         try:
             if request.backend_override is not None:
                 backend = request.backend_override
@@ -569,6 +570,11 @@ class SpeechWorker:
                     else "Speech synthesis failed."
                 )
         finally:
+            # Close abandoned streams before releasing the backend lease, so
+            # Nano starts draining cancelled audio before another request runs.
+            close_chunks = getattr(audio_chunks, 'close', None)
+            if close_chunks is not None:
+                close_chunks()
             if release_backend is not None:
                 release_backend()
 

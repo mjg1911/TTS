@@ -71,6 +71,8 @@ class NanoWorkerClient:
         self._closed = Event()
         self._lock = Lock()
         self._active = False
+        self._drain_done = Event()
+        self._drain_done.set()
 
     def _dispose(self):
         process, self._process = self._process, None
@@ -114,6 +116,11 @@ class NanoWorkerClient:
             return item
 
     def ensure_ready(self, cancel_event=None):
+        # Cancelled audio is discarded in the background. Reuse the loaded
+        # model only after its previous response has reached a terminal frame.
+        while not self._drain_done.wait(0.05):
+            if self._closed.is_set() or (cancel_event is not None and cancel_event.is_set()):
+                raise NanoUnavailable('Nano request cancelled')
         with self._lock:
             if self._closed.is_set():
                 raise NanoUnavailable('Nano worker is shut down')
@@ -182,11 +189,10 @@ class NanoWorkerClient:
                 raise NanoUnavailable('Nano startup failed') from error
 
     def synthesize(self, text, cancel_event):
+        self.ensure_ready(cancel_event)
         with self._lock:
             if self._active:
                 raise NanoUnavailable('Nano synthesis request already active')
-        self.ensure_ready(cancel_event)
-        with self._lock:
             self._request_id += 1
             request_id = self._request_id
         message = {'type':'synthesize','request_id':request_id,'text':text,'voice_id':'default'}
@@ -200,6 +206,8 @@ class NanoWorkerClient:
 
     def _chunks(self, message, cancel):
         ended = False
+        sent = False
+        failed = False
         with self._lock:
             if self._active:
                 raise NanoUnavailable('Nano synthesis request already active')
@@ -211,6 +219,7 @@ class NanoWorkerClient:
                 if self._process is None or self._process.poll() is not None:
                     raise NanoUnavailable('Nano worker is no longer ready')
                 write_frame(self._process.stdin, message)
+                sent = True
             while True:
                 if cancel.is_set() or self._closed.is_set():
                     return
@@ -228,14 +237,48 @@ class NanoWorkerClient:
         except Exception as error:
             if cancel.is_set() or self._closed.is_set():
                 return
+            failed = True
             if isinstance(error, NanoUnavailable):
                 raise
             raise NanoUnavailable('invalid Nano response') from error
         finally:
             with self._lock:
-                self._active = False
-                if not ended:
+                if sent and not ended and not failed and not self._closed.is_set():
+                    self._drain_done.clear()
+                    Thread(
+                        target=self._discard_response,
+                        args=(message['request_id'],),
+                        name='nano-cancel-drain',
+                        daemon=True,
+                    ).start()
+                else:
+                    self._active = False
+                if failed or self._closed.is_set():
                     self._dispose()
+
+    def _discard_response(self, request_id):
+        """Discard one abandoned response without unloading the voice model."""
+        failed = False
+        deadline = time.monotonic() + 300
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise NanoUnavailable('Nano cancelled response timed out')
+                frame = self._read(None, remaining)
+                validate_response_frame(frame)
+                if frame['request_id'] != request_id:
+                    raise NanoUnavailable('Nano response request mismatch')
+                if frame['type'] in ('response_end', 'response_error'):
+                    return
+        except Exception:
+            failed = True
+        finally:
+            with self._lock:
+                self._active = False
+                if failed:
+                    self._dispose()
+                self._drain_done.set()
 
     def shutdown(self):
         self._closed.set()
