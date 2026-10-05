@@ -36,7 +36,7 @@ from .tray_icon import TrayIcon
 from .voice_manager import VoiceManager
 from .codex_monitor import CodexMonitor, codex_sessions_dir
 from .backend_startup import BackendStartupCoordinator
-from piper.multilingual_options import ENGINE as MULTILINGUAL_ENGINE
+from piper.turbo_options import ENGINE as TURBO_ENGINE
 
 
 def TkUi():
@@ -127,29 +127,29 @@ def _prepare_configured_nano_backend(
     return prepare()
 
 
-def _multilingual_root() -> Path:
-    return Path(os.environ['APPDATA']) / 'Piper' / 'ChatterboxMultilingual'
+def _turbo_root() -> Path:
+    return Path(os.environ['APPDATA']) / 'Piper' / 'ChatterboxTurbo'
 
 
-def _prepare_multilingual_installation():
-    from piper.multilingual_assets import inspect_multilingual_installation
+def _prepare_turbo_installation():
+    from piper.turbo_assets import inspect_turbo_installation
 
     frozen_root = getattr(sys, '_MEIPASS', None)
-    bundled = Path(frozen_root) / 'multilingual_payload' if frozen_root else None
-    return inspect_multilingual_installation(
-        bundled if bundled is not None and bundled.is_dir() else _multilingual_root()
+    bundled = Path(frozen_root) / 'turbo_payload' if frozen_root else None
+    return inspect_turbo_installation(
+        bundled if bundled is not None and bundled.is_dir() else _turbo_root()
     )
 
 
-def _prepare_multilingual_backend(cancel_event=None, *, language='en', exaggeration=0.5, cfg_weight=0.5, reference_clip=None):
-    from .multilingual_client import MultilingualWorkerClient
+def _prepare_turbo_backend(cancel_event=None, *, reference_clip=None):
+    from .turbo_client import TurboWorkerClient
 
     try:
-        installation = _prepare_multilingual_installation()
+        installation = _prepare_turbo_installation()
         if reference_clip is not None:
             from .chatterbox_voice import validate_reference_clip
             reference_clip = str(validate_reference_clip(Path(reference_clip)))
-        client = MultilingualWorkerClient(installation, language=language, exaggeration=exaggeration, cfg_weight=cfg_weight, reference_clip=reference_clip)
+        client = TurboWorkerClient(installation, reference_clip=reference_clip)
         if cancel_event is not None:
             register_cleanup = getattr(cancel_event, 'register_cancel_cleanup', None)
             if register_cleanup is not None:
@@ -157,21 +157,21 @@ def _prepare_multilingual_backend(cancel_event=None, *, language='en', exaggerat
         try:
             client.ensure_ready(cancel_event)
             if cancel_event is not None and cancel_event.is_set():
-                raise RuntimeError('Multilingual startup was cancelled')
+                raise RuntimeError('Turbo startup was cancelled')
         except Exception:
             client.shutdown()
             raise
-        return BackendCandidate(MULTILINGUAL_ENGINE, 'default', client, client.shutdown)
+        return BackendCandidate(TURBO_ENGINE, 'default', client, client.shutdown)
     except (OSError, RuntimeError, ValueError, KeyError) as error:
-        raise BackendPreparationError(f'Multilingual V3 is unavailable: {error}') from error
+        raise BackendPreparationError(f'Turbo is unavailable: {error}') from error
 
 
-def _prepare_configured_multilingual_backend(settings, cancel_event=None, record_timing=None):
-    options = dict(language=settings.multilingual_language, exaggeration=settings.multilingual_exaggeration, cfg_weight=settings.multilingual_cfg_weight)
+def _prepare_configured_turbo_backend(settings, cancel_event=None, record_timing=None):
+    options = {}
     if settings.chatterbox_custom_voice_enabled:
         options['reference_clip'] = settings.chatterbox_reference_clip
-    prepare = lambda: _prepare_multilingual_backend(cancel_event, **options)
-    return record_timing('multilingual_readiness', prepare) if record_timing is not None else prepare()
+    prepare = lambda: _prepare_turbo_backend(cancel_event, **options)
+    return record_timing('turbo_readiness', prepare) if record_timing is not None else prepare()
 
 
 def _load_configured_voice(
@@ -525,15 +525,14 @@ def run_app(
                     replace(settings, piper_voice=voice_id), data_dirs
                 )
                 return BackendCandidate("Piper", str(path), voice)
-            if engine == MULTILINGUAL_ENGINE:
+            if engine == TURBO_ENGINE:
                 if voice_id != 'default':
-                    raise BackendPreparationError('Unknown Multilingual voice')
+                    raise BackendPreparationError('Unknown Turbo voice')
                 if controller is None:
-                    return _prepare_configured_multilingual_backend(settings)
-                return _prepare_multilingual_backend(
+                    return _prepare_configured_turbo_backend(settings)
+                return _prepare_turbo_backend(
                     controller.nano_preparation_cancel_event(),
                     reference_clip=controller.nano_preparation_reference_clip(),
-                    **controller.multilingual_preparation_options(),
                 )
             if engine == "Chatterbox Nano":
                 if voice_id != "default":
@@ -570,7 +569,7 @@ def run_app(
             save_settings=save_settings,
             backend_manager=backend_manager,
         )
-        if settings.engine in ("Chatterbox Nano", MULTILINGUAL_ENGINE):
+        if settings.engine in ("Chatterbox Nano", TURBO_ENGINE):
             controller.begin_nano_startup()
         controller.set_voice(configured_path, configured_voice)
         del configured_voice
@@ -592,7 +591,7 @@ def run_app(
 
         icon_path = Path(__file__).resolve().parents[1] / "img" / "logo.png"
         tray = TrayIcon(icon_path, controller.enqueue)
-        if settings.engine in ("Chatterbox Nano", MULTILINGUAL_ENGINE):
+        if settings.engine in ("Chatterbox Nano", TURBO_ENGINE):
             tray.set_status("%s is loading" % settings.engine)
         if hasattr(tray, "set_snapshot_provider"):
             tray.set_snapshot_provider(controller.tray_snapshot)
@@ -612,9 +611,9 @@ def run_app(
                     else:
                         controller.fail_nano_startup(
                             (
-                                'Multilingual V3 could not start. Check the model installation '
+                                'Turbo could not start. Check the model installation '
                                 'and NVIDIA CUDA GPU. CPU fallback is disabled.'
-                                if settings.engine == MULTILINGUAL_ENGINE
+                                if settings.engine == TURBO_ENGINE
                                 else "Chatterbox Nano is unavailable during startup."
                             )
                         )
@@ -740,12 +739,12 @@ def run_app(
                 max(0.0, time.monotonic() - tray_hotkey_started),
             )
 
-        if settings.engine in ("Chatterbox Nano", MULTILINGUAL_ENGINE):
+        if settings.engine in ("Chatterbox Nano", TURBO_ENGINE):
 
             def prepare_nano_startup(cancel_event, record_timing):
                 prepare_configured = (
-                    _prepare_configured_multilingual_backend
-                    if settings.engine == MULTILINGUAL_ENGINE
+                    _prepare_configured_turbo_backend
+                    if settings.engine == TURBO_ENGINE
                     else _prepare_configured_nano_backend
                 )
                 candidate = prepare_configured(

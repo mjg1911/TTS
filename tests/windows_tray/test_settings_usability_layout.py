@@ -18,22 +18,14 @@ def test_speed_slider_updates_saved_percentage_and_readout(studio):
     assert window.speed_value_var.get() == "+25%"
 
 
-@pytest.mark.parametrize("title", ["Expressiveness", "Voice/style guidance"])
-def test_question_mark_reveals_short_help(studio, title):
+def test_turbo_has_no_unsupported_style_controls(studio):
     root, window = studio
-    window.engine_var.set("Chatterbox Multilingual V3 (500M)")
+    window.engine_var.set("Chatterbox Turbo (350M)")
     window._refresh_voice_controls()
-    button, explanation = window.help_controls[title]
     root.update()
-    assert button.cget("text") == "?"
-    assert not explanation.winfo_ismapped()
-    button.invoke()
-    root.update()
-    assert explanation.winfo_ismapped()
-    assert 20 < len(explanation.cget("text")) < 220
-    button.invoke()
-    root.update()
-    assert not explanation.winfo_ismapped()
+    assert not hasattr(window, "multilingual_exaggeration_scale")
+    assert not hasattr(window, "multilingual_cfg_weight_scale")
+    assert window.turbo_info_frame.winfo_ismapped()
 
 
 def test_three_footer_actions_fit_at_minimum_size(studio):

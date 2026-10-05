@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from typing import Optional
 
-from piper.multilingual_options import ENGINE as MULTILINGUAL_ENGINE
+from piper.turbo_options import ENGINE as TURBO_ENGINE
 
 from .settings import validate_pitch_percent, validate_speed_percent
 from .settings_window import SettingsWindow, choose_voice_model
@@ -57,7 +57,7 @@ class TkUi:
         for label, engine in (
             ("Piper", "Piper"),
             ("Chatterbox Nano", "Chatterbox Nano"),
-            ("Chatterbox", MULTILINGUAL_ENGINE),
+            ("Chatterbox Turbo", TURBO_ENGINE),
         ):
             button = ttk.Button(
                 body, text=label, command=lambda engine=engine: choose(engine)

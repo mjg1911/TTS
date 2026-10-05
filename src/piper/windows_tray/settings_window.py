@@ -5,8 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 from typing import Callable, Optional
 
-from piper.multilingual_options import ENGINE as MULTILINGUAL_ENGINE
-from piper.multilingual_options import SUPPORTED_LANGUAGES
+from piper.turbo_options import ENGINE as TURBO_ENGINE
 
 from .controller import SettingsApplyResult, SettingsWindowSnapshot
 from .hotkey import parse_hotkey
@@ -87,22 +86,6 @@ class SettingsWindow:
         self.displayed_reference_clip = snapshot.chatterbox_reference_clip
         self.engine_var = tk.StringVar(value=snapshot.engine)
         self.chatterbox_device_var = tk.StringVar(value=snapshot.chatterbox_device)
-        self.multilingual_language_var = tk.StringVar(
-            value=SUPPORTED_LANGUAGES[snapshot.multilingual_language]
-        )
-        double_var = getattr(tk, "DoubleVar", tk.StringVar)
-        self.multilingual_exaggeration_var = double_var(
-            value=snapshot.multilingual_exaggeration
-        )
-        self.multilingual_cfg_weight_var = double_var(
-            value=snapshot.multilingual_cfg_weight
-        )
-        self.multilingual_exaggeration_value_var = tk.StringVar(
-            value=self._format_slider_value(snapshot.multilingual_exaggeration)
-        )
-        self.multilingual_cfg_weight_value_var = tk.StringVar(
-            value=self._format_slider_value(snapshot.multilingual_cfg_weight)
-        )
         boolean_var = getattr(tk, "BooleanVar", tk.StringVar)
         self.chatterbox_custom_voice_var = boolean_var(
             value=snapshot.chatterbox_custom_voice_enabled
@@ -127,7 +110,6 @@ class SettingsWindow:
         self.stop_tts_shortcut_status_var = tk.StringVar(value="")
         self.pause_resume_shortcut_status_var = tk.StringVar(value="")
         self.apply_status_var = tk.StringVar(value="")
-        self.help_controls = {}
         self.sentence_pause_var = tk.StringVar(value=str(snapshot.sentence_pause_ms))
         self.piper_sentence_streaming_var = tk.StringVar(
             value=("true" if snapshot.piper_sentence_streaming_enabled else "false")
@@ -145,9 +127,6 @@ class SettingsWindow:
                 "sentence_pause",
                 "piper_sentence_streaming",
                 "reference_clip",
-                "language",
-                "exaggeration",
-                "cfg_weight",
                 "piper_voice",
                 "voice",
                 "general",
@@ -230,7 +209,7 @@ class SettingsWindow:
         self.engine_combo = ttk.Combobox(
             voice,
             textvariable=self.engine_var,
-            values=("Piper", "Chatterbox Nano", MULTILINGUAL_ENGINE),
+            values=("Piper", "Chatterbox Nano", TURBO_ENGINE),
             state="readonly",
             style="Piper.TCombobox",
             font=("Segoe UI", 10),
@@ -263,51 +242,15 @@ class SettingsWindow:
                 sticky="ew",
                 padx=(0, 6) if column == 0 else (6, 0),
             )
-        self.multilingual_options_frame = ttk.Frame(
+        self.turbo_info_frame = ttk.Frame(
             self.nano_voice_frame, style="Panel.Piper.TFrame"
         )
-        self.multilingual_options_frame.columnconfigure(0, weight=1)
         ttk.Label(
-            self.multilingual_options_frame,
-            text="Language",
-            style="Muted.Piper.TLabel",
-        ).grid(row=0, column=0, sticky="w", pady=(8, 4))
-        self.multilingual_language_combo = ttk.Combobox(
-            self.multilingual_options_frame,
-            textvariable=self.multilingual_language_var,
-            values=tuple(SUPPORTED_LANGUAGES.values()),
-            state="readonly",
-            style="Piper.TCombobox",
-            font=("Segoe UI", 10),
-        )
-        self.multilingual_language_combo.grid(row=1, column=0, sticky="ew")
-        self._error_label(self.multilingual_options_frame, "language", 2)
-        self.multilingual_exaggeration_scale = self._multilingual_slider(
-            self.multilingual_options_frame,
-            "Expressiveness",
-            self.multilingual_exaggeration_var,
-            self.multilingual_exaggeration_value_var,
-            0.25,
-            2.0,
-            3,
-        )
-        self._error_label(self.multilingual_options_frame, "exaggeration", 5)
-        self.multilingual_cfg_weight_scale = self._multilingual_slider(
-            self.multilingual_options_frame,
-            "Voice/style guidance",
-            self.multilingual_cfg_weight_var,
-            self.multilingual_cfg_weight_value_var,
-            0.0,
-            1.0,
-            6,
-        )
-        self._error_label(self.multilingual_options_frame, "cfg_weight", 8)
-        ttk.Label(
-            self.multilingual_options_frame,
-            text="Requires an NVIDIA GPU with CUDA.",
+            self.turbo_info_frame,
+            text="English only. Requires an NVIDIA GPU with CUDA.",
             style="Muted.Piper.TLabel",
             wraplength=310,
-        ).grid(row=9, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ).grid(row=0, column=0, sticky="w", pady=(8, 0))
         self.reference_voice_frame = ttk.Frame(
             self.nano_voice_frame,
             style="Panel.Piper.TFrame",
@@ -684,10 +627,6 @@ class SettingsWindow:
         return label
 
     @staticmethod
-    def _format_slider_value(value) -> str:
-        return f"{float(value):.2f}".rstrip("0").rstrip(".")
-
-    @staticmethod
     def _format_speed_value(value) -> str:
         value = float(value)
         return "0%" if value == 0 else f"{value:+g}%"
@@ -696,64 +635,6 @@ class SettingsWindow:
         value = round(float(value))
         self.speed_var.set(f"{value:g}")
         self.speed_value_var.set(self._format_speed_value(value))
-
-    def _multilingual_slider(
-        self, parent, title, variable, value_variable, minimum, maximum, row
-    ):
-        heading = ttk.Frame(parent, style="Panel.Piper.TFrame")
-        heading.grid(row=row, column=0, sticky="ew", pady=(8, 2))
-        heading.columnconfigure(0, weight=1)
-        ttk.Label(heading, text=title, style="Muted.Piper.TLabel").grid(
-            row=0, column=0, sticky="w"
-        )
-        help_text = {
-            "Expressiveness": "Adds emotion and emphasis. Higher values sound more dramatic and may change pacing. Default: 0.5.",
-            "Voice/style guidance": "Controls how closely speech follows the reference voice and style. Lower values can help when changing languages. Default: 0.5.",
-        }[title]
-        explanation = ttk.Label(
-            heading,
-            text=help_text,
-            style="Muted.Piper.TLabel",
-            wraplength=265,
-            justify="left",
-        )
-        explanation.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        explanation.grid_remove()
-        shown = [False]
-
-        def toggle_help():
-            shown[0] = not shown[0]
-            if shown[0]:
-                explanation.grid()
-            else:
-                explanation.grid_remove()
-
-        help_button = ttk.Button(
-            heading,
-            text="?",
-            width=2,
-            command=toggle_help,
-            style="Help.Piper.TButton",
-            takefocus=True,
-        )
-        help_button.grid(row=0, column=1, padx=(6, 8))
-        self.help_controls[title] = (help_button, explanation)
-        ttk.Label(
-            parent,
-            textvariable=value_variable,
-            style="Piper.TLabel",
-        ).grid(row=row, column=1, sticky="e", pady=(8, 2))
-        scale = ttk.Scale(
-            parent,
-            from_=minimum,
-            to=maximum,
-            orient="horizontal",
-            variable=variable,
-            command=lambda value: value_variable.set(self._format_slider_value(value)),
-            style="Piper.Horizontal.TScale",
-        )
-        scale.grid(row=row + 1, column=0, columnspan=2, sticky="ew")
-        return scale
 
     def _number_field(self, parent, title, variable, key, suffix, column):
         frame = ttk.Frame(parent, style="Panel.Piper.TFrame")
@@ -780,7 +661,7 @@ class SettingsWindow:
     def _refresh_voice_controls(self) -> None:
         self._show_frame(self.piper_voice_frame, self.engine_var.get() == "Piper")
         engine = self.engine_var.get()
-        chatterbox = engine in {"Chatterbox Nano", MULTILINGUAL_ENGINE}
+        chatterbox = engine in {"Chatterbox Nano", TURBO_ENGINE}
         self._show_frame(self.nano_voice_frame, chatterbox)
         device_controls = getattr(self, "chatterbox_device_controls", None)
         if device_controls is not None:
@@ -789,13 +670,10 @@ class SettingsWindow:
                 engine == "Chatterbox Nano",
                 row=1,
             )
-        multilingual_options = getattr(self, "multilingual_options_frame", None)
-        if multilingual_options is not None:
-            self._show_frame(
-                multilingual_options,
-                engine == MULTILINGUAL_ENGINE,
-                row=2,
-            )
+
+        turbo_info = getattr(self, "turbo_info_frame", None)
+        if turbo_info is not None:
+            self._show_frame(turbo_info, engine == TURBO_ENGINE, row=2)
 
     def _select_engine(self, _event=None):
         self._refresh_voice_controls()
@@ -1101,9 +979,6 @@ class SettingsWindow:
         supports_cancel = hasattr(owner, "cancel_nano_settings")
         engine = arguments[0]
         device = self.chatterbox_device_var.get()
-        multilingual_language = self._selected_multilingual_language()
-        multilingual_exaggeration = self.multilingual_exaggeration_var.get()
-        multilingual_cfg_weight = self.multilingual_cfg_weight_var.get()
         self._apply_in_progress = True
         self._apply_cancel_event = threading.Event()
         self._apply_engine = engine
@@ -1123,18 +998,6 @@ class SettingsWindow:
                     }
                     if engine == "Chatterbox Nano":
                         options["chatterbox_device"] = device
-                    elif engine == MULTILINGUAL_ENGINE:
-                        options.update(
-                            {
-                                "multilingual_language": multilingual_language,
-                                "multilingual_exaggeration": float(
-                                    multilingual_exaggeration
-                                ),
-                                "multilingual_cfg_weight": float(
-                                    multilingual_cfg_weight
-                                ),
-                            }
-                        )
                     result = self._on_apply(*arguments, **options)
                 else:
                     result = self._on_apply(*arguments)
@@ -1192,17 +1055,6 @@ class SettingsWindow:
         else:
             self.apply_status_var.set("Saved.")
 
-    def _selected_multilingual_language(self) -> str:
-        display_name = self.multilingual_language_var.get()
-        return next(
-            (
-                language
-                for language, name in SUPPORTED_LANGUAGES.items()
-                if name == display_name
-            ),
-            display_name,
-        )
-
     def _refresh_from_snapshot(self, snapshot: SettingsWindowSnapshot) -> None:
         self.displayed_voice_path = snapshot.piper_voice_path
         self.pending_voice_path = None
@@ -1210,17 +1062,6 @@ class SettingsWindow:
         self.displayed_reference_clip = snapshot.chatterbox_reference_clip
         self.engine_var.set(snapshot.engine)
         self.chatterbox_device_var.set(snapshot.chatterbox_device)
-        self.multilingual_language_var.set(
-            SUPPORTED_LANGUAGES[snapshot.multilingual_language]
-        )
-        self.multilingual_exaggeration_var.set(snapshot.multilingual_exaggeration)
-        self.multilingual_cfg_weight_var.set(snapshot.multilingual_cfg_weight)
-        self.multilingual_exaggeration_value_var.set(
-            self._format_slider_value(snapshot.multilingual_exaggeration)
-        )
-        self.multilingual_cfg_weight_value_var.set(
-            self._format_slider_value(snapshot.multilingual_cfg_weight)
-        )
         self.chatterbox_custom_voice_var.set(snapshot.chatterbox_custom_voice_enabled)
         self.engine_status_var.set(snapshot.chatterbox_device_message)
         self.hotkey_var.set(snapshot.hotkey)

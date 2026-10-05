@@ -11,11 +11,6 @@ for package in (
     'diffusers',
     'librosa',
     'torchaudio',
-    'torch',
-    'spacy_pkuseg',
-    # Imported by pkuseg's compiled feature extractor; analysis cannot see it.
-    'srsly',
-    'pykakasi',
     'requests',
 ):
     package_datas, package_binaries, package_hidden = collect_all(package)
@@ -29,14 +24,11 @@ for package in (
     'safetensors',
     'huggingface-hub',
     'requests',
-    'spacy-pkuseg',
-    'srsly',
-    'pykakasi',
 ):
     datas += copy_metadata(package)
 
 a = Analysis(
-    [str(root / 'script/multilingual_worker_entry.py')],
+    [str(root / 'script/turbo_worker_entry.py')],
     pathex=[str(root / 'src')],
     binaries=binaries,
     datas=datas,
@@ -44,5 +36,5 @@ a = Analysis(
     module_collection_mode={'librosa': 'py'},
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='MultilingualWorker', console=True)
-coll = COLLECT(exe, a.binaries, a.datas, name='MultilingualWorker')
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='TurboWorker', console=True)
+coll = COLLECT(exe, a.binaries, a.datas, name='TurboWorker')
