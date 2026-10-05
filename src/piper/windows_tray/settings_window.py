@@ -465,6 +465,8 @@ class SettingsWindow:
         self.pause_frame.grid(row=3, column=0, sticky="ew")
 
         shortcut = self._panel(self.controls, "Shortcuts", 2)
+        shortcut.columnconfigure(0, weight=0)
+        shortcut.columnconfigure(1, weight=1)
         apply_owner = getattr(self._on_apply, "__self__", None)
         on_start = getattr(apply_owner, "begin_shortcut_recording", None)
         on_finish = getattr(apply_owner, "end_shortcut_recording", None)
@@ -653,19 +655,19 @@ class SettingsWindow:
             style="Piper.TEntry",
             font=("Segoe UI", 10),
         )
-        entry.grid(row=row + 1, column=0, sticky="ew", pady=(4, 0))
+        entry.grid(row=row, column=1, sticky="ew", padx=(10, 0), pady=(8, 0))
         ttk.Label(
             parent,
             textvariable=status_variable,
             style="Muted.Piper.TLabel",
             wraplength=310,
-        ).grid(row=row + 2, column=0, sticky="w", pady=(4, 0))
+        ).grid(row=row + 1, column=0, columnspan=2, sticky="w", pady=(4, 0))
         error_key = {
             "Capture": "hotkey",
             "Stop TTS": "stop_tts_hotkey",
             "Pause/Resume TTS": "pause_resume_hotkey",
         }[label]
-        self._error_label(parent, error_key, row + 3)
+        self._error_label(parent, error_key, row + 2, columnspan=2)
         return entry
 
     def _error_label(self, parent, key, row, columnspan=1):
