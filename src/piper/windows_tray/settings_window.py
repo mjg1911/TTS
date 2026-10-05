@@ -9,6 +9,7 @@ from piper.multilingual_options import ENGINE as MULTILINGUAL_ENGINE
 from piper.multilingual_options import SUPPORTED_LANGUAGES
 
 from .controller import SettingsApplyResult, SettingsWindowSnapshot
+from .hotkey import parse_hotkey
 from .settings import MIN_SPEED_PERCENT, MAX_SPEED_PERCENT
 from .shortcut_recorder import ShortcutRecorder
 from .settings_theme import (
@@ -113,6 +114,8 @@ class SettingsWindow:
         self._reference_voice_choices: dict[str, str] = {}
         self._reference_import_pending = False
         self.hotkey_var = tk.StringVar(value=snapshot.hotkey)
+        self.stop_tts_hotkey_var = tk.StringVar(value=snapshot.stop_tts_hotkey)
+        self.pause_resume_hotkey_var = tk.StringVar(value=snapshot.pause_resume_hotkey)
         self.pitch_var = tk.StringVar(value=f"{snapshot.pitch_percent:g}")
         self.speed_var = tk.StringVar(value=f"{snapshot.speed_percent:g}")
         self.speed_value_var = tk.StringVar(
@@ -121,6 +124,8 @@ class SettingsWindow:
         self.shortcut_status_var = tk.StringVar(
             value="Click the shortcut, then press your keys. Esc cancels recording."
         )
+        self.stop_tts_shortcut_status_var = tk.StringVar(value="")
+        self.pause_resume_shortcut_status_var = tk.StringVar(value="")
         self.apply_status_var = tk.StringVar(value="")
         self.help_controls = {}
         self.sentence_pause_var = tk.StringVar(value=str(snapshot.sentence_pause_ms))
@@ -133,6 +138,8 @@ class SettingsWindow:
             for key in (
                 "engine",
                 "hotkey",
+                "stop_tts_hotkey",
+                "pause_resume_hotkey",
                 "pitch",
                 "speed",
                 "sentence_pause",
@@ -457,30 +464,54 @@ class SettingsWindow:
         self._error_label(self.pause_frame, "piper_sentence_streaming", 3, columnspan=3)
         self.pause_frame.grid(row=3, column=0, sticky="ew")
 
-        shortcut = self._panel(self.controls, "Capture shortcut", 2)
-        self.shortcut_entry = ttk.Entry(
-            shortcut,
-            textvariable=self.hotkey_var,
-            state="readonly",
-            style="Piper.TEntry",
-            font=("Segoe UI", 10),
-        )
-        self.shortcut_entry.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        shortcut = self._panel(self.controls, "Shortcuts", 2)
         apply_owner = getattr(self._on_apply, "__self__", None)
+        on_start = getattr(apply_owner, "begin_shortcut_recording", None)
+        on_finish = getattr(apply_owner, "end_shortcut_recording", None)
+        self.shortcut_entry = self._shortcut_entry(
+            shortcut, "Capture", self.hotkey_var, self.shortcut_status_var, 1
+        )
         self.shortcut_recorder = ShortcutRecorder(
             self.shortcut_entry,
             self.hotkey_var,
             self.shortcut_status_var,
-            on_start=getattr(apply_owner, "begin_shortcut_recording", None),
-            on_finish=getattr(apply_owner, "end_shortcut_recording", None),
+            on_start=on_start,
+            on_finish=on_finish,
         )
-        ttk.Label(
+        self.stop_tts_shortcut_entry = self._shortcut_entry(
             shortcut,
-            textvariable=self.shortcut_status_var,
-            style="Muted.Piper.TLabel",
-            wraplength=310,
-        ).grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self._error_label(shortcut, "hotkey", 3)
+            "Stop TTS",
+            self.stop_tts_hotkey_var,
+            self.stop_tts_shortcut_status_var,
+            5,
+        )
+        self.stop_tts_shortcut_recorder = ShortcutRecorder(
+            self.stop_tts_shortcut_entry,
+            self.stop_tts_hotkey_var,
+            self.stop_tts_shortcut_status_var,
+            on_start=on_start,
+            on_finish=on_finish,
+            parse_shortcut=lambda value: parse_hotkey(value, allow_f8=True),
+        )
+        self.pause_resume_shortcut_entry = self._shortcut_entry(
+            shortcut,
+            "Pause/Resume TTS",
+            self.pause_resume_hotkey_var,
+            self.pause_resume_shortcut_status_var,
+            9,
+        )
+        self.pause_resume_shortcut_recorder = ShortcutRecorder(
+            self.pause_resume_shortcut_entry,
+            self.pause_resume_hotkey_var,
+            self.pause_resume_shortcut_status_var,
+            on_start=on_start,
+            on_finish=on_finish,
+        )
+        self.shortcut_recorders = (
+            self.shortcut_recorder,
+            self.stop_tts_shortcut_recorder,
+            self.pause_resume_shortcut_recorder,
+        )
 
         preview = ttk.Frame(content, style="Panel.Piper.TFrame", padding=20)
         preview.grid(row=0, column=1, sticky="nsew")
@@ -588,8 +619,16 @@ class SettingsWindow:
         self.window.bind("<Escape>", self._escape)
 
     def _escape(self, _event=None):
-        if self.shortcut_recorder.is_recording:
-            self.shortcut_recorder.cancel()
+        recording = next(
+            (
+                recorder
+                for recorder in getattr(self, "shortcut_recorders", ())
+                if recorder.is_recording
+            ),
+            None,
+        )
+        if recording is not None:
+            recording.cancel()
         else:
             self.close()
         return "break"
@@ -602,6 +641,32 @@ class SettingsWindow:
             row=0, column=0, sticky="w"
         )
         return frame
+
+    def _shortcut_entry(self, parent, label, variable, status_variable, row):
+        ttk.Label(parent, text=label, style="Piper.TLabel").grid(
+            row=row, column=0, sticky="w", pady=(8, 0)
+        )
+        entry = ttk.Entry(
+            parent,
+            textvariable=variable,
+            state="readonly",
+            style="Piper.TEntry",
+            font=("Segoe UI", 10),
+        )
+        entry.grid(row=row + 1, column=0, sticky="ew", pady=(4, 0))
+        ttk.Label(
+            parent,
+            textvariable=status_variable,
+            style="Muted.Piper.TLabel",
+            wraplength=310,
+        ).grid(row=row + 2, column=0, sticky="w", pady=(4, 0))
+        error_key = {
+            "Capture": "hotkey",
+            "Stop TTS": "stop_tts_hotkey",
+            "Pause/Resume TTS": "pause_resume_hotkey",
+        }[label]
+        self._error_label(parent, error_key, row + 3)
+        return entry
 
     def _error_label(self, parent, key, row, columnspan=1):
         label = ttk.Label(
@@ -957,9 +1022,9 @@ class SettingsWindow:
     def _set_apply_busy(self, busy: bool) -> None:
         if busy:
             self._apply_widget_states = []
-            recorder = getattr(self, "shortcut_recorder", None)
-            if recorder is not None and recorder.is_recording:
-                recorder.cancel()
+            for recorder in getattr(self, "shortcut_recorders", ()):
+                if recorder.is_recording:
+                    recorder.cancel()
             widgets = [
                 self.save_button,
                 self.save_close_button,
@@ -1051,6 +1116,8 @@ class SettingsWindow:
                         "cancel_event": self._apply_cancel_event,
                         "chatterbox_custom_voice_enabled": custom_voice_enabled,
                         "chatterbox_reference_clip": reference_clip,
+                        "stop_tts_hotkey": self.stop_tts_hotkey_var.get(),
+                        "pause_resume_hotkey": self.pause_resume_hotkey_var.get(),
                     }
                     if engine == "Chatterbox Nano":
                         options["chatterbox_device"] = device
@@ -1155,6 +1222,8 @@ class SettingsWindow:
         self.chatterbox_custom_voice_var.set(snapshot.chatterbox_custom_voice_enabled)
         self.engine_status_var.set(snapshot.chatterbox_device_message)
         self.hotkey_var.set(snapshot.hotkey)
+        self.stop_tts_hotkey_var.set(snapshot.stop_tts_hotkey)
+        self.pause_resume_hotkey_var.set(snapshot.pause_resume_hotkey)
         self.pitch_var.set(f"{snapshot.pitch_percent:g}")
         self.speed_var.set(f"{snapshot.speed_percent:g}")
         self.sentence_pause_var.set(str(snapshot.sentence_pause_ms))
@@ -1189,7 +1258,8 @@ class SettingsWindow:
     def close(self) -> None:
         if self._closed:
             return
-        self.shortcut_recorder.cancel()
+        for recorder in getattr(self, "shortcut_recorders", ()):
+            recorder.cancel()
         if getattr(self, "_apply_in_progress", False):
             self._apply_cancel_event.set()
             owner = getattr(self._on_apply, "__self__", None)

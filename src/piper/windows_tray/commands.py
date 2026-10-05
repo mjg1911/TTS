@@ -16,6 +16,7 @@ class CommandKind(Enum):
     CAPTURE_FAILED = auto()
     CANCEL_REQUEST = auto()
     STOP_REQUEST = auto()
+    TOGGLE_PAUSE_REQUEST = auto()
     REPLAY_REQUEST = auto()
     WORKER_EVENT = auto()
     SHOW_LAST_TEXT = auto()

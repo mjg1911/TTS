@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from dataclasses import replace
 from enum import Enum, auto
+import inspect
 import logging
 from queue import Empty, Queue
 from pathlib import Path
@@ -14,6 +15,7 @@ from .codex_monitor import CodexMonitorStatus
 from .codex_text import prepare_codex_speech
 from .commands import Command, CommandKind
 from .hotkey import parse_hotkey
+from . import DEFAULT_PAUSE_RESUME_HOTKEY, DEFAULT_STOP_TTS_HOTKEY
 from .logging_setup import log_capture_result, log_exception_safe
 from .errors import UserError, user_message
 from .settings import (
@@ -139,6 +141,8 @@ class SettingsWindowSnapshot:
     piper_voice_path: Optional[Path]
     piper_voice_reference: str
     hotkey: str
+    stop_tts_hotkey: str
+    pause_resume_hotkey: str
     pitch_percent: float
     speed_percent: float
     sentence_pause_ms: int
@@ -160,6 +164,8 @@ class SettingsWindowSnapshot:
         last_text: Optional[str] = None,
         piper_sentence_streaming_enabled: bool = True,
         *,
+        stop_tts_hotkey: str = DEFAULT_STOP_TTS_HOTKEY,
+        pause_resume_hotkey: str = DEFAULT_PAUSE_RESUME_HOTKEY,
         chatterbox_device: str = "cpu",
         chatterbox_device_message: str = "",
         chatterbox_custom_voice_enabled: bool = False,
@@ -180,6 +186,8 @@ class SettingsWindowSnapshot:
             "piper_voice_path": piper_voice_path,
             "piper_voice_reference": piper_voice_reference,
             "hotkey": hotkey,
+            "stop_tts_hotkey": stop_tts_hotkey,
+            "pause_resume_hotkey": pause_resume_hotkey,
             "pitch_percent": pitch_percent,
             "speed_percent": speed_percent,
             "sentence_pause_ms": sentence_pause_ms,
@@ -235,6 +243,39 @@ def _parse_sentence_pause_text(
         return validate_sentence_pause_ms(int(text)), None
     except (ValueError, OverflowError):
         return None, error_message
+
+
+def _prepare_hotkey_rebind(hotkeys, capture, stop, pause_resume):
+    """Pass the full binding set while keeping legacy manager adapters usable."""
+    prepare = hotkeys.prepare_rebind
+    try:
+        parameter_map = inspect.signature(prepare).parameters
+    except (TypeError, ValueError):
+        parameter_map = None
+    if parameter_map is not None:
+        if {"stop_candidate", "pause_resume_candidate"}.issubset(parameter_map):
+            return prepare(
+                capture,
+                stop_candidate=stop,
+                pause_resume_candidate=pause_resume,
+            )
+        parameters = parameter_map.values()
+        positional = tuple(
+            parameter
+            for parameter in parameters
+            if parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        )
+        accepts_varargs = any(
+            parameter.kind is inspect.Parameter.VAR_POSITIONAL
+            for parameter in parameters
+        )
+        if not accepts_varargs and len(positional) < 3:
+            return prepare(capture)
+    return prepare(capture, stop, pause_resume)
 
 
 def _start_daemon_job(job: Callable[[], None]) -> None:
@@ -753,6 +794,9 @@ class Controller:
             self._stop_speech()
         elif command.kind is CommandKind.STOP_REQUEST:
             self._stop_speech()
+        elif command.kind is CommandKind.TOGGLE_PAUSE_REQUEST:
+            if self._speech_worker is not None:
+                self._speech_worker.toggle_pause()
         elif command.kind is CommandKind.REPLAY_REQUEST:
             self._replay()
         elif command.kind is CommandKind.WORKER_EVENT:
@@ -1239,6 +1283,8 @@ class Controller:
                 piper_voice_path=self.state.voice_path,
                 piper_voice_reference=settings.piper_voice,
                 hotkey=settings.hotkey,
+                stop_tts_hotkey=settings.stop_tts_hotkey,
+                pause_resume_hotkey=settings.pause_resume_hotkey,
                 pitch_percent=settings.pitch_percent,
                 speed_percent=settings.speed_percent,
                 sentence_pause_ms=settings.sentence_pause_ms,
@@ -1302,8 +1348,8 @@ class Controller:
     def end_shortcut_recording(self) -> bool:
         restored = self._hotkeys is not None and self._hotkeys.resume_capture()
         if not restored:
-            self._log_error("Capture shortcut registration could not be restored.")
-            self._show_status("Capture shortcut could not be restored. Restart Piper to try again.")
+            self._log_error("Global shortcut registrations could not be restored.")
+            self._show_status("Shortcuts could not be restored. Restart Piper to try again.")
         return restored
 
     def apply_settings(
@@ -1323,6 +1369,8 @@ class Controller:
         multilingual_language=None,
         multilingual_exaggeration=None,
         multilingual_cfg_weight=None,
+        stop_tts_hotkey=None,
+        pause_resume_hotkey=None,
     ) -> SettingsApplyResult:
         # Readiness can take minutes. Never hold the UI-facing state lock while
         # constructing a Chatterbox backend; the settings window runs this call
@@ -1372,6 +1420,20 @@ class Controller:
                 else DEFAULT_MULTILINGUAL_CFG_WEIGHT
                 if multilingual_cfg_weight is None
                 else multilingual_cfg_weight
+            )
+            stop_tts_hotkey = (
+                current.stop_tts_hotkey
+                if stop_tts_hotkey is None and current is not None
+                else DEFAULT_STOP_TTS_HOTKEY
+                if stop_tts_hotkey is None
+                else stop_tts_hotkey
+            )
+            pause_resume_hotkey = (
+                current.pause_resume_hotkey
+                if pause_resume_hotkey is None and current is not None
+                else DEFAULT_PAUSE_RESUME_HOTKEY
+                if pause_resume_hotkey is None
+                else pause_resume_hotkey
             )
             try:
                 language = validate_language(language)
@@ -1469,7 +1531,12 @@ class Controller:
                 )
             )
             and not self._validate_settings_scalars(
-                hotkey, pitch_text, speed_text, sentence_pause_text
+                hotkey,
+                pitch_text,
+                speed_text,
+                sentence_pause_text,
+                stop_tts_hotkey,
+                pause_resume_hotkey,
             )[-1]
         ):
             try:
@@ -1543,6 +1610,8 @@ class Controller:
                 language,
                 exaggeration,
                 cfg_weight,
+                stop_tts_hotkey,
+                pause_resume_hotkey,
             )
         finally:
             if candidate is not None:
@@ -1566,6 +1635,8 @@ class Controller:
         multilingual_language=None,
         multilingual_exaggeration=None,
         multilingual_cfg_weight=None,
+        stop_tts_hotkey=None,
+        pause_resume_hotkey=None,
     ) -> SettingsApplyResult:
         if (
             piper_sentence_streaming_enabled is not None
@@ -1601,12 +1672,31 @@ class Controller:
 
         (
             candidate_hotkey,
+            candidate_stop_tts_hotkey,
+            candidate_pause_resume_hotkey,
             pitch_percent,
             speed_percent,
             sentence_pause_ms,
             errors,
         ) = self._validate_settings_scalars(
-            hotkey, pitch_text, speed_text, sentence_pause_text
+            hotkey,
+            pitch_text,
+            speed_text,
+            sentence_pause_text,
+            (
+                stop_tts_hotkey
+                if stop_tts_hotkey is not None
+                else self.state.settings.stop_tts_hotkey
+                if self.state.settings is not None
+                else DEFAULT_STOP_TTS_HOTKEY
+            ),
+            (
+                pause_resume_hotkey
+                if pause_resume_hotkey is not None
+                else self.state.settings.pause_resume_hotkey
+                if self.state.settings is not None
+                else DEFAULT_PAUSE_RESUME_HOTKEY
+            ),
         )
         if errors:
             return SettingsApplyResult(False, tuple(errors))
@@ -1626,6 +1716,8 @@ class Controller:
                 or self._save_settings is None
                 or self._hotkeys is None
                 or candidate_hotkey is None
+                or candidate_stop_tts_hotkey is None
+                or candidate_pause_resume_hotkey is None
                 or pitch_percent is None
                 or speed_percent is None
                 or self._backend_manager is None
@@ -1706,6 +1798,11 @@ class Controller:
 
             committed = candidate is None
             hotkey_changed = candidate_hotkey.canonical != current.hotkey
+            playback_hotkeys_changed = (
+                candidate_stop_tts_hotkey.canonical != current.stop_tts_hotkey
+                or candidate_pause_resume_hotkey.canonical != current.pause_resume_hotkey
+            )
+            hotkeys_changed = hotkey_changed or playback_hotkeys_changed
             try:
                 # Loading a Piper voice can take time; cancellation may arrive
                 # after the earlier check and before any settings are persisted.
@@ -1713,12 +1810,25 @@ class Controller:
                     return SettingsApplyResult(
                         False, (("engine", "Settings preparation was cancelled."),)
                     )
-                if hotkey_changed and not self._hotkeys.prepare_rebind(
-                    candidate_hotkey
+                if hotkeys_changed and not _prepare_hotkey_rebind(
+                    self._hotkeys,
+                    candidate_hotkey,
+                    candidate_stop_tts_hotkey,
+                    candidate_pause_resume_hotkey,
                 ):
+                    role = getattr(
+                        getattr(self._hotkeys, "last_registration_error", None),
+                        "role",
+                        "capture",
+                    )
+                    field = {
+                        "stop": "stop_tts_hotkey",
+                        "pause_resume": "pause_resume_hotkey",
+                        "recovery": "general",
+                    }.get(role, "hotkey")
                     return SettingsApplyResult(
                         False,
-                        (("hotkey", user_message(UserError.HOTKEY_CONFLICT)),),
+                        ((field, user_message(UserError.HOTKEY_CONFLICT)),),
                     )
 
                 next_settings = replace(
@@ -1741,6 +1851,8 @@ class Controller:
                     engine=engine,
                     piper_voice=piper_reference,
                     hotkey=candidate_hotkey.canonical,
+                    stop_tts_hotkey=candidate_stop_tts_hotkey.canonical,
+                    pause_resume_hotkey=candidate_pause_resume_hotkey.canonical,
                     pitch_percent=pitch_percent,
                     speed_percent=speed_percent,
                     sentence_pause_ms=(
@@ -1773,7 +1885,7 @@ class Controller:
                     self._save_settings(next_settings)
                 except (OSError, ValueError):
                     rollback_failed = False
-                    if hotkey_changed:
+                    if hotkeys_changed:
                         try:
                             rollback_result = self._hotkeys.rollback_rebind()
                             rollback_failed = rollback_result is False
@@ -1794,7 +1906,7 @@ class Controller:
                         False, (("general", "Piper settings could not be saved."),)
                     )
 
-                if hotkey_changed and not self._hotkeys.commit_rebind():
+                if hotkeys_changed and not self._hotkeys.commit_rebind():
                     compensation_failed = False
                     try:
                         rollback_result = self._hotkeys.rollback_rebind()
@@ -1853,7 +1965,13 @@ class Controller:
                     self._backend_manager.discard(candidate)
 
     def _validate_settings_scalars(
-        self, hotkey, pitch_text, speed_text, sentence_pause_text=None
+        self,
+        hotkey,
+        pitch_text,
+        speed_text,
+        sentence_pause_text=None,
+        stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY,
+        pause_resume_hotkey=DEFAULT_PAUSE_RESUME_HOTKEY,
     ):
         errors = []
         try:
@@ -1861,6 +1979,38 @@ class Controller:
         except ValueError:
             candidate_hotkey = None
             errors.append(("hotkey", user_message(UserError.HOTKEY_INVALID)))
+        try:
+            candidate_stop_tts_hotkey = parse_hotkey(
+                stop_tts_hotkey, allow_f8=True
+            )
+        except ValueError:
+            candidate_stop_tts_hotkey = None
+            errors.append(
+                ("stop_tts_hotkey", user_message(UserError.HOTKEY_INVALID))
+            )
+        try:
+            candidate_pause_resume_hotkey = parse_hotkey(pause_resume_hotkey)
+        except ValueError:
+            candidate_pause_resume_hotkey = None
+            errors.append(
+                ("pause_resume_hotkey", user_message(UserError.HOTKEY_INVALID))
+            )
+        parsed = (
+            candidate_hotkey,
+            candidate_stop_tts_hotkey,
+            candidate_pause_resume_hotkey,
+        )
+        if all(spec is not None for spec in parsed):
+            seen = {}
+            for key, spec in zip(
+                ("hotkey", "stop_tts_hotkey", "pause_resume_hotkey"), parsed
+            ):
+                if spec.canonical in seen:
+                    errors.append(
+                        (key, "Each shortcut must be different.")
+                    )
+                else:
+                    seen[spec.canonical] = key
         pitch_percent, pitch_error = _parse_percent_text(
             pitch_text, validate_pitch_percent, "Pitch must be between -50% and 100%."
         )
@@ -1878,6 +2028,8 @@ class Controller:
             errors.append(("sentence_pause", sentence_pause_error))
         return (
             candidate_hotkey,
+            candidate_stop_tts_hotkey,
+            candidate_pause_resume_hotkey,
             pitch_percent,
             speed_percent,
             sentence_pause_ms,
@@ -1979,7 +2131,23 @@ class Controller:
         if current is None or self._save_settings is None:
             self._show_status("Hotkey settings could not be saved.")
             return False
-        if not self._hotkeys.prepare_rebind(candidate):
+        try:
+            stop_candidate = parse_hotkey(
+                current.stop_tts_hotkey, allow_f8=True
+            )
+            pause_candidate = parse_hotkey(current.pause_resume_hotkey)
+        except ValueError:
+            self._report_runtime_error(UserError.HOTKEY_INVALID)
+            return False
+        if candidate.canonical in {
+            stop_candidate.canonical,
+            pause_candidate.canonical,
+        }:
+            self._report_runtime_error(UserError.HOTKEY_INVALID)
+            return False
+        if not _prepare_hotkey_rebind(
+            self._hotkeys, candidate, stop_candidate, pause_candidate
+        ):
             self._report_runtime_error(UserError.HOTKEY_CONFLICT)
             return False
         next_settings = replace(current, hotkey=candidate.canonical)

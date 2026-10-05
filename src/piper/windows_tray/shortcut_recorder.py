@@ -38,12 +38,14 @@ class ShortcutRecorder:
         status_variable: Any,
         on_start: Optional[Callable[[], bool]] = None,
         on_finish: Optional[Callable[[], bool]] = None,
+        parse_shortcut: Optional[Callable[[str], Any]] = None,
     ) -> None:
         self.entry = entry
         self.variable = variable
         self.status_variable = status_variable
         self._on_start = on_start
         self._on_finish = on_finish
+        self._parse_shortcut = parse_shortcut or parse_hotkey
         self._recording = False
         self._original_value = ""
         self._held_modifiers: set[str] = set()
@@ -120,7 +122,7 @@ class ShortcutRecorder:
 
         candidate = "+".join([*self._ordered_modifiers(modifiers), key])
         try:
-            spec = parse_hotkey(candidate)
+            spec = self._parse_shortcut(candidate)
         except ValueError as exc:
             self.status_variable.set(f"That shortcut cannot be used: {exc}")
             return "break"

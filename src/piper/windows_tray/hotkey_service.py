@@ -5,11 +5,15 @@ import queue
 import threading
 from typing import Any, Callable, Optional, Set, Tuple
 
-from .hotkey import MOD_NOREPEAT, VK_F8
+from . import DEFAULT_PAUSE_RESUME_HOTKEY, DEFAULT_STOP_TTS_HOTKEY
+from .hotkey import MOD_NOREPEAT, parse_hotkey
 
 
 CAPTURE_IDS = (1, 3)
 CANCEL_ID = 2
+STOP_ID = CANCEL_ID
+PAUSE_RESUME_ID = 4
+HOTKEY_IDS = CAPTURE_IDS + (STOP_ID, PAUSE_RESUME_ID)
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 WM_COMMAND = 0x8001
@@ -113,46 +117,126 @@ class HotkeyManager:
         self._api = api if api is not None else _Win32HotkeyApi()
         self._active_capture_id = CAPTURE_IDS[0]
         self.capture_spec = None
+        self.stop_spec = None
+        self.pause_resume_spec = None
         self._on_capture: Optional[Callback] = None
         self._on_cancel: Optional[Callback] = None
+        self._on_stop: Optional[Callback] = None
+        self._on_pause_resume: Optional[Callback] = None
         self._on_failure: Optional[Callable[[BaseException], None]] = None
         self._message_thread: Optional[threading.Thread] = None
         self._message_thread_id = 0
         self._ready = threading.Event()
         self._registration_error: Optional[BaseException] = None
+        self.last_registration_error: Optional[BaseException] = None
         self._cancel_registered = False
+        self._pause_registered = False
         self._owned_registrations = set()  # type: Set[int]
+        self._pending_specs = None
+        self._previous_specs = None
         self._pending_capture_id: Optional[int] = None
-        self._pending_capture_spec = None
         self._capture_suspended = False
         self._lock = threading.RLock()
         self._commands = queue.Queue()
         self._direct_test_mode = False
 
-    def _register_capture(self, hotkey_id: int, spec: Any) -> bool:
-        return self._api.register(
-            hotkey_id, spec.modifiers | MOD_NOREPEAT, spec.vk
+    def _default_playback_specs(self) -> tuple[Any, Any]:
+        return (
+            parse_hotkey(DEFAULT_STOP_TTS_HOTKEY, allow_f8=True),
+            parse_hotkey(DEFAULT_PAUSE_RESUME_HOTKEY),
         )
 
-    def _register_capture_set(self, capture_spec: Any) -> None:
-        with self._lock:
-            if self.capture_spec is not None:
-                return
-            if not self._register_capture(self._active_capture_id, capture_spec):
-                raise OSError("capture hotkey registration failed")
-            self._owned_registrations.add(self._active_capture_id)
-            if not self._cancel_registered:
-                if not self._api.register(CANCEL_ID, MOD_NOREPEAT, VK_F8):
-                    self._api.unregister(self._active_capture_id)
-                    self._owned_registrations.discard(self._active_capture_id)
-                    raise HotkeyRegistrationError("F8 registration failed", "cancel")
-                self._cancel_registered = True
-                self._owned_registrations.add(CANCEL_ID)
-            self.capture_spec = capture_spec
+    def _register_spec_set(
+        self,
+        specs: tuple[Any, Any, Any],
+        *,
+        update_specs: bool,
+        capture_id: Optional[int] = None,
+    ) -> None:
+        capture_spec, stop_spec, pause_resume_spec = specs
+        capture_id = self._active_capture_id if capture_id is None else capture_id
+        registrations = (
+            (capture_id, capture_spec, "capture", "capture"),
+            (STOP_ID, stop_spec, "stop", "stop"),
+            (PAUSE_RESUME_ID, pause_resume_spec, "pause/resume", "pause_resume"),
+        )
+        registered = []
+        try:
+            for hotkey_id, spec, label, role in registrations:
+                try:
+                    success = self._api.register(
+                        hotkey_id, spec.modifiers | MOD_NOREPEAT, spec.vk
+                    )
+                except OSError as error:
+                    registration_error = HotkeyRegistrationError(
+                        "%s hotkey registration failed" % label, role
+                    )
+                    self.last_registration_error = registration_error
+                    raise registration_error from error
+                if not success:
+                    registration_error = HotkeyRegistrationError(
+                        "%s hotkey registration failed" % label, role
+                    )
+                    self.last_registration_error = registration_error
+                    raise registration_error
+                registered.append(hotkey_id)
+                self._owned_registrations.add(hotkey_id)
+        except BaseException:
+            for hotkey_id in reversed(registered):
+                try:
+                    self._api.unregister(hotkey_id)
+                except BaseException:
+                    continue
+                self._owned_registrations.discard(hotkey_id)
+            raise
 
-    def register_for_test(self, capture_spec: Any) -> None:
+        self._cancel_registered = True
+        self._pause_registered = True
+        self.last_registration_error = None
+        if update_specs:
+            self._active_capture_id = capture_id
+            self.capture_spec, self.stop_spec, self.pause_resume_spec = specs
+
+    def _unregister_spec_set(self) -> None:
+        first_error = None
+        for hotkey_id in HOTKEY_IDS:
+            if hotkey_id not in self._owned_registrations:
+                continue
+            try:
+                self._api.unregister(hotkey_id)
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+            else:
+                self._owned_registrations.discard(hotkey_id)
+        self._cancel_registered = CANCEL_ID in self._owned_registrations
+        self._pause_registered = PAUSE_RESUME_ID in self._owned_registrations
+        if first_error is not None:
+            raise first_error
+
+    def _register_capture_set(
+        self,
+        capture_spec: Any,
+        stop_spec: Any = None,
+        pause_resume_spec: Any = None,
+    ) -> None:
+        default_stop, default_pause = self._default_playback_specs()
+        specs = (
+            capture_spec,
+            stop_spec if stop_spec is not None else default_stop,
+            pause_resume_spec if pause_resume_spec is not None else default_pause,
+        )
+        with self._lock:
+            self._register_spec_set(specs, update_specs=True)
+
+    def register_for_test(
+        self,
+        capture_spec: Any,
+        stop_spec: Any = None,
+        pause_resume_spec: Any = None,
+    ) -> None:
         self._direct_test_mode = True
-        self._register_capture_set(capture_spec)
+        self._register_capture_set(capture_spec, stop_spec, pause_resume_spec)
 
     def set_failure_callback(
         self, on_failure: Optional[Callable[[BaseException], None]]
@@ -168,62 +252,80 @@ class HotkeyManager:
                 pass
 
     def rebind(self, candidate: Any) -> bool:
-        def command() -> bool:
-            with self._lock:
-                if self._capture_suspended:
-                    return False
-                if self.capture_spec is None:
-                    self._register_capture_set(candidate)
-                    return True
-                inactive = (
-                    CAPTURE_IDS[1]
-                    if self._active_capture_id == CAPTURE_IDS[0]
-                    else CAPTURE_IDS[0]
-                )
-                if not self._register_capture(inactive, candidate):
-                    return False
-                self._api.unregister(self._active_capture_id)
-                self._owned_registrations.discard(self._active_capture_id)
-                self._owned_registrations.add(inactive)
-                self._active_capture_id = inactive
-                self.capture_spec = candidate
-                return True
-
-        try:
-            if self._message_thread_is_running():
-                return bool(self._run_on_message_thread(command))
-            if self._direct_test_mode:
-                return bool(command())
-            if (
-                self._message_thread is None
-                and self._on_capture is not None
-                and self._on_cancel is not None
-            ):
-                self.start(candidate, self._on_capture, self._on_cancel)
-                return True
+        if not self.prepare_rebind(candidate):
             return False
-        except OSError:
-            return False
+        if self.commit_rebind():
+            return True
+        self.rollback_rebind()
+        return False
 
-    def prepare_rebind(self, candidate: Any) -> bool:
+    def prepare_rebind(
+        self,
+        candidate: Any,
+        stop_candidate: Any = None,
+        pause_resume_candidate: Any = None,
+    ) -> bool:
+        self.last_registration_error = None
+
         def command() -> bool:
             with self._lock:
                 if (
-                    self.capture_spec is None
-                    or self._pending_capture_id is not None
-                    or self._capture_suspended
+                    self._capture_suspended
+                    or self.capture_spec is None
+                    or self.stop_spec is None
+                    or self.pause_resume_spec is None
+                    or self._pending_specs is not None
                 ):
                     return False
-                inactive = (
+                previous = (
+                    self.capture_spec,
+                    self.stop_spec,
+                    self.pause_resume_spec,
+                )
+                candidate_specs = (
+                    candidate,
+                    stop_candidate if stop_candidate is not None else previous[1],
+                    (
+                        pause_resume_candidate
+                        if pause_resume_candidate is not None
+                        else previous[2]
+                    ),
+                )
+                candidate_capture_id = (
                     CAPTURE_IDS[1]
                     if self._active_capture_id == CAPTURE_IDS[0]
                     else CAPTURE_IDS[0]
                 )
-                if not self._register_capture(inactive, candidate):
+                try:
+                    self._unregister_spec_set()
+                    self._register_spec_set(
+                        candidate_specs,
+                        update_specs=False,
+                        capture_id=candidate_capture_id,
+                    )
+                except OSError:
+                    registration_error = self.last_registration_error
+                    if registration_error is None:
+                        registration_error = HotkeyRegistrationError(
+                            "hotkey registrations could not be updated",
+                            "recovery",
+                        )
+                    try:
+                        self._unregister_spec_set()
+                        self._register_spec_set(previous, update_specs=False)
+                    except BaseException as restore_error:
+                        self._notify_failure(restore_error)
+                        recovery_error = HotkeyRegistrationError(
+                            "previous hotkey bindings could not be restored",
+                            "recovery",
+                        )
+                        self.last_registration_error = recovery_error
+                        raise recovery_error from restore_error
+                    self.last_registration_error = registration_error
                     return False
-                self._pending_capture_id = inactive
-                self._pending_capture_spec = candidate
-                self._owned_registrations.add(inactive)
+                self._previous_specs = previous
+                self._pending_specs = candidate_specs
+                self._pending_capture_id = candidate_capture_id
                 return True
 
         try:
@@ -238,16 +340,19 @@ class HotkeyManager:
     def commit_rebind(self) -> bool:
         def command() -> bool:
             with self._lock:
-                pending_id = self._pending_capture_id
-                pending_spec = self._pending_capture_spec
-                if pending_id is None or pending_spec is None:
+                pending_specs = self._pending_specs
+                pending_capture_id = self._pending_capture_id
+                if pending_specs is None or pending_capture_id is None:
                     return False
-                self._api.unregister(self._active_capture_id)
-                self._owned_registrations.discard(self._active_capture_id)
-                self._active_capture_id = pending_id
-                self.capture_spec = pending_spec
+                self._active_capture_id = pending_capture_id
+                (
+                    self.capture_spec,
+                    self.stop_spec,
+                    self.pause_resume_spec,
+                ) = pending_specs
+                self._pending_specs = None
+                self._previous_specs = None
                 self._pending_capture_id = None
-                self._pending_capture_spec = None
                 return True
 
         try:
@@ -262,16 +367,20 @@ class HotkeyManager:
     def rollback_rebind(self) -> bool:
         def command() -> bool:
             with self._lock:
-                pending_id = self._pending_capture_id
-                if pending_id is None:
+                if self._pending_specs is None:
                     return True
-                try:
-                    self._api.unregister(pending_id)
-                except OSError:
+                previous = self._previous_specs
+                if previous is None:
                     return False
-                self._owned_registrations.discard(pending_id)
+                try:
+                    self._unregister_spec_set()
+                    self._register_spec_set(previous, update_specs=False)
+                except BaseException as error:
+                    self._notify_failure(error)
+                    return False
+                self._pending_specs = None
+                self._previous_specs = None
                 self._pending_capture_id = None
-                self._pending_capture_spec = None
                 return True
 
         try:
@@ -286,26 +395,31 @@ class HotkeyManager:
     def reregister(self) -> bool:
         def command() -> bool:
             with self._lock:
-                if self.capture_spec is None:
+                pending = self._pending_specs
+                pending_capture_id = self._pending_capture_id
+                specs = pending or (
+                    self.capture_spec,
+                    self.stop_spec,
+                    self.pause_resume_spec,
+                )
+                if any(spec is None for spec in specs):
                     return False
-                capture_suspended = self._capture_suspended
-                for hotkey_id in CAPTURE_IDS:
-                    self._api.unregister(hotkey_id)
-                    self._owned_registrations.discard(hotkey_id)
-                self._api.unregister(CANCEL_ID)
-                self._owned_registrations.discard(CANCEL_ID)
-                self._cancel_registered = False
-                if not capture_suspended:
-                    if not self._register_capture(self._active_capture_id, self.capture_spec):
-                        return False
-                    self._owned_registrations.add(self._active_capture_id)
-                if not self._api.register(CANCEL_ID, MOD_NOREPEAT, VK_F8):
-                    if not capture_suspended:
-                        self._api.unregister(self._active_capture_id)
-                        self._owned_registrations.discard(self._active_capture_id)
+                try:
+                    self._unregister_spec_set()
+                except OSError as error:
+                    self._notify_failure(error)
                     return False
-                self._cancel_registered = True
-                self._owned_registrations.add(CANCEL_ID)
+                if self._capture_suspended:
+                    return True
+                try:
+                    self._register_spec_set(
+                        specs,
+                        update_specs=False,
+                        capture_id=pending_capture_id,
+                    )
+                except OSError as error:
+                    self._notify_failure(error)
+                    return False
                 return True
 
         try:
@@ -318,20 +432,23 @@ class HotkeyManager:
             return False
 
     def suspend_capture(self) -> bool:
-        """Temporarily unregister the active capture hotkey, leaving F8 active."""
+        """Temporarily unregister all application shortcuts while recording."""
 
         def command() -> bool:
             with self._lock:
                 if self._capture_suspended:
                     return True
-                if self.capture_spec is None:
+                if (
+                    self.capture_spec is None
+                    or self.stop_spec is None
+                    or self.pause_resume_spec is None
+                ):
                     return False
                 try:
-                    self._api.unregister(self._active_capture_id)
+                    self._unregister_spec_set()
                 except OSError as error:
                     self._notify_failure(error)
                     return False
-                self._owned_registrations.discard(self._active_capture_id)
                 self._capture_suspended = True
                 return True
 
@@ -352,23 +469,24 @@ class HotkeyManager:
             with self._lock:
                 if not self._capture_suspended:
                     return self.capture_spec is not None
-                if self.capture_spec is None:
+                if (
+                    self.capture_spec is None
+                    or self.stop_spec is None
+                    or self.pause_resume_spec is None
+                ):
                     return False
                 try:
-                    registered = self._register_capture(
-                        self._active_capture_id, self.capture_spec
+                    self._register_spec_set(
+                        (
+                            self.capture_spec,
+                            self.stop_spec,
+                            self.pause_resume_spec,
+                        ),
+                        update_specs=False,
                     )
                 except OSError as error:
                     self._notify_failure(error)
                     return False
-                if not registered:
-                    self._notify_failure(
-                        HotkeyRegistrationError(
-                            "capture hotkey resume failed", "capture"
-                        )
-                    )
-                    return False
-                self._owned_registrations.add(self._active_capture_id)
                 self._capture_suspended = False
                 return True
 
@@ -388,18 +506,33 @@ class HotkeyManager:
         hotkey_id: int,
         on_capture: Optional[Callback] = None,
         on_cancel: Optional[Callback] = None,
+        on_pause_resume: Optional[Callback] = None,
     ) -> bool:
         if message == WM_QUIT:
             return False
         if message != WM_HOTKEY:
             return True
         capture = on_capture if on_capture is not None else self._on_capture
-        cancel = on_cancel if on_cancel is not None else self._on_cancel
-        if hotkey_id in CAPTURE_IDS and hotkey_id == self._active_capture_id:
-            if not self._capture_suspended and capture is not None:
+        stop = on_cancel if on_cancel is not None else self._on_stop
+        pause_resume = (
+            on_pause_resume
+            if on_pause_resume is not None
+            else self._on_pause_resume
+        )
+        with self._lock:
+            # Registrations are swapped before settings persistence completes.
+            # Ignore queued hotkey messages until commit or rollback so a
+            # candidate playback shortcut cannot affect speech if saving fails.
+            if self._capture_suspended or self._pending_specs is not None:
+                return True
+            active_capture_id = self._active_capture_id
+        if hotkey_id in CAPTURE_IDS and hotkey_id == active_capture_id:
+            if capture is not None:
                 capture()
-        elif hotkey_id == CANCEL_ID and cancel is not None:
-            cancel()
+        elif hotkey_id == STOP_ID and stop is not None:
+            stop()
+        elif hotkey_id == PAUSE_RESUME_ID and pause_resume is not None:
+            pause_resume()
         return True
 
     def _message_thread_is_running(self) -> bool:
@@ -424,12 +557,19 @@ class HotkeyManager:
 
     def _message_loop(self) -> None:
         self._message_thread_id = threading.get_native_id()
-        capture_spec = self.capture_spec
-        self.capture_spec = None
+        with self._lock:
+            specs = (
+                self.capture_spec,
+                self.stop_spec,
+                self.pause_resume_spec,
+            )
+            self.capture_spec = None
+            self.stop_spec = None
+            self.pause_resume_spec = None
         try:
             try:
                 self._api.ensure_message_queue()
-                self._register_capture_set(capture_spec)
+                self._register_capture_set(*specs)
             except BaseException as exc:
                 self._registration_error = exc
                 self._ready.set()
@@ -463,13 +603,19 @@ class HotkeyManager:
         with self._lock:
             owned = tuple(
                 hotkey_id
-                for hotkey_id in CAPTURE_IDS + (CANCEL_ID,)
+                for hotkey_id in HOTKEY_IDS
                 if hotkey_id in self._owned_registrations
             )
             self._owned_registrations.clear()
             self._cancel_registered = False
+            self._pause_registered = False
             self._capture_suspended = False
             self.capture_spec = None
+            self.stop_spec = None
+            self.pause_resume_spec = None
+            self._pending_specs = None
+            self._previous_specs = None
+            self._pending_capture_id = None
         first_error = None
         for hotkey_id in owned:
             try:
@@ -480,15 +626,46 @@ class HotkeyManager:
         if first_error is not None:
             raise first_error
 
-    def start(self, capture_spec: Any, on_capture: Callback, on_cancel: Callback) -> None:
+    def start(
+        self,
+        capture_spec: Any,
+        on_capture: Callback,
+        on_cancel: Optional[Callback] = None,
+        *,
+        stop_spec: Any = None,
+        pause_resume_spec: Any = None,
+        on_stop: Optional[Callback] = None,
+        on_pause_resume: Optional[Callback] = None,
+    ) -> None:
+        default_stop, default_pause = self._default_playback_specs()
+        stop_callback = on_stop if on_stop is not None else on_cancel
+        if stop_callback is None:
+            raise ValueError("a stop callback is required")
+        specs = (
+            capture_spec,
+            stop_spec if stop_spec is not None else default_stop,
+            (
+                pause_resume_spec
+                if pause_resume_spec is not None
+                else default_pause
+            ),
+        )
         with self._lock:
             if self._message_thread is not None and self._message_thread.is_alive():
                 self._on_capture = on_capture
-                self._on_cancel = on_cancel
+                self._on_cancel = stop_callback
+                self._on_stop = stop_callback
+                self._on_pause_resume = on_pause_resume
                 return
-            self.capture_spec = capture_spec
+            (
+                self.capture_spec,
+                self.stop_spec,
+                self.pause_resume_spec,
+            ) = specs
             self._on_capture = on_capture
-            self._on_cancel = on_cancel
+            self._on_cancel = stop_callback
+            self._on_stop = stop_callback
+            self._on_pause_resume = on_pause_resume
             self._ready.clear()
             self._registration_error = None
             self._direct_test_mode = False
@@ -502,17 +679,20 @@ class HotkeyManager:
             self._message_thread.join(timeout=1.0)
             self._message_thread = None
             self.capture_spec = None
+            self.stop_spec = None
+            self.pause_resume_spec = None
             raise error
 
     def stop(self) -> None:
         def command() -> None:
             with self._lock:
-                for hotkey_id in CAPTURE_IDS:
-                    self._api.unregister(hotkey_id)
-                self._api.unregister(CANCEL_ID)
-                self._cancel_registered = False
+                self._unregister_spec_set()
+                self._pending_specs = None
+                self._previous_specs = None
                 self._capture_suspended = False
                 self.capture_spec = None
+                self.stop_spec = None
+                self.pause_resume_spec = None
 
         thread = self._message_thread
         if thread is not None and thread.is_alive():
@@ -525,6 +705,8 @@ class HotkeyManager:
             with self._lock:
                 self._message_thread = None
                 self.capture_spec = None
+                self.stop_spec = None
+                self.pause_resume_spec = None
             self._direct_test_mode = False
             return
         else:
