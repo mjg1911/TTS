@@ -16,6 +16,8 @@ from piper.multilingual_options import (
 
 from . import (
     DEFAULT_HOTKEY,
+    DEFAULT_PAUSE_RESUME_HOTKEY,
+    DEFAULT_STOP_TTS_HOTKEY,
     DEFAULT_VOICE,
     SETTINGS_SCHEMA_VERSION,
 )
@@ -97,6 +99,8 @@ class TraySettings:
     ] = "Piper"
     piper_voice: str = DEFAULT_VOICE
     hotkey: str = DEFAULT_HOTKEY
+    stop_tts_hotkey: str = DEFAULT_STOP_TTS_HOTKEY
+    pause_resume_hotkey: str = DEFAULT_PAUSE_RESUME_HOTKEY
     log_level: str = "INFO"
     error_sounds: bool = False
     codex_enabled: bool = False
@@ -128,6 +132,8 @@ class TraySettings:
             DEFAULT_PIPER_SENTENCE_STREAMING_ENABLED
         ),
         *,
+        stop_tts_hotkey: str = DEFAULT_STOP_TTS_HOTKEY,
+        pause_resume_hotkey: str = DEFAULT_PAUSE_RESUME_HOTKEY,
         chatterbox_device: Literal["cpu", "cuda"] = "cpu",
         chatterbox_custom_voice_enabled: bool = False,
         chatterbox_reference_clip: str = "",
@@ -219,6 +225,14 @@ def _validated(data: object) -> TraySettings:
         raise ValueError("piper_voice must be a non-empty string")
     if not isinstance(hotkey, str) or not hotkey.strip():
         raise ValueError("hotkey must be a non-empty string")
+    stop_tts_hotkey = data.get("stop_tts_hotkey", DEFAULT_STOP_TTS_HOTKEY)
+    pause_resume_hotkey = data.get(
+        "pause_resume_hotkey", DEFAULT_PAUSE_RESUME_HOTKEY
+    )
+    if not isinstance(stop_tts_hotkey, str) or not stop_tts_hotkey.strip():
+        raise ValueError("stop_tts_hotkey must be a non-empty string")
+    if not isinstance(pause_resume_hotkey, str) or not pause_resume_hotkey.strip():
+        raise ValueError("pause_resume_hotkey must be a non-empty string")
     if not isinstance(log_level, str) or log_level not in {
         "DEBUG",
         "INFO",
@@ -242,6 +256,8 @@ def _validated(data: object) -> TraySettings:
         engine=engine,
         piper_voice=piper_voice.strip(),
         hotkey=hotkey.strip(),
+        stop_tts_hotkey=stop_tts_hotkey.strip(),
+        pause_resume_hotkey=pause_resume_hotkey.strip(),
         log_level=log_level,
         error_sounds=error_sounds,
         codex_enabled=codex_enabled,
@@ -266,7 +282,7 @@ def _migrate(data: object) -> tuple[object, bool, Optional[str]]:
     if not isinstance(data, dict) or type(data.get("schema_version")) is not int:
         return data, False, None
     schema_version = data.get("schema_version")
-    if schema_version not in (1, SETTINGS_SCHEMA_VERSION):
+    if schema_version not in (1, 2, SETTINGS_SCHEMA_VERSION):
         return data, False, None
 
     migrated = dict(data)
@@ -275,9 +291,15 @@ def _migrate(data: object) -> tuple[object, bool, Optional[str]]:
 
     if schema_version == 1:
         legacy_voice = migrated.pop("voice", DEFAULT_VOICE)
-        migrated["schema_version"] = SETTINGS_SCHEMA_VERSION
+        migrated["schema_version"] = 2
         migrated["piper_voice"] = legacy_voice
         migrated.setdefault("engine", "Piper")
+        changed = True
+
+    if schema_version in (1, 2):
+        migrated.setdefault("stop_tts_hotkey", DEFAULT_STOP_TTS_HOTKEY)
+        migrated.setdefault("pause_resume_hotkey", DEFAULT_PAUSE_RESUME_HOTKEY)
+        migrated["schema_version"] = SETTINGS_SCHEMA_VERSION
         changed = True
 
     if migrated.get("engine") == "Kokoro":

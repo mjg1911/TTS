@@ -226,7 +226,7 @@ def test_settings_window_shows_reference_import_and_custom_voice_toggle(monkeypa
 
     assert window.chatterbox_custom_voice_var.get() is True
     assert window.reference_clip_name_var.get() == "voice.wav"
-    assert window.import_reference_clip_button.kwargs["text"] == "Import reference clip…"
+    assert window.import_reference_clip_button.kwargs["text"] == "Import voice…"
 
 
 def test_preparation_failure_keeps_existing_custom_voice_and_saved_settings(

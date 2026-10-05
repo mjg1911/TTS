@@ -28,18 +28,112 @@ def _default_reference_directory() -> Path:
         return Path(local_appdata) / "Piper" / "Chatterbox" / "References"
 
     if os.name == "nt":
-        return (
-            Path.home()
-            / "AppData"
-            / "Local"
-            / "Piper"
-            / "Chatterbox"
-            / "References"
-        )
+        return Path.home() / "AppData" / "Local" / "Piper" / "Chatterbox" / "References"
 
     data_home = os.environ.get("XDG_DATA_HOME")
     root = Path(data_home) if data_home else Path.home() / ".local" / "share"
     return root / "Piper" / "Chatterbox" / "References"
+
+
+def _reference_voice_label(stem: str) -> str:
+    """Return a readable name, dropping only import_reference_clip's UUID."""
+
+    return re.sub(r"-[0-9a-fA-F]{32}$", "", stem) or "Reference voice"
+
+
+def _unique_voice_label(label: str, used: set[str], reserved: set[str]) -> str:
+    if label not in used:
+        used.add(label)
+        return label
+
+    number = 2
+    while f"{label} ({number})" in used or f"{label} ({number})" in reserved:
+        number += 1
+    unique = f"{label} ({number})"
+    used.add(unique)
+    return unique
+
+
+def list_reference_voices(
+    current: str = "", directory: Optional[Path] = None
+) -> dict[str, str]:
+    """List reusable WAV recordings as unique display names and absolute paths.
+
+    The managed folder is scanned by name only. An absent folder is an empty
+    library, while other folder access failures are reported to the caller.
+    The current setting is retained even when it points outside the library or
+    to a file that no longer exists.
+    """
+
+    folder = (
+        Path(directory) if directory is not None else _default_reference_directory()
+    )
+    try:
+        folder = folder.expanduser().resolve()
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        raise ReferenceClipError(
+            "Piper could not read its saved voices folder. Check folder access and reopen Settings."
+        ) from error
+
+    try:
+        entries = list(folder.iterdir())
+    except FileNotFoundError:
+        entries = []
+    except OSError as error:
+        raise ReferenceClipError(
+            "Piper could not read its saved voices folder. Check folder access and reopen Settings."
+        ) from error
+
+    paths: list[Path] = []
+    try:
+        for entry in entries:
+            if entry.suffix.lower() != ".wav":
+                continue
+            try:
+                if entry.is_file():
+                    paths.append(entry.resolve())
+            except FileNotFoundError:
+                # Ignore recordings removed while the directory was scanned.
+                continue
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ReferenceClipError(
+            "Piper could not read its saved voices folder. Check folder access and reopen Settings."
+        ) from error
+
+    paths.sort(key=lambda path: (str(path).casefold(), str(path)))
+    candidates = [(_reference_voice_label(path.stem), path) for path in paths]
+    reserved = {label for label, _ in candidates}
+
+    voices: dict[str, str] = {}
+    used: set[str] = set()
+    discovered_paths: set[str] = set()
+    for label, path in candidates:
+        unique = _unique_voice_label(label, used, reserved)
+        voices[unique] = str(path)
+        discovered_paths.add(os.path.normcase(str(path)))
+
+    if current:
+        try:
+            current_path = Path(current).expanduser().resolve()
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            raise ReferenceClipError(
+                "Piper could not read its reference clip setting."
+            ) from error
+
+        if os.path.normcase(str(current_path)) not in discovered_paths:
+            try:
+                missing = not current_path.exists()
+            except (OSError, RuntimeError) as error:
+                raise ReferenceClipError(
+                    "Piper could not read its reference clip setting."
+                ) from error
+            label = _reference_voice_label(current_path.stem)
+            if missing:
+                label += " (unavailable)"
+            unique = _unique_voice_label(label, used, reserved)
+            voices[unique] = str(current_path)
+
+    return voices
 
 
 def validate_reference_clip(source: Path) -> Path:
@@ -65,9 +159,7 @@ def validate_reference_clip(source: Path) -> Path:
         raise ReferenceClipError("The reference clip could not be read.") from error
 
     if file_size > MAX_REFERENCE_CLIP_BYTES:
-        raise ReferenceClipError(
-            "The reference clip is too large (maximum 100 MiB)."
-        )
+        raise ReferenceClipError("The reference clip is too large (maximum 100 MiB).")
     if file_size == 0:
         raise ReferenceClipError("The reference WAV file is empty.")
 
@@ -126,34 +218,36 @@ def validate_reference_clip(source: Path) -> Path:
         ) from error
 
     if frames_read / sample_rate <= MIN_REFERENCE_SECONDS:
-        raise ReferenceClipError(
-            "The reference clip must be longer than 5 seconds."
-        )
+        raise ReferenceClipError("The reference clip must be longer than 5 seconds.")
     if not has_audio:
         raise ReferenceClipError("The reference WAV contains only silence.")
 
     return path
 
 
-def import_reference_clip(
-    source: Path, directory: Optional[Path] = None
-) -> Path:
+def import_reference_clip(source: Path, directory: Optional[Path] = None) -> Path:
     """Copy a validated WAV to Piper's managed Chatterbox data directory."""
 
     source_path = validate_reference_clip(source)
-    target_directory = Path(directory) if directory is not None else _default_reference_directory()
+    target_directory = (
+        Path(directory) if directory is not None else _default_reference_directory()
+    )
     try:
         target_directory = target_directory.expanduser().resolve()
         target_directory.mkdir(parents=True, exist_ok=True)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
-        raise ReferenceClipError("Piper could not create its reference clip folder.") from error
+        raise ReferenceClipError(
+            "Piper could not create its reference clip folder."
+        ) from error
 
     stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", source_path.stem).strip(" .")
     stem = (stem or "reference")[:80]
     for _ in range(10):
         destination = target_directory / (stem + "-" + uuid4().hex + ".wav")
         try:
-            with source_path.open("rb") as source_file, destination.open("xb") as target_file:
+            with source_path.open("rb") as source_file, destination.open(
+                "xb"
+            ) as target_file:
                 shutil.copyfileobj(source_file, target_file, length=1024 * 1024)
         except FileExistsError:
             continue
@@ -162,7 +256,9 @@ def import_reference_clip(
                 destination.unlink(missing_ok=True)
             except OSError:
                 pass
-            raise ReferenceClipError("Piper could not save the reference clip.") from error
+            raise ReferenceClipError(
+                "Piper could not save the reference clip."
+            ) from error
 
         try:
             validate_reference_clip(destination)

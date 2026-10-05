@@ -36,7 +36,7 @@ class HotkeySpec:
     canonical: str
 
 
-def parse_hotkey(value: str) -> HotkeySpec:
+def parse_hotkey(value: str, *, allow_f8: bool = False) -> HotkeySpec:
     tokens = [token.strip().lower() for token in value.replace(" ", "").split("+")]
     if not tokens or any(not token for token in tokens):
         raise ValueError("hotkey is empty")
@@ -61,8 +61,8 @@ def parse_hotkey(value: str) -> HotkeySpec:
     if key_token is None or key_token not in _KEYS:
         raise ValueError(f"unsupported key: {key_token}")
     vk = _KEYS[key_token]
-    if vk == VK_F8:
-        raise ValueError("F8 is reserved for cancellation")
+    if vk == VK_F8 and not allow_f8:
+        raise ValueError("F8 is reserved for the stop speech shortcut")
     if vk == VK_F12:
         raise ValueError("F12 is reserved by Windows")
 

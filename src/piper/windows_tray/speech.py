@@ -82,6 +82,7 @@ class SpeechWorker:
         self._active_cancel_event: Optional[threading.Event] = None
         self._cancel_event_factory = threading.Event
         self._active_player: Optional[PlaybackPipeline] = None
+        self._pause_requested = False
         self._decision_boundary = threading.RLock()
         self._shutdown = False
         self._thread = threading.Thread(
@@ -100,6 +101,23 @@ class SpeechWorker:
     ) -> None:
         """Set the live Piper sentence-streaming setting source."""
         self._piper_sentence_streaming_provider = provider
+
+    def toggle_pause(self) -> None:
+        """Toggle pause for active speech, including synthesis before playback."""
+        with self._condition:
+            if self._active_request is None:
+                return
+            self._pause_requested = not self._pause_requested
+            self._apply_pause_state(self._active_player, self._pause_requested)
+
+    @staticmethod
+    def _apply_pause_state(player, paused: bool) -> None:
+        """Apply pause state when supported by the active playback object."""
+        if player is None:
+            return
+        method = getattr(player, "pause" if paused else "resume", None)
+        if callable(method):
+            method()
 
     def submit(self, request: SpeechRequest) -> bool:
         """Queue a request according to its speech purpose."""
@@ -192,6 +210,7 @@ class SpeechWorker:
                 self._pending_startup_status = request
 
             if cancel_active:
+                self._pause_requested = False
                 player = self._active_player
                 cancel_event = self._active_cancel_event
             self._condition.notify()
@@ -234,6 +253,7 @@ class SpeechWorker:
                 or self._active_request.generation != generation
             ):
                 return
+            self._pause_requested = False
             player = self._active_player
             cancel_event = self._active_cancel_event
         if cancel_event is not None:
@@ -261,6 +281,7 @@ class SpeechWorker:
                 active is not None
                 and active.purpose is not SpeechPurpose.FOREGROUND
             ):
+                self._pause_requested = False
                 player = self._active_player
                 cancel_event = self._active_cancel_event
 
@@ -284,6 +305,7 @@ class SpeechWorker:
             active = self._active_request
             if active is None or active.purpose is not SpeechPurpose.BROWSER:
                 return
+            self._pause_requested = False
             player = self._active_player
             cancel_event = self._active_cancel_event
         self._cancel_outside_condition(cancel_event, player)
@@ -297,6 +319,7 @@ class SpeechWorker:
             active = self._active_request
             if active is None or active.purpose is not SpeechPurpose.CODEX:
                 return
+            self._pause_requested = False
             player = self._active_player
             cancel_event = self._active_cancel_event
         self._cancel_outside_condition(cancel_event, player)
@@ -314,6 +337,7 @@ class SpeechWorker:
             player = self._active_player
             cancel_event = self._active_cancel_event
             self._condition.notify_all()
+            self._pause_requested = False
         if player is not None:
             player.stop()
         if cancel_event is not None:
@@ -344,6 +368,7 @@ class SpeechWorker:
                 cancel_event = self._cancel_event_factory()
                 self._active_request = request
                 self._active_cancel_event = cancel_event
+                self._pause_requested = False
 
             try:
                 self._speak(request, cancel_event)
@@ -352,6 +377,7 @@ class SpeechWorker:
                     self._active_request = None
                     self._active_cancel_event = None
                     self._active_player = None
+                    self._pause_requested = False
                 del request
 
     def _has_pending_locked(self) -> bool:
@@ -499,6 +525,8 @@ class SpeechWorker:
                 with self._condition:
                     self._active_player = player
                     cancelled = cancel_event.is_set()
+                    if not cancelled and self._pause_requested:
+                        self._apply_pause_state(player, paused=True)
                 if cancelled:
                     player.stop()
 

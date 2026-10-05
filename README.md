@@ -4,6 +4,8 @@ Piper is a Windows desktop app that makes it easy to listen to text while you wo
 
 The app offers three speech engines for different needs. Piper is exceptionally lightweight and quick, making it a good choice for everyday speech with minimal overhead. Chatterbox Nano adds an expressive English default voice that runs locally on your CPU or NVIDIA GPU. Chatterbox Multilingual V3 (500M) supports 23 languages and requires an NVIDIA GPU with CUDA.
 
+On startup, click **Piper**, **Chatterbox Nano**, or **Chatterbox** before any model loads. **Chatterbox** starts the Multilingual V3 engine. Closing the choice window exits the app. When starting a Chatterbox engine, Piper loads first as the fallback while the selected engine starts in the background.
+
 Kokoro was removed. If Kokoro was selected in a previous installation, Piper is now selected after upgrade and your other saved preferences are preserved.
 
 Switch between engines and voices to find the sound that suits you. You can also adjust speech speed and pitch, stop playback at any time, and replay the last selection from the tray.

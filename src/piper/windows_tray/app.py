@@ -1,3 +1,4 @@
+import inspect
 import os
 import sys
 import time
@@ -9,7 +10,11 @@ from .commands import Command, CommandKind
 from .backend_manager import BackendCandidate, BackendManager, BackendPreparationError
 from .controller import Controller, VOICE_SETUP_ERRORS
 from .errors import UserError, user_message
-from . import DEFAULT_HOTKEY
+from . import (
+    DEFAULT_HOTKEY,
+    DEFAULT_PAUSE_RESUME_HOTKEY,
+    DEFAULT_STOP_TTS_HOTKEY,
+)
 from .capture import SelectionCapture
 from .clipboard import Win32Clipboard
 from .hotkey import parse_hotkey
@@ -372,6 +377,10 @@ def run_app(
             ui.show_status(migration_notice)
         data_dirs = tuple(_voice_data_dirs())
         settings = settings_result.settings
+        selected_engine = ui.choose_startup_engine(settings.engine)
+        if selected_engine is None:
+            return 0
+        settings = replace(settings, engine=selected_engine)
         try:
             capture_hotkey = parse_hotkey(settings.hotkey)
         except ValueError as error:
@@ -381,6 +390,93 @@ def run_app(
             )
             settings = replace(settings, hotkey=DEFAULT_HOTKEY)
             capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
+        try:
+            stop_tts_hotkey = parse_hotkey(
+                settings.stop_tts_hotkey, allow_f8=True
+            )
+        except ValueError as error:
+            logger.warning("Saved stop TTS hotkey is invalid: %s", error)
+            ui.show_status(
+                "The saved stop shortcut was invalid; F8 is being used."
+            )
+            settings = replace(
+                settings, stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY
+            )
+            stop_tts_hotkey = parse_hotkey(
+                DEFAULT_STOP_TTS_HOTKEY, allow_f8=True
+            )
+        try:
+            pause_resume_hotkey = parse_hotkey(settings.pause_resume_hotkey)
+        except ValueError as error:
+            logger.warning("Saved pause/resume hotkey is invalid: %s", error)
+            ui.show_status(
+                "The saved pause/resume shortcut was invalid; F9 is being used."
+            )
+            settings = replace(
+                settings, pause_resume_hotkey=DEFAULT_PAUSE_RESUME_HOTKEY
+            )
+            pause_resume_hotkey = parse_hotkey(DEFAULT_PAUSE_RESUME_HOTKEY)
+
+        had_shortcut_conflict = False
+        if stop_tts_hotkey.canonical == capture_hotkey.canonical:
+            stop_tts_hotkey = parse_hotkey(
+                DEFAULT_STOP_TTS_HOTKEY, allow_f8=True
+            )
+            settings = replace(
+                settings, stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY
+            )
+            had_shortcut_conflict = True
+        if pause_resume_hotkey.canonical == capture_hotkey.canonical:
+            pause_resume_hotkey = parse_hotkey(DEFAULT_PAUSE_RESUME_HOTKEY)
+            settings = replace(
+                settings, pause_resume_hotkey=DEFAULT_PAUSE_RESUME_HOTKEY
+            )
+            had_shortcut_conflict = True
+            if pause_resume_hotkey.canonical == capture_hotkey.canonical:
+                capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
+                settings = replace(settings, hotkey=DEFAULT_HOTKEY)
+        if pause_resume_hotkey.canonical == stop_tts_hotkey.canonical:
+            pause_resume_hotkey = parse_hotkey(DEFAULT_PAUSE_RESUME_HOTKEY)
+            settings = replace(
+                settings, pause_resume_hotkey=DEFAULT_PAUSE_RESUME_HOTKEY
+            )
+            had_shortcut_conflict = True
+            if pause_resume_hotkey.canonical == capture_hotkey.canonical:
+                capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
+                settings = replace(settings, hotkey=DEFAULT_HOTKEY)
+            if pause_resume_hotkey.canonical == stop_tts_hotkey.canonical:
+                stop_tts_hotkey = parse_hotkey(
+                    DEFAULT_STOP_TTS_HOTKEY, allow_f8=True
+                )
+                settings = replace(
+                    settings, stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY
+                )
+        if len(
+            {
+                capture_hotkey.canonical,
+                stop_tts_hotkey.canonical,
+                pause_resume_hotkey.canonical,
+            }
+        ) < 3:
+            capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
+            stop_tts_hotkey = parse_hotkey(
+                DEFAULT_STOP_TTS_HOTKEY, allow_f8=True
+            )
+            pause_resume_hotkey = parse_hotkey(DEFAULT_PAUSE_RESUME_HOTKEY)
+            settings = replace(
+                settings,
+                hotkey=DEFAULT_HOTKEY,
+                stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY,
+                pause_resume_hotkey=DEFAULT_PAUSE_RESUME_HOTKEY,
+            )
+            had_shortcut_conflict = True
+        if had_shortcut_conflict:
+            logger.warning(
+                "Saved shortcuts conflicted; conflicting shortcuts reset to defaults"
+            )
+            ui.show_status(
+                "Saved shortcuts conflicted; conflicting shortcuts were reset to defaults."
+            )
         piper_voice_started = time.monotonic()
         try:
             try:
@@ -586,21 +682,50 @@ def run_app(
         tray_hotkey_started = time.monotonic()
         tray.start()
         try:
-            hotkeys.start(
-                capture_hotkey,
-                on_capture=lambda: controller.enqueue(
-                    Command(CommandKind.CAPTURE_REQUEST)
-                ),
-                on_cancel=lambda: controller.enqueue(
-                    Command(CommandKind.CANCEL_REQUEST)
-                ),
+            on_capture = lambda: controller.enqueue(
+                Command(CommandKind.CAPTURE_REQUEST)
             )
+            on_stop = lambda: controller.enqueue(
+                Command(CommandKind.CANCEL_REQUEST)
+            )
+            try:
+                start_parameters = inspect.signature(hotkeys.start).parameters
+            except (TypeError, ValueError):
+                supports_playback_bindings = True
+            else:
+                supports_playback_bindings = (
+                    "stop_spec" in start_parameters
+                    or any(
+                        parameter.kind is inspect.Parameter.VAR_KEYWORD
+                        for parameter in start_parameters.values()
+                    )
+                )
+            if supports_playback_bindings:
+                hotkeys.start(
+                    capture_hotkey,
+                    on_capture=on_capture,
+                    on_stop=on_stop,
+                    stop_spec=stop_tts_hotkey,
+                    pause_resume_spec=pause_resume_hotkey,
+                    on_pause_resume=lambda: controller.enqueue(
+                        Command(CommandKind.TOGGLE_PAUSE_REQUEST)
+                    ),
+                )
+            else:
+                # Preserve startup compatibility with older injected hotkey adapters.
+                hotkeys.start(capture_hotkey, on_capture, on_stop)
         except (OSError, ValueError) as error:
             logger.error("Piper hotkeys could not be started: %s", error)
-            if getattr(error, "role", "capture") == "cancel":
+            role = getattr(error, "role", "capture")
+            if role == "stop":
                 ui.show_startup_status(
-                    "Piper could not register F8 for cancellation; resolve the "
+                    "Piper could not register the Stop TTS shortcut; resolve the "
                     "Windows hotkey conflict."
+                )
+            elif role == "pause_resume":
+                ui.show_startup_status(
+                    "Piper could not register the Pause/Resume TTS shortcut; "
+                    "resolve the Windows hotkey conflict."
                 )
             else:
                 ui.show_startup_status(user_message(UserError.HOTKEY_CONFLICT))

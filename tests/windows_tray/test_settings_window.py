@@ -37,6 +37,22 @@ class FakeWidget:
     def bind(self, *args, **kwargs):
         pass
 
+    def after(self, _delay, callback):
+        self.callbacks = getattr(self, "callbacks", [])
+        self.callbacks.append(callback)
+
+    def cget(self, key):
+        return self.configured.get(key, self.kwargs.get(key, "normal" if key == "state" else ""))
+
+    def start(self, *args):
+        self.started = True
+
+    def stop(self):
+        self.started = False
+
+    def focus_set(self):
+        pass
+
     def geometry(self, value):
         self.window_geometry = value
 
@@ -175,12 +191,24 @@ def install_fake_tk(monkeypatch, built_frames):
         Combobox=FakeEntry,
         Scrollbar=FakeWidget,
         Scale=FakeWidget,
+        Progressbar=FakeWidget,
     )
     monkeypatch.setattr(settings_window, "tk", fake_tk)
     monkeypatch.setattr(settings_window, "ttk", fake_ttk)
     monkeypatch.setattr(settings_window, "configure_studio_theme", lambda _: None)
     monkeypatch.setattr(settings_window, "choose_voice_model", lambda parent: None)
     return settings_window
+
+
+def drain_apply(window):
+    import time
+    deadline = time.monotonic() + 2
+    while getattr(window, "_apply_in_progress", False):
+        assert time.monotonic() < deadline, "Settings apply did not finish"
+        callbacks = getattr(window.window, "callbacks", [])
+        if callbacks:
+            callbacks.pop(0)()
+        time.sleep(0.001)
 
 
 def make_snapshot(**overrides):
@@ -260,6 +288,7 @@ def test_apply_failure_keeps_window_open_and_renders_field_errors(monkeypatch):
     )
 
     window._apply()
+    drain_apply(window)
 
     assert window.window.exists is True
     assert window.error_text("hotkey").startswith("That hotkey")
@@ -281,6 +310,7 @@ def test_apply_failure_renders_voice_error_in_voice_section(monkeypatch):
     )
 
     window._apply()
+    drain_apply(window)
 
     assert window.window.exists is True
     assert window.error_text("piper_voice") == "The selected voice could not be loaded."
@@ -290,7 +320,7 @@ def test_apply_failure_renders_voice_error_in_voice_section(monkeypatch):
     )
 
 
-def test_apply_success_closes_window(monkeypatch):
+def test_apply_success_with_save_and_close_closes_window(monkeypatch):
     settings_window = install_fake_tk(monkeypatch, [])
     apply_calls = []
     window = settings_window.SettingsWindow(
@@ -305,7 +335,8 @@ def test_apply_success_closes_window(monkeypatch):
     window.speed_var.set("25")
     window.pending_voice_path = Path("new.onnx")
 
-    window._apply()
+    window._apply(close_after=True)
+    drain_apply(window)
 
     assert apply_calls == [
         ("Piper", "ctrl+q", "-10", "25", Path("new.onnx"), "180", True)

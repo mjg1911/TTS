@@ -1,12 +1,21 @@
 """Real Tk checks for the resizable speech workspace (no audio required)."""
 
 from pathlib import Path
+import time
 import tkinter as tk
 
 import pytest
 
 from piper.windows_tray.controller import SettingsApplyResult, SettingsWindowSnapshot
 from piper.windows_tray.settings_window import SettingsWindow
+
+
+def wait_for_apply(root, window):
+    deadline = time.monotonic() + 2
+    while getattr(window, "_apply_in_progress", False):
+        assert time.monotonic() < deadline, "Settings apply did not finish"
+        root.update()
+        time.sleep(0.005)
 
 
 @pytest.fixture(scope="module")
@@ -63,6 +72,7 @@ def test_piper_and_nano_controls_remain_accessible_in_scrollable_settings(studio
     window.engine_var.set("Chatterbox Nano")
     window._refresh_voice_controls()
     window._apply()
+    wait_for_apply(root, window)
     root.update()
     assert window.nano_voice_frame.winfo_viewable()
     assert not window.piper_voice_frame.winfo_viewable()
@@ -87,6 +97,7 @@ def test_sentence_pause_remains_accessible_for_piper_and_nano(studio):
         False, (("sentence_pause", "Enter a whole number of milliseconds."),)
     )
     window._apply()
+    wait_for_apply(root, window)
     root.update()
     assert window.pause_frame.winfo_viewable()
     assert window.error_text("sentence_pause").startswith("Enter a whole number")

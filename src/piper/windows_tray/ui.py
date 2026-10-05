@@ -4,6 +4,8 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from typing import Optional
 
+from piper.multilingual_options import ENGINE as MULTILINGUAL_ENGINE
+
 from .settings import validate_pitch_percent, validate_speed_percent
 from .settings_window import SettingsWindow, choose_voice_model
 from .controller import SettingsWindowSnapshot
@@ -25,6 +27,53 @@ class TkUi:
     def choose_voice_model(self) -> Optional[Path]:
         self._assert_main_thread()
         return choose_voice_model(self.root)
+
+    def choose_startup_engine(self, current: str) -> Optional[str]:
+        """Wait for an explicit model choice before startup loads any model."""
+        self._assert_main_thread()
+        selected = None
+        window = tk.Toplevel(self.root)
+        window.title("Piper — Choose a model")
+        window.resizable(False, False)
+
+        def choose(engine: Optional[str]) -> None:
+            nonlocal selected
+            selected = engine
+            window.destroy()
+
+        window.protocol("WM_DELETE_WINDOW", lambda: choose(None))
+        window.bind("<Escape>", lambda _event: choose(None))
+        body = ttk.Frame(window, padding=24)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Choose a speech model", font=("Segoe UI", 14, "bold")).pack(
+            fill="x", pady=(0, 8)
+        )
+        ttk.Label(
+            body,
+            text="Select a model to start. No models load until you choose.",
+            wraplength=360,
+        ).pack(fill="x", pady=(0, 20))
+        preferred = None
+        for label, engine in (
+            ("Piper", "Piper"),
+            ("Chatterbox Nano", "Chatterbox Nano"),
+            ("Chatterbox", MULTILINGUAL_ENGINE),
+        ):
+            button = ttk.Button(
+                body, text=label, command=lambda engine=engine: choose(engine)
+            )
+            button.pack(fill="x", pady=4, ipady=6)
+            if engine == current:
+                preferred = button
+        # A transient of the withdrawn root would also be hidden on Windows.
+        window.wait_visibility()
+        window.grab_set()
+        window.lift()
+        window.focus_force()
+        if preferred is not None:
+            preferred.focus_set()
+        self.root.wait_window(window)
+        return selected
 
     def open_settings(
         self,

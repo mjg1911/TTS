@@ -98,6 +98,69 @@ def configure_studio_theme(window):
         background=[("active", PANEL)],
         indicatorbackground=[("selected", ACCENT)],
     )
+    # Present device choices as themed buttons while retaining radio semantics.
+    style.layout(
+        "Device.Piper.TRadiobutton",
+        [
+            (
+                "Button.border",
+                {
+                    "sticky": "nswe",
+                    "children": [
+                        (
+                            "Button.focus",
+                            {
+                                "sticky": "nswe",
+                                "children": [
+                                    (
+                                        "Button.padding",
+                                        {
+                                            "sticky": "nswe",
+                                            "children": [
+                                                (
+                                                    "Radiobutton.label",
+                                                    {"sticky": "nswe"},
+                                                ),
+                                            ],
+                                        },
+                                    ),
+                                ],
+                            },
+                        ),
+                    ],
+                },
+            )
+        ],
+    )
+    style.configure(
+        "Device.Piper.TRadiobutton",
+        background=INPUT,
+        foreground=MUTED,
+        bordercolor=BORDER,
+        lightcolor=BORDER,
+        darkcolor=BORDER,
+        focuscolor=TEXT,
+        focusthickness=1,
+        padding=(12, 8),
+        anchor="center",
+        font=("Segoe UI", 10, "bold"),
+    )
+    for option in ("background", "bordercolor", "lightcolor", "darkcolor"):
+        style.map(
+            "Device.Piper.TRadiobutton",
+            **{
+                option: [
+                    ("disabled", PANEL),
+                    ("selected", ACCENT),
+                    ("active", "#293940"),
+                ]
+            },
+        )
+    style.map(
+        "Device.Piper.TRadiobutton",
+        foreground=[("disabled", MUTED), ("selected", "#10251f"), ("active", TEXT)],
+        focuscolor=[("selected", "#10251f")],
+    )
     style.configure(
         "Piper.Vertical.TScrollbar",
         background=BORDER,
@@ -118,6 +181,22 @@ def configure_studio_theme(window):
         darkcolor=ACCENT,
     )
     style.map("Piper.Horizontal.TScale", background=[("active", "#96ecd3")])
+    style.configure(
+        "Help.Piper.TButton",
+        background=PANEL,
+        foreground=ACCENT,
+        bordercolor=BORDER,
+        padding=(3, 0),
+        font=("Segoe UI", 9, "bold"),
+    )
+    style.configure(
+        "Piper.Horizontal.TProgressbar",
+        background=ACCENT,
+        troughcolor=INPUT,
+        bordercolor=BACKGROUND,
+        lightcolor=ACCENT,
+        darkcolor=ACCENT,
+    )
     window.configure(background=BACKGROUND)
     window.option_add("*TCombobox*Listbox.background", INPUT)
     window.option_add("*TCombobox*Listbox.foreground", TEXT)
