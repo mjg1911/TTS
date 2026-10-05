@@ -8,6 +8,7 @@ import tempfile
 from typing import Literal, Optional
 
 from piper.turbo_options import ENGINE as TURBO_ENGINE
+from piper.turbo_options import validate_delivery_mode
 
 from . import (
     DEFAULT_HOTKEY,
@@ -85,6 +86,7 @@ class TraySettings:
     chatterbox_device: Literal["cpu", "cuda"] = "cpu"
     chatterbox_custom_voice_enabled: bool = False
     chatterbox_reference_clip: str = ""
+    turbo_delivery_mode: str = ""
     schema_version: int = SETTINGS_SCHEMA_VERSION
     engine: Literal["Piper", "Chatterbox Nano", "Chatterbox Turbo (350M)"] = "Piper"
     piper_voice: str = DEFAULT_VOICE
@@ -124,6 +126,7 @@ class TraySettings:
         chatterbox_device: Literal["cpu", "cuda"] = "cpu",
         chatterbox_custom_voice_enabled: bool = False,
         chatterbox_reference_clip: str = "",
+        turbo_delivery_mode: str = "",
         voice: Optional[str] = None,
     ) -> None:
         if voice is not None and piper_voice == DEFAULT_VOICE:
@@ -166,6 +169,9 @@ def _validated(data: object) -> TraySettings:
     )
     chatterbox_reference_clip = validate_chatterbox_reference_clip(
         data.get("chatterbox_reference_clip", "")
+    )
+    turbo_delivery_mode = validate_delivery_mode(
+        data.get("turbo_delivery_mode", "")
     )
     if chatterbox_device not in ("cpu", "cuda"):
         raise ValueError("invalid Chatterbox device")
@@ -225,6 +231,7 @@ def _validated(data: object) -> TraySettings:
         chatterbox_device=chatterbox_device,
         chatterbox_custom_voice_enabled=chatterbox_custom_voice_enabled,
         chatterbox_reference_clip=chatterbox_reference_clip,
+        turbo_delivery_mode=turbo_delivery_mode,
         engine=engine,
         piper_voice=piper_voice.strip(),
         hotkey=hotkey.strip(),

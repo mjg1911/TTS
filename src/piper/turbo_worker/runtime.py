@@ -42,11 +42,12 @@ def load_model(directory, model_class=None, torch_module=None, reference_clip=No
     return model
 
 
-def generate_chunks(model, text, torch_module=None):
+def generate_chunks(model, text, torch_module=None, delivery_mode=''):
     if torch_module is None:
         import torch as torch_module
     for piece in split_text(text):
         with torch_module.inference_mode():
-            audio = pcm16(model.generate(piece))
+            generation_text = f'{delivery_mode} {piece}' if delivery_mode else piece
+            audio = pcm16(model.generate(generation_text))
         for offset in range(0, len(audio), 65536):
             yield audio[offset:offset + 65536]

@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 from typing import Callable, Optional
 
-from piper.turbo_options import ENGINE as TURBO_ENGINE
+from piper.turbo_options import DELIVERY_MODE_LABELS, ENGINE as TURBO_ENGINE
 
 from .controller import SettingsApplyResult, SettingsWindowSnapshot
 from .hotkey import parse_hotkey
@@ -85,6 +85,16 @@ class SettingsWindow:
         self.pending_reference_clip: Optional[str] = None
         self.displayed_reference_clip = snapshot.chatterbox_reference_clip
         self.engine_var = tk.StringVar(value=snapshot.engine)
+        self._delivery_mode_labels = dict(DELIVERY_MODE_LABELS)
+        self._delivery_mode_values = {
+            label: mode for mode, label in DELIVERY_MODE_LABELS
+        }
+        self.displayed_turbo_delivery_mode = snapshot.turbo_delivery_mode
+        self.turbo_delivery_mode_var = tk.StringVar(
+            value=self._delivery_mode_labels.get(
+                snapshot.turbo_delivery_mode, "Default (no tag)"
+            )
+        )
         self.chatterbox_device_var = tk.StringVar(value=snapshot.chatterbox_device)
         boolean_var = getattr(tk, "BooleanVar", tk.StringVar)
         self.chatterbox_custom_voice_var = boolean_var(
@@ -127,6 +137,7 @@ class SettingsWindow:
                 "sentence_pause",
                 "piper_sentence_streaming",
                 "reference_clip",
+                "turbo_delivery_mode",
                 "piper_voice",
                 "voice",
                 "general",
@@ -251,12 +262,32 @@ class SettingsWindow:
             style="Muted.Piper.TLabel",
             wraplength=310,
         ).grid(row=0, column=0, sticky="w", pady=(8, 0))
+        self.turbo_delivery_frame = ttk.Frame(
+            self.nano_voice_frame,
+            style="Panel.Piper.TFrame",
+            padding=(0, 14, 0, 0),
+        )
+        self.turbo_delivery_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            self.turbo_delivery_frame,
+            text="Delivery mode",
+            style="Muted.Piper.TLabel",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 5))
+        self.turbo_delivery_combo = ttk.Combobox(
+            self.turbo_delivery_frame,
+            textvariable=self.turbo_delivery_mode_var,
+            values=tuple(label for _mode, label in DELIVERY_MODE_LABELS),
+            state="readonly",
+            style="Piper.TCombobox",
+            font=("Segoe UI", 10),
+        )
+        self.turbo_delivery_combo.grid(row=1, column=0, sticky="ew")
         self.reference_voice_frame = ttk.Frame(
             self.nano_voice_frame,
             style="Panel.Piper.TFrame",
             padding=(0, 16, 0, 0),
         )
-        self.reference_voice_frame.grid(row=3, column=0, sticky="ew")
+        self.reference_voice_frame.grid(row=4, column=0, sticky="ew")
         self.reference_voice_frame.columnconfigure(0, weight=1)
         ttk.Label(
             self.reference_voice_frame,
@@ -674,6 +705,9 @@ class SettingsWindow:
         turbo_info = getattr(self, "turbo_info_frame", None)
         if turbo_info is not None:
             self._show_frame(turbo_info, engine == TURBO_ENGINE, row=2)
+        delivery_frame = getattr(self, "turbo_delivery_frame", None)
+        if delivery_frame is not None:
+            self._show_frame(delivery_frame, engine == TURBO_ENGINE, row=3)
 
     def _select_engine(self, _event=None):
         self._refresh_voice_controls()
@@ -996,6 +1030,11 @@ class SettingsWindow:
                         "stop_tts_hotkey": self.stop_tts_hotkey_var.get(),
                         "pause_resume_hotkey": self.pause_resume_hotkey_var.get(),
                     }
+                    delivery_mode = self._delivery_mode_values.get(
+                        self.turbo_delivery_mode_var.get(), ""
+                    )
+                    if delivery_mode != self.displayed_turbo_delivery_mode:
+                        options["turbo_delivery_mode"] = delivery_mode
                     if engine == "Chatterbox Nano":
                         options["chatterbox_device"] = device
                     result = self._on_apply(*arguments, **options)
@@ -1060,7 +1099,13 @@ class SettingsWindow:
         self.pending_voice_path = None
         self.pending_reference_clip = None
         self.displayed_reference_clip = snapshot.chatterbox_reference_clip
+        self.displayed_turbo_delivery_mode = snapshot.turbo_delivery_mode
         self.engine_var.set(snapshot.engine)
+        self.turbo_delivery_mode_var.set(
+            self._delivery_mode_labels.get(
+                snapshot.turbo_delivery_mode, "Default (no tag)"
+            )
+        )
         self.chatterbox_device_var.set(snapshot.chatterbox_device)
         self.chatterbox_custom_voice_var.set(snapshot.chatterbox_custom_voice_enabled)
         self.engine_status_var.set(snapshot.chatterbox_device_message)

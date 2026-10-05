@@ -141,7 +141,7 @@ def _prepare_turbo_installation():
     )
 
 
-def _prepare_turbo_backend(cancel_event=None, *, reference_clip=None):
+def _prepare_turbo_backend(cancel_event=None, *, reference_clip=None, delivery_mode=''):
     from .turbo_client import TurboWorkerClient
 
     try:
@@ -149,7 +149,11 @@ def _prepare_turbo_backend(cancel_event=None, *, reference_clip=None):
         if reference_clip is not None:
             from .chatterbox_voice import validate_reference_clip
             reference_clip = str(validate_reference_clip(Path(reference_clip)))
-        client = TurboWorkerClient(installation, reference_clip=reference_clip)
+        client = TurboWorkerClient(
+            installation,
+            reference_clip=reference_clip,
+            delivery_mode=delivery_mode,
+        )
         if cancel_event is not None:
             register_cleanup = getattr(cancel_event, 'register_cancel_cleanup', None)
             if register_cleanup is not None:
@@ -168,6 +172,9 @@ def _prepare_turbo_backend(cancel_event=None, *, reference_clip=None):
 
 def _prepare_configured_turbo_backend(settings, cancel_event=None, record_timing=None):
     options = {}
+    delivery_mode = getattr(settings, 'turbo_delivery_mode', '')
+    if delivery_mode:
+        options['delivery_mode'] = delivery_mode
     if settings.chatterbox_custom_voice_enabled:
         options['reference_clip'] = settings.chatterbox_reference_clip
     prepare = lambda: _prepare_turbo_backend(cancel_event, **options)
@@ -533,6 +540,7 @@ def run_app(
                 return _prepare_turbo_backend(
                     controller.nano_preparation_cancel_event(),
                     reference_clip=controller.nano_preparation_reference_clip(),
+                    delivery_mode=controller.nano_preparation_delivery_mode(),
                 )
             if engine == "Chatterbox Nano":
                 if voice_id != "default":

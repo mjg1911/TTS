@@ -203,6 +203,7 @@ class NanoWorkerClient:
             self._request_id += 1
             request_id = self._request_id
         message = {'type':'synthesize','request_id':request_id,'text':text,'voice_id':'default'}
+        message.update(self._synthesis_options())
         try:
             validate_synthesize(message)
         except Exception as error:
@@ -210,6 +211,10 @@ class NanoWorkerClient:
         # A caller may discard this iterator before playback starts. Do not
         # claim the worker or send text until the iterator is actually consumed.
         return NanoSynthesisResult(self._sample_rate, self._chunks(message, cancel_event))
+
+    def _synthesis_options(self):
+        """Return optional engine-specific synthesis request fields."""
+        return {}
 
     def _chunks(self, message, cancel):
         ended = False

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from piper.turbo_assets import ENGINE, inspect_turbo_installation
+from piper.turbo_options import validate_delivery_mode
 from piper.nano_worker.main import _configure_numba_cache
 from piper.windows_tray.worker_protocol import (
     encode_audio,
@@ -53,12 +54,15 @@ def serve(root, incoming, outgoing):
         if request.get('type') == 'shutdown':
             return
         validate_synthesize(request)
+        delivery_mode = validate_delivery_mode(request.get('delivery_mode', ''))
         if request['voice_id'] != 'default':
             raise ValueError('Unknown Turbo voice')
         request_id = request['request_id']
         try:
             with contextlib.redirect_stdout(sys.stderr):
-                for audio in generate_chunks(model, request['text']):
+                for audio in generate_chunks(
+                    model, request['text'], delivery_mode=delivery_mode
+                ):
                     write_frame(outgoing, {
                         'type': 'audio', 'request_id': request_id, 'audio': encode_audio(audio),
                     })

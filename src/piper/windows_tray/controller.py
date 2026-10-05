@@ -31,6 +31,7 @@ from .settings import (
     validate_speed_percent,
 )
 from piper.turbo_options import ENGINE as TURBO_ENGINE
+from piper.turbo_options import validate_delivery_mode
 from .speech import SpeechEvent, SpeechEventKind, SpeechPurpose, SpeechRequest
 from .voice_manager import VoiceManager, VoiceSwitchEvent
 
@@ -129,6 +130,7 @@ class SettingsWindowSnapshot:
     chatterbox_device_message: str
     chatterbox_custom_voice_enabled: bool
     chatterbox_reference_clip: str
+    turbo_delivery_mode: str
     engine: str
     piper_voice_path: Optional[Path]
     piper_voice_reference: str
@@ -159,6 +161,7 @@ class SettingsWindowSnapshot:
         chatterbox_device_message: str = "",
         chatterbox_custom_voice_enabled: bool = False,
         chatterbox_reference_clip: str = "",
+        turbo_delivery_mode: str = "",
         voice_path: Optional[Path] = None,
     ) -> None:
         if voice_path is not None and piper_voice_path is None:
@@ -168,6 +171,7 @@ class SettingsWindowSnapshot:
             "chatterbox_device_message": chatterbox_device_message,
             "chatterbox_custom_voice_enabled": chatterbox_custom_voice_enabled,
             "chatterbox_reference_clip": chatterbox_reference_clip,
+            "turbo_delivery_mode": turbo_delivery_mode,
             "engine": engine,
             "piper_voice_path": piper_voice_path,
             "piper_voice_reference": piper_voice_reference,
@@ -1262,6 +1266,7 @@ class Controller:
                     settings.chatterbox_custom_voice_enabled
                 ),
                 chatterbox_reference_clip=settings.chatterbox_reference_clip,
+                turbo_delivery_mode=settings.turbo_delivery_mode,
                 engine=settings.engine,
                 piper_voice_path=self.state.voice_path,
                 piper_voice_reference=settings.piper_voice,
@@ -1299,6 +1304,14 @@ class Controller:
                 return settings.chatterbox_reference_clip
         return None
 
+    def nano_preparation_delivery_mode(self) -> str:
+        requested = getattr(self._nano_preparation_context, "delivery_mode", _UNSET)
+        if requested is not _UNSET:
+            return requested
+        with self._state_lock:
+            settings = self.state.settings
+            return settings.turbo_delivery_mode if settings is not None else ""
+
     def cancel_nano_settings(self) -> None:
         self.nano_settings_cancel_event.set()
 
@@ -1326,6 +1339,7 @@ class Controller:
         chatterbox_device=None,
         chatterbox_custom_voice_enabled=None,
         chatterbox_reference_clip=None,
+        turbo_delivery_mode=None,
         stop_tts_hotkey=None,
         pause_resume_hotkey=None,
     ) -> SettingsApplyResult:
@@ -1343,6 +1357,24 @@ class Controller:
                 if chatterbox_custom_voice_enabled is None
                 else chatterbox_custom_voice_enabled
             )
+            try:
+                turbo_delivery_mode = validate_delivery_mode(
+                    current.turbo_delivery_mode
+                    if turbo_delivery_mode is None and current is not None
+                    else ""
+                    if turbo_delivery_mode is None
+                    else turbo_delivery_mode
+                )
+            except ValueError:
+                return SettingsApplyResult(
+                    False,
+                    (
+                        (
+                            "turbo_delivery_mode",
+                            "Choose a supported Turbo delivery mode.",
+                        ),
+                    ),
+                )
             reference_clip = (
                 current.chatterbox_reference_clip
                 if chatterbox_reference_clip is None and current is not None
@@ -1459,6 +1491,9 @@ class Controller:
                 self._nano_preparation_context.reference_clip = (
                     reference_clip if custom_voice_enabled else None
                 )
+                self._nano_preparation_context.delivery_mode = (
+                    turbo_delivery_mode if engine == TURBO_ENGINE else ""
+                )
                 candidate = self._backend_manager.prepare(engine, "default")
             except BackendPreparationError as error:
                 if engine == TURBO_ENGINE:
@@ -1490,6 +1525,10 @@ class Controller:
                     del self._nano_preparation_context.reference_clip
                 except AttributeError:
                     pass
+                try:
+                    del self._nano_preparation_context.delivery_mode
+                except AttributeError:
+                    pass
         try:
             if engine in chatterbox_engines and cancel_event.is_set():
                 return SettingsApplyResult(
@@ -1511,6 +1550,7 @@ class Controller:
                 reference_clip,
                 stop_tts_hotkey,
                 pause_resume_hotkey,
+                turbo_delivery_mode,
             )
         finally:
             if candidate is not None:
@@ -1533,6 +1573,7 @@ class Controller:
         chatterbox_reference_clip=None,
         stop_tts_hotkey=None,
         pause_resume_hotkey=None,
+        turbo_delivery_mode=None,
     ) -> SettingsApplyResult:
         if (
             piper_sentence_streaming_enabled is not None
@@ -1744,6 +1785,11 @@ class Controller:
                         if chatterbox_reference_clip is None
                         else chatterbox_reference_clip
                     ),
+                    turbo_delivery_mode=(
+                        current.turbo_delivery_mode
+                        if turbo_delivery_mode is None
+                        else turbo_delivery_mode
+                    ),
                     engine=engine,
                     piper_voice=piper_reference,
                     hotkey=candidate_hotkey.canonical,
@@ -1817,6 +1863,17 @@ class Controller:
                     self._backend_manager.commit(candidate)
                     committed = True
                 self.state.settings = next_settings
+                if engine == TURBO_ENGINE:
+                    active_backend = (
+                        candidate.backend
+                        if candidate is not None
+                        else self._backend_manager.current()
+                    )
+                    set_delivery_mode = getattr(
+                        active_backend, "set_delivery_mode", None
+                    )
+                    if set_delivery_mode is not None:
+                        set_delivery_mode(next_settings.turbo_delivery_mode)
                 if (
                     engine in {"Chatterbox Nano", TURBO_ENGINE}
                     and candidate is not None
