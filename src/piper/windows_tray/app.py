@@ -127,7 +127,7 @@ def _shared_chatterbox_roots() -> Iterable[Path]:
     if installed.is_dir():
         # The generation store itself is not an engine root. Keep the old direct
         # shared-payload location discoverable for installations made by prior versions.
-        if (installed / "manifest.json").is_file() or active is None:
+        if (installed / "manifest.json").is_file():
             yield installed
 
 

@@ -3,13 +3,41 @@
   "release": "v1.10.0",
   "components": {
     "worker": {
-      "parts": []
+      "parts": [
+        {
+          "url": "https://github.com/mjg1911/TTS/releases/download/v1.10.0/chatterbox-worker-v1.10.0.zip.part001",
+          "size": 1900000000,
+          "sha256": "7ebf561239565df24bef8de9e0d2e98b5e5af5faf3770c5a9e8dd6ec0c36288f"
+        },
+        {
+          "url": "https://github.com/mjg1911/TTS/releases/download/v1.10.0/chatterbox-worker-v1.10.0.zip.part002",
+          "size": 780604889,
+          "sha256": "faf2184f8def8a990cbcfe579a102cfb255001b9cbd84b171d4ed18b45270e9c"
+        }
+      ]
     },
     "nano": {
-      "parts": []
+      "parts": [
+        {
+          "url": "https://github.com/mjg1911/TTS/releases/download/v1.10.0/chatterbox-nano-v1.10.0.zip.part001",
+          "size": 1801986659,
+          "sha256": "f5c3e13b435a746cb38a67a9106c303e78b87b2f2ceca55532b75b337a758bcc"
+        }
+      ]
     },
     "turbo": {
-      "parts": []
+      "parts": [
+        {
+          "url": "https://github.com/mjg1911/TTS/releases/download/v1.10.0/chatterbox-turbo-v1.10.0.zip.part001",
+          "size": 1900000000,
+          "sha256": "54e06db78026f11b4bff832c5c4a64623b255c30b270c4f70bf0571b009e56d6"
+        },
+        {
+          "url": "https://github.com/mjg1911/TTS/releases/download/v1.10.0/chatterbox-turbo-v1.10.0.zip.part002",
+          "size": 871812864,
+          "sha256": "a6c4c31d8f0c99ce7b2b38129e23ede155353910d0e536238b4c4fd1fc6e5d06"
+        }
+      ]
     }
   }
 }

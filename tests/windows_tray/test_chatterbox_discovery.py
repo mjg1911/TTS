@@ -34,6 +34,7 @@ def test_user_shared_payload_is_preferred_over_legacy(monkeypatch, tmp_path, eng
     monkeypatch.delattr(sys, '_MEIPASS', raising=False)
     shared = tmp_path / 'Piper' / 'Chatterbox'
     shared.mkdir(parents=True)
+    (shared / 'manifest.json').write_text('{}')
     calls = []
     module = nano_assets if engine == 'nano' else turbo_assets
     monkeypatch.setattr(module, f'inspect_{engine}_installation',
@@ -57,6 +58,25 @@ def test_legacy_payload_remains_discoverable(monkeypatch, tmp_path, engine, dirn
     assert calls == [tmp_path / 'Piper' / dirname]
 
 
+@pytest.mark.parametrize('engine', ['nano', 'turbo'])
+def test_empty_store_after_failed_download_preserves_legacy_fallback(monkeypatch, tmp_path, engine):
+    import importlib
+    monkeypatch.setenv('APPDATA', str(tmp_path))
+    monkeypatch.delattr(sys, '_MEIPASS', raising=False)
+    shared = tmp_path / 'Piper' / 'Chatterbox'
+    (shared / '.staging').mkdir(parents=True)
+    legacy = tmp_path / 'Piper' / ('ChatterboxNano' if engine == 'nano' else 'ChatterboxTurbo')
+    legacy.mkdir()
+    def inspect(root):
+        if Path(root) == shared:
+            raise FileNotFoundError(shared / 'manifest.json')
+        assert Path(root) == legacy
+        return 'legacy installation'
+    assets = importlib.import_module(f'piper.{engine}_assets')
+    monkeypatch.setattr(assets, f'inspect_{engine}_installation', inspect)
+    assert getattr(app, f'_prepare_{engine}_installation')() == 'legacy installation'
+
+
 def test_shared_integrity_failure_reaches_backend_fallback(monkeypatch, tmp_path):
     import piper.nano_assets as nano_assets
     from piper.windows_tray.backend_manager import BackendPreparationError
@@ -65,6 +85,7 @@ def test_shared_integrity_failure_reaches_backend_fallback(monkeypatch, tmp_path
     monkeypatch.delattr(sys, '_MEIPASS', raising=False)
     shared = tmp_path / 'Piper' / 'Chatterbox'
     shared.mkdir(parents=True)
+    (shared / 'manifest.json').write_text('{}')
     calls = []
 
     def corrupt(root):
@@ -93,6 +114,7 @@ def test_missing_bundled_engine_can_use_an_existing_installation(
     installed = tmp_path / 'user' / 'Piper' / 'Chatterbox'
     if user_shared_available:
         installed.mkdir(parents=True)
+        (installed / 'manifest.json').write_text('{}')
     calls = []
 
     def inspect(root):
