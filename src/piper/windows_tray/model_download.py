@@ -59,6 +59,11 @@ def _default_install_root() -> Path:
     return Path.home() / ".piper" / "Chatterbox"
 
 
+def installation_root() -> Path:
+    """Return the shared persistent payload root used by the tray app."""
+    return _default_install_root()
+
+
 def active_generation_root(install_root: Optional[Path] = None) -> Optional[Path]:
     """Return the locally selected immutable generation, if its pointer is valid."""
     root = Path(install_root) if install_root is not None else _default_install_root()
@@ -173,12 +178,10 @@ def _legacy_engine_roots(engine: str, install_root: Optional[Path]) -> Iterable[
         bundled = Path(frozen_root) / f"{engine}_payload"
         if bundled.is_dir():
             yield bundled
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        dirname = "ChatterboxNano" if engine == "nano" else "ChatterboxTurbo"
-        legacy = Path(appdata) / "Piper" / dirname
-        if legacy.is_dir():
-            yield legacy
+    dirname = "ChatterboxNano" if engine == "nano" else "ChatterboxTurbo"
+    legacy = _default_install_root().parent / dirname
+    if legacy.is_dir():
+        yield legacy
 
 
 def _inspect_shared(root: Path, engine: str):

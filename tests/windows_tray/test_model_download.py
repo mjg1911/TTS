@@ -355,3 +355,23 @@ def test_app_discovery_uses_the_active_persistent_generation(monkeypatch, tmp_pa
     )
 
     assert list(app._shared_chatterbox_roots()) == [generation.resolve()]
+
+
+def test_app_discovery_uses_local_appdata_when_appdata_is_unset(monkeypatch, tmp_path):
+    from piper.windows_tray import app
+
+    local_appdata = tmp_path / "local-user"
+    store = local_appdata / "Piper" / "Chatterbox"
+    generation = store / "generations" / ("b" * 32)
+    generation.mkdir(parents=True)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
+    monkeypatch.delattr(app.sys, "_MEIPASS", raising=False)
+    (store / "current.json").write_text(
+        json.dumps({"version": 1, "generation": f"generations/{generation.name}"}),
+        encoding="utf-8",
+    )
+
+    assert list(app._shared_chatterbox_roots()) == [generation.resolve()]
+    assert app._nano_root() == local_appdata / "Piper" / "ChatterboxNano"
+    assert app._turbo_root() == local_appdata / "Piper" / "ChatterboxTurbo"
