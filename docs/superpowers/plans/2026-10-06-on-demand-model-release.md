@@ -50,6 +50,8 @@
 - [ ] Implement release asset generator and Piper-only packaging; use explicit release mode to prevent stale environment variables accidentally bundling Chatterbox. Keep optional developer bundled-payload mode working. Use a release version override where necessary rather than confusing upstream package version.
 - [ ] Run release tests and existing packaging/discovery regressions, update usage and release notes, commit only task files, record `.superpowers/release/task-3-report.md`.
 
+Packaged verification uses a hidden `--offline-smoke-test PATH` diagnostic: resolve the bundled default voice, generate nonempty speech, validate configured release asset metadata, construct/destroy the real Tk download panel, and write JSON results without changing settings or starting tray/hotkeys. Test the diagnostic behavior before implementation. Support a compiler-path override for the workspace-local Inno Setup compiler and an optional bootstrap skip for an already verified build environment.
+
 ### Task 4: Real build, integration review and publish
 
 - [ ] Run Windows tray regression suite. Review cumulative diff against approved spec and resolve substantive findings before publication.
