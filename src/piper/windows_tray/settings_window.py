@@ -9,6 +9,7 @@ from piper.turbo_options import DELIVERY_MODE_LABELS, ENGINE as TURBO_ENGINE
 
 from .controller import SettingsApplyResult, SettingsWindowSnapshot
 from .hotkey import parse_hotkey
+from .model_download_ui import CHATTERBOX_ENGINES, ModelDownloadPanel
 from .settings import MIN_SPEED_PERCENT, MAX_SPEED_PERCENT
 from .shortcut_recorder import ShortcutRecorder
 from .settings_theme import (
@@ -106,6 +107,7 @@ class SettingsWindow:
         self.reference_voice_var = tk.StringVar(value="")
         self._reference_voice_choices: dict[str, str] = {}
         self._reference_import_pending = False
+        self._model_engine_ready = snapshot.engine == "Piper"
         self.hotkey_var = tk.StringVar(value=snapshot.hotkey)
         self.stop_tts_hotkey_var = tk.StringVar(value=snapshot.stop_tts_hotkey)
         self.pause_resume_hotkey_var = tk.StringVar(value=snapshot.pause_resume_hotkey)
@@ -350,6 +352,18 @@ class SettingsWindow:
             style="Muted.Piper.TLabel",
             wraplength=310,
         ).grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        self.model_download_panel = ModelDownloadPanel(
+            voice, on_state_change=self._model_readiness_changed
+        )
+        self.model_download_panel.frame.configure(style="Panel.Piper.TFrame")
+        self.model_download_panel.status_label.configure(style="Muted.Piper.TLabel")
+        self.model_download_panel.download_button.configure(style="Piper.TButton")
+        self.model_download_panel.progress_bar.configure(
+            style="Piper.Horizontal.TProgressbar"
+        )
+        self.model_download_panel.frame.grid(
+            row=6, column=0, sticky="ew", pady=(8, 0)
+        )
         self.piper_voice_frame = ttk.Frame(voice, style="Panel.Piper.TFrame")
         self.piper_voice_frame.columnconfigure(0, weight=1)
         ttk.Label(
@@ -589,6 +603,8 @@ class SettingsWindow:
             style="Primary.Piper.TButton",
         )
         self.save_close_button.grid(row=1, column=3)
+        self.model_download_panel.set_engine(self.engine_var.get())
+        self._update_save_availability()
         self._refresh_voice_controls()
         self._bind_settings_scroll(self.controls)
         self.settings_canvas.bind("<MouseWheel>", self._scroll_settings)
@@ -711,10 +727,27 @@ class SettingsWindow:
 
     def _select_engine(self, _event=None):
         self._refresh_voice_controls()
+        self.model_download_panel.set_engine(self.engine_var.get())
         self.engine_status_var.set(
             f"{self.engine_var.get()} selected. Save to load this model."
         )
         self.apply_status_var.set("")
+
+    def _model_readiness_changed(self, engine, _state, ready: bool) -> None:
+        if self._closed:
+            return
+        self._model_engine_ready = engine == self.engine_var.get() and ready
+        self._update_save_availability()
+
+    def _update_save_availability(self) -> None:
+        if not hasattr(self, "save_button") or getattr(
+            self, "_apply_in_progress", False
+        ):
+            return
+        enabled = self.engine_var.get() == "Piper" or self._model_engine_ready
+        state = "normal" if enabled else "disabled"
+        self.save_button.configure(state=state)
+        self.save_close_button.configure(state=state)
 
     @staticmethod
     def _show_frame(frame, visible: bool, row: int = 5) -> None:
@@ -987,6 +1020,15 @@ class SettingsWindow:
         self._render_errors()
         if getattr(self, "_apply_in_progress", False):
             return
+        if (
+            self.engine_var.get() in CHATTERBOX_ENGINES
+            and not self._model_engine_ready
+        ):
+            self._error_vars["engine"].set(
+                "Download and verify this model before saving it."
+            )
+            self._render_errors()
+            return
         if self._reference_import_pending:
             self._error_vars["reference_clip"].set(
                 "Wait for the reference clip import to finish before saving."
@@ -1122,6 +1164,8 @@ class SettingsWindow:
         self._set_voice_label(snapshot.piper_voice_path)
         self._set_reference_clip_labels(snapshot.chatterbox_reference_clip)
         self._refresh_reference_voices(snapshot.chatterbox_reference_clip)
+        self.model_download_panel.set_engine(snapshot.engine)
+        self._update_save_availability()
         self._refresh_voice_controls()
 
     def focus(self) -> None:
@@ -1146,6 +1190,7 @@ class SettingsWindow:
     def close(self) -> None:
         if self._closed:
             return
+        self.model_download_panel.close()
         for recorder in getattr(self, "shortcut_recorders", ()):
             recorder.cancel()
         if getattr(self, "_apply_in_progress", False):

@@ -155,8 +155,11 @@ class FakeToplevel(FakeWidget):
         self.deiconify_calls = getattr(self, "deiconify_calls", 0) + 1
 
 
-def install_fake_tk(monkeypatch, built_frames):
+def install_fake_tk(
+    monkeypatch, built_frames, *, real_model_download_panel=False
+):
     import piper.windows_tray.settings_window as settings_window
+    import piper.windows_tray.model_download_ui as model_download_ui
 
     class FakeLabelFrame(FakeWidget):
         def __init__(self, parent=None, **kwargs):
@@ -165,7 +168,9 @@ def install_fake_tk(monkeypatch, built_frames):
             built_frames.append(self)
 
     class FakeButton(FakeWidget):
-        pass
+        def invoke(self):
+            if self.cget("state") != "disabled":
+                self.kwargs["command"]()
 
     class FakeEntry(FakeWidget):
         pass
@@ -195,6 +200,36 @@ def install_fake_tk(monkeypatch, built_frames):
     )
     monkeypatch.setattr(settings_window, "tk", fake_tk)
     monkeypatch.setattr(settings_window, "ttk", fake_ttk)
+    monkeypatch.setattr(model_download_ui, "tk", fake_tk)
+    monkeypatch.setattr(model_download_ui, "ttk", fake_ttk)
+    if not real_model_download_panel:
+        class InstalledModelDownloadPanel:
+            def __init__(self, parent, on_state_change=None):
+                self.frame = FakeWidget(parent)
+                self.status_label = FakeWidget(self.frame)
+                self.progress_bar = FakeWidget(self.frame)
+                self.download_button = FakeWidget(self.frame)
+                self.selected_engine = None
+                self.state = "available"
+                self.is_ready = True
+                self._on_state_change = on_state_change
+
+            def set_engine(self, engine):
+                self.selected_engine = engine
+                self.state = "available" if engine == "Piper" else "ready"
+                self.is_ready = True
+                if self._on_state_change is not None:
+                    self._on_state_change(engine, self.state, True)
+
+            def start_download(self):
+                pass
+
+            def close(self):
+                self.state = "closed"
+
+        monkeypatch.setattr(
+            settings_window, "ModelDownloadPanel", InstalledModelDownloadPanel
+        )
     monkeypatch.setattr(settings_window, "configure_studio_theme", lambda _: None)
     monkeypatch.setattr(settings_window, "choose_voice_model", lambda parent: None)
     return settings_window
