@@ -246,7 +246,7 @@ def test_window_initializes_staged_settings_from_snapshot(monkeypatch):
     assert window.engine_combo.kwargs["values"] == (
         "Piper",
         "Chatterbox Nano",
-        "Chatterbox Multilingual V3 (500M)",
+        "Chatterbox Turbo (350M)",
     )
     assert not hasattr(window, "kokoro_voice_var")
     assert all("Kokoro" not in frame.text for frame in built_frames)

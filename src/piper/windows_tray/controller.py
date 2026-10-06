@@ -19,9 +19,6 @@ from . import DEFAULT_PAUSE_RESUME_HOTKEY, DEFAULT_STOP_TTS_HOTKEY
 from .logging_setup import log_capture_result, log_exception_safe
 from .errors import UserError, user_message
 from .settings import (
-    DEFAULT_MULTILINGUAL_CFG_WEIGHT,
-    DEFAULT_MULTILINGUAL_EXAGGERATION,
-    DEFAULT_MULTILINGUAL_LANGUAGE,
     DEFAULT_PIPER_SENTENCE_STREAMING_ENABLED,
     DEFAULT_PITCH_PERCENT,
     DEFAULT_SENTENCE_PAUSE_MS,
@@ -33,12 +30,8 @@ from .settings import (
     validate_sentence_pause_ms,
     validate_speed_percent,
 )
-from piper.multilingual_options import (
-    ENGINE as MULTILINGUAL_ENGINE,
-    validate_cfg_weight,
-    validate_exaggeration,
-    validate_language,
-)
+from piper.turbo_options import ENGINE as TURBO_ENGINE
+from piper.turbo_options import validate_delivery_mode
 from .speech import SpeechEvent, SpeechEventKind, SpeechPurpose, SpeechRequest
 from .voice_manager import VoiceManager, VoiceSwitchEvent
 
@@ -137,6 +130,7 @@ class SettingsWindowSnapshot:
     chatterbox_device_message: str
     chatterbox_custom_voice_enabled: bool
     chatterbox_reference_clip: str
+    turbo_delivery_mode: str
     engine: str
     piper_voice_path: Optional[Path]
     piper_voice_reference: str
@@ -148,9 +142,6 @@ class SettingsWindowSnapshot:
     sentence_pause_ms: int
     last_text: Optional[str]
     piper_sentence_streaming_enabled: bool
-    multilingual_language: str
-    multilingual_exaggeration: float
-    multilingual_cfg_weight: float
 
     def __init__(
         self,
@@ -170,9 +161,7 @@ class SettingsWindowSnapshot:
         chatterbox_device_message: str = "",
         chatterbox_custom_voice_enabled: bool = False,
         chatterbox_reference_clip: str = "",
-        multilingual_language: str = DEFAULT_MULTILINGUAL_LANGUAGE,
-        multilingual_exaggeration: float = DEFAULT_MULTILINGUAL_EXAGGERATION,
-        multilingual_cfg_weight: float = DEFAULT_MULTILINGUAL_CFG_WEIGHT,
+        turbo_delivery_mode: str = "",
         voice_path: Optional[Path] = None,
     ) -> None:
         if voice_path is not None and piper_voice_path is None:
@@ -182,6 +171,7 @@ class SettingsWindowSnapshot:
             "chatterbox_device_message": chatterbox_device_message,
             "chatterbox_custom_voice_enabled": chatterbox_custom_voice_enabled,
             "chatterbox_reference_clip": chatterbox_reference_clip,
+            "turbo_delivery_mode": turbo_delivery_mode,
             "engine": engine,
             "piper_voice_path": piper_voice_path,
             "piper_voice_reference": piper_voice_reference,
@@ -193,9 +183,6 @@ class SettingsWindowSnapshot:
             "sentence_pause_ms": sentence_pause_ms,
             "last_text": last_text,
             "piper_sentence_streaming_enabled": piper_sentence_streaming_enabled,
-            "multilingual_language": multilingual_language,
-            "multilingual_exaggeration": multilingual_exaggeration,
-            "multilingual_cfg_weight": multilingual_cfg_weight,
         }
         for name, value in values.items():
             object.__setattr__(self, name, value)
@@ -378,7 +365,7 @@ class Controller:
             )
             self._startup_engine = engine or (
                 settings_engine
-                if settings_engine in {"Chatterbox Nano", MULTILINGUAL_ENGINE}
+                if settings_engine in {"Chatterbox Nano", TURBO_ENGINE}
                 else "Chatterbox Nano"
             )
             self.state.backend_startup_state = BackendStartupState.LOADING
@@ -447,7 +434,7 @@ class Controller:
                 status_message = (
                     "The saved Chatterbox custom voice could not be loaded. Open Settings and import a readable WAV clip longer than 5 seconds."
                 )
-            elif self._startup_engine == MULTILINGUAL_ENGINE:
+            elif self._startup_engine == TURBO_ENGINE:
                 detail = " (%s)" % reason.strip() if reason and reason.strip() else ""
                 reference_help = (
                     " Check the selected reference WAV too."
@@ -456,9 +443,9 @@ class Controller:
                     else ""
                 )
                 status_message = (
-                    "Chatterbox Multilingual V3 is unavailable. Piper will continue to be used. "
+                    "Chatterbox Turbo is unavailable. Piper will continue to be used. "
                     "CUDA is required; check NVIDIA CUDA setup and the installed "
-                    "Multilingual payload.%s%s"
+                    "Turbo payload.%s%s"
                     % (reference_help, detail)
                 )
             else:
@@ -1272,13 +1259,14 @@ class Controller:
                 chatterbox_device=settings.chatterbox_device,
                 chatterbox_device_message=(
                     getattr(self._backend_manager.current(), "device_message", "")
-                    if settings.engine in {"Chatterbox Nano", MULTILINGUAL_ENGINE} and self._backend_manager
+                    if settings.engine in {"Chatterbox Nano", TURBO_ENGINE} and self._backend_manager
                     else ""
                 ),
                 chatterbox_custom_voice_enabled=(
                     settings.chatterbox_custom_voice_enabled
                 ),
                 chatterbox_reference_clip=settings.chatterbox_reference_clip,
+                turbo_delivery_mode=settings.turbo_delivery_mode,
                 engine=settings.engine,
                 piper_voice_path=self.state.voice_path,
                 piper_voice_reference=settings.piper_voice,
@@ -1292,9 +1280,6 @@ class Controller:
                 piper_sentence_streaming_enabled=(
                     settings.piper_sentence_streaming_enabled
                 ),
-                multilingual_language=settings.multilingual_language,
-                multilingual_exaggeration=settings.multilingual_exaggeration,
-                multilingual_cfg_weight=settings.multilingual_cfg_weight,
             )
 
     def nano_preparation_cancel_event(self):
@@ -1304,26 +1289,6 @@ class Controller:
         return getattr(self._nano_preparation_context, "device", None) or (
             self.state.settings.chatterbox_device if self.state.settings else "cpu"
         )
-
-    def multilingual_preparation_options(self) -> dict[str, object]:
-        requested = getattr(
-            self._nano_preparation_context, "multilingual_options", None
-        )
-        if requested is not None:
-            return dict(requested)
-        with self._state_lock:
-            settings = self.state.settings
-            if settings is None:
-                return {
-                    "language": DEFAULT_MULTILINGUAL_LANGUAGE,
-                    "exaggeration": DEFAULT_MULTILINGUAL_EXAGGERATION,
-                    "cfg_weight": DEFAULT_MULTILINGUAL_CFG_WEIGHT,
-                }
-            return {
-                "language": settings.multilingual_language,
-                "exaggeration": settings.multilingual_exaggeration,
-                "cfg_weight": settings.multilingual_cfg_weight,
-            }
 
     def nano_preparation_reference_clip(self) -> Optional[str]:
         requested = getattr(self._nano_preparation_context, "reference_clip", _UNSET)
@@ -1338,6 +1303,14 @@ class Controller:
             ):
                 return settings.chatterbox_reference_clip
         return None
+
+    def nano_preparation_delivery_mode(self) -> str:
+        requested = getattr(self._nano_preparation_context, "delivery_mode", _UNSET)
+        if requested is not _UNSET:
+            return requested
+        with self._state_lock:
+            settings = self.state.settings
+            return settings.turbo_delivery_mode if settings is not None else ""
 
     def cancel_nano_settings(self) -> None:
         self.nano_settings_cancel_event.set()
@@ -1366,9 +1339,7 @@ class Controller:
         chatterbox_device=None,
         chatterbox_custom_voice_enabled=None,
         chatterbox_reference_clip=None,
-        multilingual_language=None,
-        multilingual_exaggeration=None,
-        multilingual_cfg_weight=None,
+        turbo_delivery_mode=None,
         stop_tts_hotkey=None,
         pause_resume_hotkey=None,
     ) -> SettingsApplyResult:
@@ -1376,7 +1347,7 @@ class Controller:
         # constructing a Chatterbox backend; the settings window runs this call
         # off-thread.
         candidate = None
-        chatterbox_engines = {"Chatterbox Nano", MULTILINGUAL_ENGINE}
+        chatterbox_engines = {"Chatterbox Nano", TURBO_ENGINE}
         with self._state_lock:
             current = self.state.settings
             custom_voice_enabled = (
@@ -1386,6 +1357,24 @@ class Controller:
                 if chatterbox_custom_voice_enabled is None
                 else chatterbox_custom_voice_enabled
             )
+            try:
+                turbo_delivery_mode = validate_delivery_mode(
+                    current.turbo_delivery_mode
+                    if turbo_delivery_mode is None and current is not None
+                    else ""
+                    if turbo_delivery_mode is None
+                    else turbo_delivery_mode
+                )
+            except ValueError:
+                return SettingsApplyResult(
+                    False,
+                    (
+                        (
+                            "turbo_delivery_mode",
+                            "Choose a supported Turbo delivery mode.",
+                        ),
+                    ),
+                )
             reference_clip = (
                 current.chatterbox_reference_clip
                 if chatterbox_reference_clip is None and current is not None
@@ -1400,27 +1389,6 @@ class Controller:
                 reference_clip = validate_chatterbox_reference_clip(reference_clip)
             except ValueError as error:
                 return SettingsApplyResult(False, (("reference_clip", str(error)),))
-            language = (
-                current.multilingual_language
-                if multilingual_language is None and current is not None
-                else DEFAULT_MULTILINGUAL_LANGUAGE
-                if multilingual_language is None
-                else multilingual_language
-            )
-            exaggeration = (
-                current.multilingual_exaggeration
-                if multilingual_exaggeration is None and current is not None
-                else DEFAULT_MULTILINGUAL_EXAGGERATION
-                if multilingual_exaggeration is None
-                else multilingual_exaggeration
-            )
-            cfg_weight = (
-                current.multilingual_cfg_weight
-                if multilingual_cfg_weight is None and current is not None
-                else DEFAULT_MULTILINGUAL_CFG_WEIGHT
-                if multilingual_cfg_weight is None
-                else multilingual_cfg_weight
-            )
             stop_tts_hotkey = (
                 current.stop_tts_hotkey
                 if stop_tts_hotkey is None and current is not None
@@ -1435,20 +1403,6 @@ class Controller:
                 if pause_resume_hotkey is None
                 else pause_resume_hotkey
             )
-            try:
-                language = validate_language(language)
-            except ValueError as error:
-                return SettingsApplyResult(False, (("language", str(error)),))
-            try:
-                exaggeration = validate_exaggeration(exaggeration)
-            except ValueError as error:
-                return SettingsApplyResult(
-                    False, (("exaggeration", str(error)),)
-                )
-            try:
-                cfg_weight = validate_cfg_weight(cfg_weight)
-            except ValueError as error:
-                return SettingsApplyResult(False, (("cfg_weight", str(error)),))
             device = (
                 chatterbox_device
                 if chatterbox_device is not None
@@ -1467,12 +1421,6 @@ class Controller:
                 current is None
                 or custom_voice_enabled != current.chatterbox_custom_voice_enabled
                 or reference_clip != current.chatterbox_reference_clip
-            )
-            multilingual_options_changed = (
-                current is None
-                or language != current.multilingual_language
-                or exaggeration != current.multilingual_exaggeration
-                or cfg_weight != current.multilingual_cfg_weight
             )
             self._settings_apply_generation += 1
             apply_generation = self._settings_apply_generation
@@ -1525,10 +1473,6 @@ class Controller:
                 self._backend_manager.current_identity() != (engine, "default")
                 or device_changed
                 or custom_voice_changed
-                or (
-                    engine == MULTILINGUAL_ENGINE
-                    and multilingual_options_changed
-                )
             )
             and not self._validate_settings_scalars(
                 hotkey,
@@ -1547,15 +1491,12 @@ class Controller:
                 self._nano_preparation_context.reference_clip = (
                     reference_clip if custom_voice_enabled else None
                 )
-                if engine == MULTILINGUAL_ENGINE:
-                    self._nano_preparation_context.multilingual_options = {
-                        "language": language,
-                        "exaggeration": exaggeration,
-                        "cfg_weight": cfg_weight,
-                    }
+                self._nano_preparation_context.delivery_mode = (
+                    turbo_delivery_mode if engine == TURBO_ENGINE else ""
+                )
                 candidate = self._backend_manager.prepare(engine, "default")
             except BackendPreparationError as error:
-                if engine == MULTILINGUAL_ENGINE:
+                if engine == TURBO_ENGINE:
                     reference_help = (
                         " Also check that the selected reference WAV is readable and "
                         "longer than 5 seconds."
@@ -1563,9 +1504,9 @@ class Controller:
                         else ""
                     )
                     message = (
-                        "Chatterbox Multilingual V3 could not be prepared. CUDA is "
+                        "Chatterbox Turbo could not be prepared. CUDA is "
                         "required; check NVIDIA CUDA/GPU setup and the installed "
-                        "Multilingual payload. %s%s"
+                        "Turbo payload. %s%s"
                         % (str(error).strip(), reference_help)
                     )
                 elif custom_voice_enabled:
@@ -1585,7 +1526,7 @@ class Controller:
                 except AttributeError:
                     pass
                 try:
-                    del self._nano_preparation_context.multilingual_options
+                    del self._nano_preparation_context.delivery_mode
                 except AttributeError:
                     pass
         try:
@@ -1607,11 +1548,9 @@ class Controller:
                 device,
                 custom_voice_enabled,
                 reference_clip,
-                language,
-                exaggeration,
-                cfg_weight,
                 stop_tts_hotkey,
                 pause_resume_hotkey,
+                turbo_delivery_mode,
             )
         finally:
             if candidate is not None:
@@ -1632,11 +1571,9 @@ class Controller:
         chatterbox_device=None,
         chatterbox_custom_voice_enabled=None,
         chatterbox_reference_clip=None,
-        multilingual_language=None,
-        multilingual_exaggeration=None,
-        multilingual_cfg_weight=None,
         stop_tts_hotkey=None,
         pause_resume_hotkey=None,
+        turbo_delivery_mode=None,
     ) -> SettingsApplyResult:
         if (
             piper_sentence_streaming_enabled is not None
@@ -1664,7 +1601,7 @@ class Controller:
         if not isinstance(engine, str) or engine not in {
             "Piper",
             "Chatterbox Nano",
-            MULTILINGUAL_ENGINE,
+            TURBO_ENGINE,
         }:
             return SettingsApplyResult(
                 False, (("engine", "Choose Piper or a supported Chatterbox engine."),)
@@ -1848,6 +1785,11 @@ class Controller:
                         if chatterbox_reference_clip is None
                         else chatterbox_reference_clip
                     ),
+                    turbo_delivery_mode=(
+                        current.turbo_delivery_mode
+                        if turbo_delivery_mode is None
+                        else turbo_delivery_mode
+                    ),
                     engine=engine,
                     piper_voice=piper_reference,
                     hotkey=candidate_hotkey.canonical,
@@ -1864,21 +1806,6 @@ class Controller:
                         current.piper_sentence_streaming_enabled
                         if piper_sentence_streaming_enabled is None
                         else piper_sentence_streaming_enabled
-                    ),
-                    multilingual_language=(
-                        current.multilingual_language
-                        if multilingual_language is None
-                        else multilingual_language
-                    ),
-                    multilingual_exaggeration=(
-                        current.multilingual_exaggeration
-                        if multilingual_exaggeration is None
-                        else multilingual_exaggeration
-                    ),
-                    multilingual_cfg_weight=(
-                        current.multilingual_cfg_weight
-                        if multilingual_cfg_weight is None
-                        else multilingual_cfg_weight
                     ),
                 )
                 try:
@@ -1936,8 +1863,19 @@ class Controller:
                     self._backend_manager.commit(candidate)
                     committed = True
                 self.state.settings = next_settings
+                if engine == TURBO_ENGINE:
+                    active_backend = (
+                        candidate.backend
+                        if candidate is not None
+                        else self._backend_manager.current()
+                    )
+                    set_delivery_mode = getattr(
+                        active_backend, "set_delivery_mode", None
+                    )
+                    if set_delivery_mode is not None:
+                        set_delivery_mode(next_settings.turbo_delivery_mode)
                 if (
-                    engine in {"Chatterbox Nano", MULTILINGUAL_ENGINE}
+                    engine in {"Chatterbox Nano", TURBO_ENGINE}
                     and candidate is not None
                 ):
                     self._notify_nano_device(candidate.backend)

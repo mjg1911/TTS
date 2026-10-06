@@ -10,9 +10,9 @@ if (-not (Test-Path "dist/PiperTray/PiperTray.exe" -PathType Leaf)) {
     throw "Build dist/PiperTray before the installer"
 }
 $setupText = Get-Content "setup.py" -Raw
-if ($env:PIPER_REQUIRE_MULTILINGUAL_PAYLOAD -eq "1" -and
-    -not (Test-Path "dist/PiperTray/_internal/multilingual_payload/manifest.json" -PathType Leaf)) {
-    throw "Installer requires the complete offline Chatterbox Multilingual V3 payload"
+if ($env:PIPER_REQUIRE_TURBO_PAYLOAD -eq "1" -and
+    -not (Test-Path "dist/PiperTray/_internal/turbo_payload/manifest.json" -PathType Leaf)) {
+    throw "Installer requires the complete offline Chatterbox Turbo payload"
 }
 if ($env:PIPER_REQUIRE_NANO_PAYLOAD -eq "1" -and
     -not (Test-Path "dist/PiperTray/_internal/nano_payload/manifest.json" -PathType Leaf)) {

@@ -8,7 +8,7 @@ from tests.windows_tray.test_settings_window_layout import tk_root
 
 
 @pytest.mark.parametrize(
-    "engine", ["Chatterbox Nano", "Chatterbox Multilingual V3 (500M)"]
+    "engine", ["Chatterbox Nano", "Chatterbox Turbo (350M)"]
 )
 def test_reference_import_remains_accessible_in_small_settings_window(tk_root, engine):
     window = SettingsWindow(

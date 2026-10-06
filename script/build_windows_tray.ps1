@@ -35,19 +35,30 @@ if ($hasNanoModel) {
     & "$Root/script/stage_nano_payload.ps1"
     $env:PIPER_NANO_PAYLOAD_DIR = (Resolve-Path "build/nano-payload").Path
 }
-$requireMultilingual = $env:PIPER_REQUIRE_MULTILINGUAL_PAYLOAD -eq "1"
-$hasMultilingualModel = -not [string]::IsNullOrWhiteSpace($env:PIPER_MULTILINGUAL_MODEL_DIR)
-if ($requireMultilingual -and -not $hasMultilingualModel -and
-    [string]::IsNullOrWhiteSpace($env:PIPER_MULTILINGUAL_PAYLOAD_DIR)) {
-    throw "release build requires a local Multilingual V3 model directory or staged payload"
+$requireTurbo = $env:PIPER_REQUIRE_TURBO_PAYLOAD -eq "1"
+$hasTurboModel = -not [string]::IsNullOrWhiteSpace($env:PIPER_TURBO_MODEL_DIR)
+if ($requireTurbo -and -not $hasTurboModel -and
+    [string]::IsNullOrWhiteSpace($env:PIPER_TURBO_PAYLOAD_DIR)) {
+    throw "release build requires a local Turbo model directory or staged payload"
 }
-if ($hasMultilingualModel) {
-    & "$Root/script/build_multilingual_worker.ps1"
-    & "$Root/script/stage_multilingual_payload.ps1"
-    $env:PIPER_MULTILINGUAL_PAYLOAD_DIR = (Resolve-Path "build/multilingual-payload").Path
+if ($hasTurboModel) {
+    & "$Root/script/build_turbo_worker.ps1"
+    & "$Root/script/stage_turbo_payload.ps1"
+    $env:PIPER_TURBO_PAYLOAD_DIR = (Resolve-Path "build/turbo-payload").Path
 }
 python -m PyInstaller --clean --noconfirm script/piper_tray.spec
 if ($LASTEXITCODE -ne 0) { throw "Piper Tray packaging failed" }
+
+# Some frozen payload trees can retain a protected DACL that excludes the
+# account running Piper. Keep the offline Turbo assets readable by standard
+# Windows users after packaging.
+$TurboPayloadDir = Join-Path $DistDir "_internal\turbo_payload"
+if (Test-Path -LiteralPath $TurboPayloadDir -PathType Container) {
+    & icacls.exe $TurboPayloadDir /grant '*S-1-5-32-545:(OI)(CI)(RX)' /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not grant standard Windows users read access to the Turbo payload"
+    }
+}
 
 if (-not (Test-Path $Exe -PathType Leaf)) { throw "Expected executable was not created: $Exe" }
 if (-not (Test-Path (Join-Path $DistDir "_internal") -PathType Container)) { throw "PyInstaller support directory missing" }
@@ -56,8 +67,8 @@ if ($requireNano -and -not (Test-Path (Join-Path $DistDir "_internal\nano_payloa
     throw "Required Chatterbox Nano payload was not collected"
 }
 if ($File.Length -le 0) { throw "Built executable is empty: $Exe" }
-if ($requireMultilingual -and -not (Test-Path (Join-Path $DistDir "_internal\multilingual_payload\manifest.json") -PathType Leaf)) {
-    throw "Required Chatterbox Multilingual V3 payload was not collected"
+if ($requireTurbo -and -not (Test-Path (Join-Path $DistDir "_internal\turbo_payload\manifest.json") -PathType Leaf)) {
+    throw "Required Chatterbox Turbo payload was not collected"
 }
 $Hash = Get-FileHash -Algorithm SHA256 $Exe
 Write-Host "Built $DistDir"
