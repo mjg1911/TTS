@@ -159,7 +159,7 @@ def test_windows_build_script_builds_python_extension_before_packaging() -> None
         encoding="utf-8"
     )
 
-    assert "python setup.py build_ext --inplace" in text
+    assert "$Python setup.py build_ext --inplace" in text
 
 
 def test_python_extension_cmake_quotes_external_include_path() -> None:

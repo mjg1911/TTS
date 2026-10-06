@@ -34,6 +34,7 @@ from .settings import TraySettings, load_settings, save_settings
 from .single_instance import InstanceRole, SingleInstance
 from .tray_icon import TrayIcon
 from .voice_manager import VoiceManager
+from .model_download import load_catalog
 from .codex_monitor import CodexMonitor, codex_sessions_dir
 from .backend_startup import BackendStartupCoordinator
 from piper.turbo_options import ENGINE as TURBO_ENGINE
@@ -62,7 +63,47 @@ def _voice_data_dirs() -> Iterable[Path]:
     directories = [Path.cwd()]
     if local_appdata:
         directories.append(Path(local_appdata) / "Piper")
+    if getattr(sys, "_MEIPASS", None):
+        directories.append(Path(sys._MEIPASS) / "voices")
     return directories
+
+
+def run_offline_smoke_test(destination: Path) -> int:
+    """Verify the packaged default voice, catalog and Tk without starting the tray."""
+    import json
+    import tkinter as tk
+    from . import DEFAULT_VOICE
+    from .model_download import _component_parts
+    from .model_download_ui import ModelDownloadPanel
+
+    destination = Path(destination)
+    root = panel = None
+    result = {"status": "failed", "voice_model": DEFAULT_VOICE}
+    try:
+        path, voice = load_voice_candidate(DEFAULT_VOICE, tuple(_voice_data_dirs()))
+        samples = sum(chunk.audio_float_array.size for chunk in voice.synthesize(
+            "Piper is ready to speak offline."
+        ))
+        if not samples:
+            raise RuntimeError("Default voice generated no audio")
+        catalog = load_catalog()
+        parts = {name: len(_component_parts(catalog, name))
+                 for name in ("worker", "nano", "turbo")}
+        root = tk.Tk()
+        root.withdraw()
+        panel = ModelDownloadPanel(root)
+        result.update(status="passed", voice_path=str(path), audio_samples=samples,
+                      catalog_asset_parts=parts)
+    except Exception as error:
+        result.update(exception_type=type(error).__name__, error=str(error))
+    finally:
+        if panel is not None:
+            panel.close()
+        if root is not None:
+            root.destroy()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return 0 if result["status"] == "passed" else 1
 
 
 def _nano_root() -> Path:

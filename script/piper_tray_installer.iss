@@ -3,6 +3,9 @@
 #ifndef MyAppVersion
   #error MyAppVersion must be supplied by build_windows_installer.ps1
 #endif
+#ifndef MyOutputName
+  #define MyOutputName "PiperTraySetup"
+#endif
 
 [Setup]
 AppId={{A5A223C5-5A81-4E0A-8D66-5A2E55A26A91}
@@ -11,7 +14,7 @@ AppVersion={#MyAppVersion}
 DefaultDirName={localappdata}\Programs\PiperTray
 DefaultGroupName=Piper Tray
 OutputDir=..\dist
-OutputBaseFilename=PiperTraySetup
+OutputBaseFilename={#MyOutputName}
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=lowest

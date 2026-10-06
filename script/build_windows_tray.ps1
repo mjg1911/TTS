@@ -1,3 +1,9 @@
+param(
+    [string]$Python = 'python',
+    [switch]$ReleaseMode,
+    [switch]$SkipBootstrap,
+    [string]$DefaultVoiceDir = ''
+)
 $ErrorActionPreference = "Stop"
 
 if ($env:OS -ne "Windows_NT") {
@@ -6,6 +12,15 @@ if ($env:OS -ne "Windows_NT") {
 
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
+if ($ReleaseMode) {
+    $env:PIPER_RELEASE_MODE = '1'
+    if ($DefaultVoiceDir) { $env:PIPER_DEFAULT_VOICE_DIR = (Resolve-Path -LiteralPath $DefaultVoiceDir).Path }
+    foreach ($name in @('PIPER_NANO_PAYLOAD_DIR', 'PIPER_TURBO_PAYLOAD_DIR',
+        'PIPER_CHATTERBOX_PAYLOAD_DIR', 'PIPER_NANO_MODEL_DIR', 'PIPER_TURBO_MODEL_DIR',
+        'PIPER_REQUIRE_NANO_PAYLOAD', 'PIPER_REQUIRE_TURBO_PAYLOAD')) {
+        Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+    }
+} else { $env:PIPER_RELEASE_MODE = '0' }
 
 $legacyPayloadVariables = @(
     "PIPER_NANO_PAYLOAD_DIR",
@@ -52,21 +67,39 @@ if ($hasSharedPayload -and -not (Test-Path -LiteralPath $env:PIPER_CHATTERBOX_PA
 $IconDir = Join-Path $Root "build\piper-tray"
 $DistDir = Join-Path $Root "dist\PiperTray"
 $Exe = Join-Path $DistDir "PiperTray.exe"
+foreach ($target in @($IconDir, $DistDir)) {
+    $resolved = [IO.Path]::GetFullPath($target)
+    if (-not $resolved.StartsWith($Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Build cleanup escaped the workspace: $resolved"
+    }
+}
 if (Test-Path -LiteralPath $IconDir) { Remove-Item -Recurse -Force -LiteralPath $IconDir }
 if (Test-Path -LiteralPath $DistDir) { Remove-Item -Recurse -Force -LiteralPath $DistDir }
 
-python -m pip install -e ".[windows-tray,windows-tray-build]"
-python setup.py build_ext --inplace
+if (-not $SkipBootstrap) {
+    & $Python -m pip install -e ".[windows-tray,windows-tray-build]"
+    if ($LASTEXITCODE -ne 0) { throw 'Tray build dependency installation failed' }
+    & $Python setup.py build_ext --inplace
+    if ($LASTEXITCODE -ne 0) { throw 'Native speech extension build failed' }
+}
+if ($ReleaseMode) {
+    & $Python -c "from piper.windows_tray.model_download import load_catalog, _component_parts; c=load_catalog(); [_component_parts(c, n) for n in ('worker','nano','turbo')]"
+    if ($LASTEXITCODE -ne 0) { throw 'Release catalog must contain verified download metadata' }
+}
 
 $Bridge = Get-ChildItem (Join-Path $Root "src\piper") -Filter "espeakbridge*.pyd" -File
 if ($null -eq $Bridge) {
     throw "espeakbridge.pyd was not built; the packaged executable would not be able to synthesize speech."
 }
 
-python script/make_piper_tray_icon.py
+& $Python script/make_piper_tray_icon.py
+if ($LASTEXITCODE -ne 0) { throw 'Tray icon generation failed' }
 
 if ($hasNanoModel -or $hasTurboModel) {
     $PayloadDir = Join-Path $Root "build\chatterbox-payload"
+    if (-not [IO.Path]::GetFullPath($PayloadDir).StartsWith($Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Payload cleanup escaped the workspace'
+    }
     if (Test-Path -LiteralPath $PayloadDir) { Remove-Item -Recurse -Force -LiteralPath $PayloadDir }
     & "$Root/script/build_chatterbox_worker.ps1"
     $stageParameters = @{
@@ -75,7 +108,7 @@ if ($hasNanoModel -or $hasTurboModel) {
     }
     if ($hasNanoModel) { $stageParameters.NanoModelDir = $env:PIPER_NANO_MODEL_DIR }
     if ($hasTurboModel) { $stageParameters.TurboModelDir = $env:PIPER_TURBO_MODEL_DIR }
-    & "$Root/script/stage_chatterbox_payload.ps1" @stageParameters
+    & "$Root/script/stage_chatterbox_payload.ps1" -Python $Python @stageParameters
     $env:PIPER_CHATTERBOX_PAYLOAD_DIR = (Resolve-Path -LiteralPath $PayloadDir).Path
     $hasSharedPayload = $true
 }
@@ -101,11 +134,11 @@ for engine in sorted(required - set(declared)):
 '@
 if ($hasSharedPayload) {
     $env:PYTHONPATH = Join-Path $Root "src"
-    python -c $VerifySharedPayload
+    & $Python -c $VerifySharedPayload
     if ($LASTEXITCODE -ne 0) { throw "Shared Chatterbox payload failed integrity or required-engine checks" }
 }
 
-python -m PyInstaller --clean --noconfirm script/piper_tray.spec
+& $Python -m PyInstaller --clean --noconfirm script/piper_tray.spec
 if ($LASTEXITCODE -ne 0) { throw "Piper Tray packaging failed" }
 
 # Keep offline weights readable by standard Windows users after packaging.
@@ -123,7 +156,7 @@ $File = Get-Item $Exe
 if ($requireNano -or $requireTurbo) {
     $env:PIPER_CHATTERBOX_PAYLOAD_DIR = $ChatterboxPayloadDir
     $env:PYTHONPATH = Join-Path $Root "src"
-    python -c $VerifySharedPayload
+    & $Python -c $VerifySharedPayload
     if ($LASTEXITCODE -ne 0) { throw "Built app does not contain every required Chatterbox engine" }
 }
 if ($File.Length -le 0) { throw "Built executable is empty: $Exe" }

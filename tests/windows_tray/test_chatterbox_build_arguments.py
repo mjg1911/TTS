@@ -26,7 +26,7 @@ def test_tray_builder_passes_models_as_named_stage_parameters(tmp_path):
     quoted_root = str(tmp_path).replace("'", "''")
     probe = tmp_path / 'invoke.ps1'
     probe.write_text(f"$Root = '{quoted_root}'\n"
-                     "$PayloadDir = 'shared-output'\n"
+                         "$PayloadDir = 'shared-output'\n$Python = 'python'\n"
                      "$hasNanoModel = $true\n$hasTurboModel = $true\n"
                      "$env:PIPER_NANO_MODEL_DIR = 'nano-model'\n"
                      "$env:PIPER_TURBO_MODEL_DIR = 'turbo-model'\n"
@@ -39,7 +39,7 @@ def test_tray_builder_passes_models_as_named_stage_parameters(tmp_path):
     assert bound['OutputDir'] == 'shared-output'
     assert bound['NanoModelDir'] == 'nano-model'
     assert bound['TurboModelDir'] == 'turbo-model'
-    assert 'Python' not in bound
+    assert bound['Python'] == 'python'
 
 
 @pytest.mark.parametrize('wrapper', ['build_nano_worker.ps1', 'build_turbo_worker.ps1'])

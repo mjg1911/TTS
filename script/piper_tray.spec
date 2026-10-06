@@ -14,6 +14,17 @@ SPEC_DIR = Path(SPECPATH)
 ROOT = SPEC_DIR.parent
 PYTHON_ROOT = Path(sys.base_prefix)
 piper_datas = collect_data_files("piper")
+release_mode = os.environ.get("PIPER_RELEASE_MODE") == "1"
+catalog_path = ROOT / "src" / "piper" / "model_catalog.json"
+piper_datas.append((str(catalog_path), "piper"))
+voice_datas = []
+if release_mode:
+    voice_root = Path(os.environ.get("PIPER_DEFAULT_VOICE_DIR", str(ROOT / "Voices")))
+    for name in ("en_GB-alba-medium.onnx", "en_GB-alba-medium.onnx.json"):
+        path = voice_root / name
+        if not path.is_file() or not path.stat().st_size:
+            raise RuntimeError("Release requires the default Piper voice: " + str(path))
+        voice_datas.append((str(path), "voices"))
 piper_binaries = collect_dynamic_libs("piper")
 piper_extensions = [
     (str(path), "piper")
@@ -40,17 +51,17 @@ tkinter_datas = [
 ]
 
 for legacy_name in ("PIPER_NANO_PAYLOAD_DIR", "PIPER_TURBO_PAYLOAD_DIR"):
-    if os.environ.get(legacy_name):
+    if not release_mode and os.environ.get(legacy_name):
         raise RuntimeError(
             f"{legacy_name} is no longer supported; use PIPER_CHATTERBOX_PAYLOAD_DIR"
         )
 
 chatterbox_payload_datas = []
-chatterbox_payload_text = os.environ.get("PIPER_CHATTERBOX_PAYLOAD_DIR")
+chatterbox_payload_text = None if release_mode else os.environ.get("PIPER_CHATTERBOX_PAYLOAD_DIR")
 required_engines = {
     engine
     for engine in ("nano", "turbo")
-    if os.environ.get(f"PIPER_REQUIRE_{engine.upper()}_PAYLOAD") == "1"
+    if not release_mode and os.environ.get(f"PIPER_REQUIRE_{engine.upper()}_PAYLOAD") == "1"
 }
 if chatterbox_payload_text:
     from piper.chatterbox_assets import inspect_chatterbox_installation
@@ -96,9 +107,11 @@ a = Analysis(
     [str(SPEC_DIR / "piper_tray_entry.py")],
     pathex=[str(ROOT / "src")],
     binaries=piper_binaries + piper_extensions + tkinter_binaries,
-    datas=piper_datas + tkinter_datas + chatterbox_payload_datas,
+    datas=piper_datas + tkinter_datas + chatterbox_payload_datas + voice_datas,
     hookspath=[str(SPEC_DIR / "pyinstaller_hooks")],
     hiddenimports=hiddenimports,
+    excludes=["torch", "torchaudio", "chatterbox", "transformers", "diffusers",
+              "accelerate", "piper.train", "piper.train.vits"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

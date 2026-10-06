@@ -8,6 +8,26 @@ Settings lets you change engines and voices, adjust speech speed and pitch, stop
 
 Saved Chatterbox Multilingual V3 selections migrate to Turbo, preserving other preferences. Turbo speaks English only. Saved Kokoro selections migrate to Piper.
 
+## Install the app
+
+Download the installer or portable app from [Piper 1.10.0](https://github.com/mjg1911/TTS/releases/tag/v1.10.0). Piper and the default Alba voice are included and ready for offline speech.
+
+Select **Chatterbox Nano** or **Chatterbox Turbo** at startup or in Settings. If it is missing, click **Download**. The app downloads verified model files from this repository's GitHub release and stores them under `%APPDATA%\Piper\Chatterbox`. The shared worker is downloaded once; adding the other model preserves the first. Keep the app open until verification and installation finish. Failed downloads can be retried. Once installed, the models work without an internet connection and remain installed across app updates.
+
+Nano supports CPU or NVIDIA CUDA; Turbo requires an NVIDIA CUDA GPU. These optional downloads are large because the worker includes its local inference dependencies.
+
+## Build the downloadable release
+
+Stage both pinned models with the shared worker as described below, then create the GitHub assets and bundled catalog:
+
+```powershell
+python script/prepare_model_release.py --payload-dir build/chatterbox-payload --output build/release-assets --catalog src/piper/model_catalog.json --release v1.10.0
+& .\script\build_windows_tray.ps1 -ReleaseMode -DefaultVoiceDir '.\Voices'
+& .\script\build_windows_installer.ps1 -ReleaseMode -ReleaseVersion '1.10.0'
+```
+
+The voice directory must contain `en_GB-alba-medium.onnx` and `en_GB-alba-medium.onnx.json`. Release mode bundles these and the catalog, and ignores optional-payload environment settings. Upload every generated archive part to the catalog's exact release tag before publishing the app. `-Python` selects a prepared Python environment; `-SkipBootstrap` skips dependency/native-extension preparation when it has already been completed. The installer builder accepts `-Compiler` for another Inno Setup compiler location. Developer builds can still bundle a shared payload using the setup below.
+
 ## Shared Chatterbox setup
 
 Nano and Turbo share one worker program and one dependency installation. The payload contains `worker/ChatterboxWorker.exe` once, separate `models/nano` and `models/turbo` directories, and an integrity manifest. Switching engines starts the same worker in the selected mode; it does not require a second worker installation. You still need the selected engine's model files.
