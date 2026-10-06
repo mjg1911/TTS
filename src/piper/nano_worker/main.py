@@ -42,7 +42,23 @@ def _configure_numba_cache(installation_root):
     raise OSError('could not create a writable per-user Numba cache outside the Nano installation')
 
 
-def serve(root, incoming, outgoing):
+def _validate_model_dir(installation, model_dir, engine='Nano'):
+    if model_dir is None:
+        return
+    try:
+        requested = Path(model_dir).expanduser().resolve(strict=True)
+        inspected = Path(installation.model_dir).resolve(strict=True)
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        raise ValueError(
+            f'{engine} model directory does not match the inspected installation'
+        ) from error
+    if requested != inspected:
+        raise ValueError(
+            f'{engine} model directory does not match the inspected installation'
+        )
+
+
+def serve(root, incoming, outgoing, *, model_dir=None):
     write_frame(outgoing, {'type': 'hello', 'engine': 'Chatterbox Nano', 'protocol_version': 1})
     request = read_frame(incoming)
     required_fields = {'type', 'manifest_sha256'}
@@ -74,6 +90,7 @@ def serve(root, incoming, outgoing):
     installation = inspect_nano_installation(root)
     if request['manifest_sha256'] != installation.manifest_sha256:
         raise ValueError('Nano manifest identity changed')
+    _validate_model_dir(installation, model_dir)
     _configure_numba_cache(installation.root)
     load_options = {}
     if device != 'cpu':

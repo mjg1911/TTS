@@ -128,30 +128,31 @@ def test_rejects_incompatible_turbo_manifest(tmp_path, monkeypatch, field, value
         assets.inspect_turbo_installation(root)
 
 
-def test_stager_copies_only_pinned_model_files_without_multilingual_caches(tmp_path, monkeypatch):
+def test_stager_copies_only_pinned_model_files_into_shared_payload(tmp_path, monkeypatch):
     source_model, worker = tmp_path / 'source_model', tmp_path / 'worker'
     source_model.mkdir()
     worker.mkdir()
-    (worker / 'TurboWorker.exe').write_bytes(b'worker fixture')
+    (worker / 'ChatterboxWorker.exe').write_bytes(b'worker fixture')
     for name in assets.REQUIRED_MODEL_FILES:
         (source_model / name).write_bytes(('model fixture:' + name).encode('utf-8'))
     monkeypatch.setattr(assets, 'MODEL_FILE_SHA256', {
         name: assets.file_sha256(source_model / name) for name in assets.REQUIRED_MODEL_FILES
     })
 
-    script_path = Path(__file__).resolve().parents[2] / 'script' / 'stage_turbo_payload.py'
-    spec = importlib.util.spec_from_file_location('stage_turbo_payload_under_test', script_path)
+    script_path = Path(__file__).resolve().parents[2] / 'script' / 'stage_chatterbox_payload.py'
+    spec = importlib.util.spec_from_file_location('stage_chatterbox_payload_under_test', script_path)
     stage_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(stage_module)
     output = tmp_path / 'staged_turbo'
     monkeypatch.setattr(sys, 'argv', [
-        'stage_turbo_payload.py', '--worker-dir', str(worker), '--model-dir', str(source_model),
+        'stage_chatterbox_payload.py', '--worker-dir', str(worker), '--turbo-model-dir', str(source_model),
         '--output', str(output),
     ])
 
     stage_module.main()
 
-    installation = assets.inspect_turbo_installation(output)
+    from piper.chatterbox_assets import inspect_chatterbox_installation
+    installation = inspect_chatterbox_installation(output, 'turbo')
     assert set(path.name for path in installation.model_dir.iterdir()) == set(assets.REQUIRED_MODEL_FILES)
     assert not list(installation.model_dir.rglob('*pkuseg*'))
     assert (installation.worker_executable).read_bytes() == b'worker fixture'

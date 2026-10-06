@@ -121,6 +121,7 @@ setup(
     packages=[
         "piper",
         "piper.windows_tray",
+        "piper.chatterbox_worker",
         "piper.nano_worker",
         "piper.turbo_worker",
         "piper.tashkeel",

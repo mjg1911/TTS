@@ -69,9 +69,28 @@ def _nano_root() -> Path:
     return Path(os.environ["APPDATA"]) / "Piper" / "ChatterboxNano"
 
 
+def _shared_chatterbox_roots() -> Iterable[Path]:
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        bundled = Path(frozen_root) / "chatterbox_payload"
+        if bundled.is_dir():
+            yield bundled
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        installed = Path(appdata) / "Piper" / "Chatterbox"
+        if installed.is_dir():
+            yield installed
+
+
 def _prepare_nano_installation():
     from piper.nano_assets import inspect_nano_installation
+    from piper.chatterbox_assets import ChatterboxEngineUnavailable
 
+    for shared in _shared_chatterbox_roots():
+        try:
+            return inspect_nano_installation(shared)
+        except ChatterboxEngineUnavailable:
+            continue
     frozen_root = getattr(sys, "_MEIPASS", None)
     bundled = Path(frozen_root) / "nano_payload" if frozen_root else None
     return inspect_nano_installation(
@@ -133,7 +152,13 @@ def _turbo_root() -> Path:
 
 def _prepare_turbo_installation():
     from piper.turbo_assets import inspect_turbo_installation
+    from piper.chatterbox_assets import ChatterboxEngineUnavailable
 
+    for shared in _shared_chatterbox_roots():
+        try:
+            return inspect_turbo_installation(shared)
+        except ChatterboxEngineUnavailable:
+            continue
     frozen_root = getattr(sys, '_MEIPASS', None)
     bundled = Path(frozen_root) / 'turbo_payload' if frozen_root else None
     return inspect_turbo_installation(

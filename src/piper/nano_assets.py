@@ -6,6 +6,7 @@ import json
 
 SOURCE_REVISION = '5de7a54aa4e5e2baadb0182dde554908b48b85c2'
 MODEL_REVISION = '71ccd1d0081b430592cea481f4307e764e07bc64'
+MODEL_REPO = 'ResembleAI/chatterbox-nano'
 REQUIRED_MODEL_FILES = ('t3_nano_v1.safetensors', 've.safetensors', 's3gen_meanflow.safetensors', 'conds.pt', 'tokenizer_config.json', 'special_tokens_map.json', 'added_tokens.json', 'vocab.json', 'merges.txt')
 MODEL_FILE_SHA256 = {
     'added_tokens.json': '72e4ab6acb0d9309ac3df4b526ae5fd80a2da5bc5ab7bb02d85096a374f69193',
@@ -39,6 +40,9 @@ def inspect_nano_installation(root):
     root = Path(root).resolve()
     raw = (root / 'manifest.json').read_bytes()
     manifest = json.loads(raw)
+    if isinstance(manifest, dict) and manifest.get('manifest_version') == 2:
+        from piper.chatterbox_assets import inspect_chatterbox_installation
+        return inspect_chatterbox_installation(root, 'nano')
     if manifest.get('manifest_version') != 1 or manifest.get('engine') != 'Chatterbox Nano':
         raise ValueError('unsupported Nano manifest')
     if manifest.get('source_revision') != SOURCE_REVISION or manifest.get('model_revision') != MODEL_REVISION:

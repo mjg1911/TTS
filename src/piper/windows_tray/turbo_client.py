@@ -1,14 +1,18 @@
 """Tray-side Turbo worker client sharing the bounded worker lifecycle."""
+from pathlib import Path
+
 from piper.turbo_options import ENGINE, validate_delivery_mode
 from .nano_client import NanoWorkerClient, NanoUnavailable, launch_nano_worker
 
 
 def launch_turbo_worker(installation):
-    return launch_nano_worker(
-        installation,
-        python_env='PIPER_TURBO_WORKER_PYTHON',
-        module='piper.turbo_worker.main',
-    )
+    options = {
+        'python_env': 'PIPER_TURBO_WORKER_PYTHON',
+        'module': 'piper.turbo_worker.main',
+    }
+    if Path(installation.worker_executable).name == 'ChatterboxWorker.exe':
+        options['engine'] = 'turbo'
+    return launch_nano_worker(installation, **options)
 
 
 class TurboWorkerClient(NanoWorkerClient):
