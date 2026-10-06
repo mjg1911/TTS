@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "release": "v1.10.0",
+  "components": {
+    "worker": {
+      "parts": []
+    },
+    "nano": {
+      "parts": []
+    },
+    "turbo": {
+      "parts": []
+    }
+  }
+}

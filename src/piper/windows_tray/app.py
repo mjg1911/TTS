@@ -70,15 +70,23 @@ def _nano_root() -> Path:
 
 
 def _shared_chatterbox_roots() -> Iterable[Path]:
+    appdata = os.environ.get("APPDATA")
+    installed = Path(appdata) / "Piper" / "Chatterbox" if appdata else None
+    if installed is not None:
+        from .model_download import active_generation_root
+
+        active = active_generation_root(installed)
+        if active is not None:
+            yield active
     frozen_root = getattr(sys, "_MEIPASS", None)
     if frozen_root:
         bundled = Path(frozen_root) / "chatterbox_payload"
         if bundled.is_dir():
             yield bundled
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        installed = Path(appdata) / "Piper" / "Chatterbox"
-        if installed.is_dir():
+    if installed is not None and installed.is_dir():
+        # The generation store itself is not an engine root. Keep the old direct
+        # shared-payload location discoverable for installations made by prior versions.
+        if (installed / "manifest.json").is_file() or active is None:
             yield installed
 
 
