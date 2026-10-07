@@ -105,7 +105,8 @@ def test_spec_builds_one_folder_distribution() -> None:
     assert "a.binaries," in text
     assert "a.datas," in text
     assert 'name="PiperTray"' in text
-    assert "nano_payload_datas" in text
+    assert "chatterbox_payload_datas" in text
+    assert "inspect_chatterbox_installation" in text
     assert "kokoro" not in text.lower()
 
 
@@ -158,7 +159,7 @@ def test_windows_build_script_builds_python_extension_before_packaging() -> None
         encoding="utf-8"
     )
 
-    assert "python setup.py build_ext --inplace" in text
+    assert "$Python setup.py build_ext --inplace" in text
 
 
 def test_python_extension_cmake_quotes_external_include_path() -> None:
@@ -271,9 +272,9 @@ def test_current_user_docs_describe_three_engines_and_kokoro_migration() -> None
     readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").lower()
 
-    assert "offers three speech engines" in readme
-    assert "kokoro was removed" in readme
-    assert "piper is now selected" in readme
+    assert "offers piper for lightweight speech" in readme
+    assert "saved chatterbox multilingual v3 selections migrate to turbo" in readme
+    assert "saved kokoro selections migrate to piper" in readme
     assert "remove kokoro" in changelog
 
 
@@ -282,7 +283,8 @@ def test_installer_ships_entire_one_folder_tree() -> None:
     installer = (ROOT / "script" / "piper_tray_installer.iss").read_text(encoding="utf-8")
     assert '"dist/PiperTray/PiperTray.exe"' in builder
     assert "kokoro" not in builder.lower()
-    assert "nano_payload/manifest.json" in builder
+    assert "chatterbox_payload/manifest.json" in builder
+    assert "inspect_chatterbox_installation" in builder
     assert 'Source: "..\\dist\\PiperTray\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs' in installer
 
 

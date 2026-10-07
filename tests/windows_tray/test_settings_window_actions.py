@@ -108,6 +108,107 @@ def test_save_success_does_not_replace_editable_preview_text(monkeypatch):
     assert window.speed_value_var.get() == "+25%"
 
 
+def test_missing_model_disables_save_until_download_is_ready(monkeypatch):
+    import piper.windows_tray.model_download_ui as download_ui
+    from threading import Event
+
+    settings_window = install_fake_tk(
+        monkeypatch, [], real_model_download_panel=True
+    )
+    monkeypatch.setattr(download_ui, "tk", settings_window.tk)
+    monkeypatch.setattr(download_ui, "ttk", settings_window.ttk)
+    monkeypatch.setattr(download_ui, "engine_installed", lambda _engine: False)
+    download_started, release_download = Event(), Event()
+
+    def download(*_args):
+        download_started.set()
+        assert release_download.wait(2)
+        return "generation"
+
+    monkeypatch.setattr(download_ui, "download_engine", download)
+    apply_calls = []
+    window = settings_window.SettingsWindow(
+        parent=object(),
+        snapshot=make_snapshot(engine="Chatterbox Nano"),
+        on_apply=lambda *args: apply_calls.append(args) or SettingsApplyResult(True),
+        on_close=lambda: None,
+        on_speak_text=lambda _text: None,
+    )
+    panel = window.model_download_panel
+
+    def pump_until(predicate):
+        import time
+        deadline = time.monotonic() + 2
+        while not predicate():
+            assert time.monotonic() < deadline
+            callbacks, panel.parent.callbacks = (
+                getattr(panel.parent, "callbacks", []), []
+            )
+            for callback in callbacks:
+                callback()
+            time.sleep(0.001)
+
+    pump_until(lambda: panel.state == "missing")
+    assert window.save_button.cget("state") == "disabled"
+    assert window.save_close_button.cget("state") == "disabled"
+
+    window._apply()
+    assert apply_calls == []
+    assert "Download" in window.error_text("engine")
+
+    panel.download_button.invoke()
+    assert download_started.wait(1)
+    assert panel.state == "downloading"
+    assert window.save_button.cget("state") == "disabled"
+    assert window.save_close_button.cget("state") == "disabled"
+    window._apply()
+    assert apply_calls == []
+    release_download.set()
+    pump_until(lambda: panel.state == "ready")
+    assert window.save_button.cget("state") == "normal"
+    assert window.save_close_button.cget("state") == "normal"
+
+    window._apply()
+    drain_apply(window)
+    assert len(apply_calls) == 1
+
+
+def test_installed_chatterbox_keeps_normal_save_behavior(monkeypatch):
+    import piper.windows_tray.model_download_ui as download_ui
+
+    settings_window = install_fake_tk(
+        monkeypatch, [], real_model_download_panel=True
+    )
+    monkeypatch.setattr(download_ui, "tk", settings_window.tk)
+    monkeypatch.setattr(download_ui, "ttk", settings_window.ttk)
+    monkeypatch.setattr(download_ui, "engine_installed", lambda _engine: True)
+    apply_calls = []
+    window = settings_window.SettingsWindow(
+        parent=object(),
+        snapshot=make_snapshot(engine="Chatterbox Turbo (350M)"),
+        on_apply=lambda *args: apply_calls.append(args) or SettingsApplyResult(True),
+        on_close=lambda: None,
+        on_speak_text=lambda _text: None,
+    )
+    panel = window.model_download_panel
+
+    import time
+    deadline = time.monotonic() + 2
+    while panel.state != "ready":
+        assert time.monotonic() < deadline
+        callbacks, panel.parent.callbacks = (
+            getattr(panel.parent, "callbacks", []), []
+        )
+        for callback in callbacks:
+            callback()
+        time.sleep(0.001)
+
+    assert window.save_button.cget("state") == "normal"
+    window._apply()
+    drain_apply(window)
+    assert len(apply_calls) == 1
+
+
 def test_cancel_during_apply_signals_worker_and_closes_window(monkeypatch):
     started, release = Event(), Event()
     seen = []

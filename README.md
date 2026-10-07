@@ -1,94 +1,85 @@
 # Piper
 
-Piper is a Windows desktop app that makes it easy to listen to text while you work. It stays in the system tray, ready to read selected text aloud with a keyboard shortcut.
+Piper is a Windows desktop app that reads selected text aloud from the system tray. It offers Piper for lightweight speech, Chatterbox Nano for expressive English speech on CPU or NVIDIA GPU, and Chatterbox Turbo (350M) for fast English speech on an NVIDIA CUDA GPU.
 
-The app offers three speech engines for different needs. Piper is exceptionally lightweight and quick, making it a good choice for everyday speech with minimal overhead. Chatterbox Nano adds an expressive English default voice that runs locally on your CPU or NVIDIA GPU. Chatterbox Turbo (350M) provides fast English speech and requires an NVIDIA GPU with CUDA.
+On startup, choose an engine before its model loads. Closing the choice window exits the app. Piper starts as the fallback while a selected Chatterbox engine loads in the background. If loading fails, Piper remains available; a failed engine change keeps the working engine.
 
-On startup, click **Piper**, **Chatterbox Nano**, or **Chatterbox Turbo** before any model loads. Closing the choice window exits the app. When starting a Chatterbox engine, Piper loads first as the fallback while the selected engine starts in the background.
+Settings lets you change engines and voices, adjust speech speed and pitch, stop playback, and replay the last selection. These controls work with both Chatterbox engines. Enable Codex monitoring to read completed Codex responses automatically. Normal speech generation uses local models and works offline.
 
-Chatterbox Multilingual V3 has been replaced by Turbo. Saved Multilingual selections migrate to Turbo while preserving your other preferences. Turbo speaks English only; the old language, expressiveness, and guidance controls are removed because Turbo does not support them.
+Saved Chatterbox Multilingual V3 selections migrate to Turbo, preserving other preferences. Turbo speaks English only. Saved Kokoro selections migrate to Piper.
 
-Kokoro was removed. If Kokoro was selected in a previous installation, Piper is now selected after upgrade and your other saved preferences are preserved.
+## Install the app
 
-Switch between engines and voices to find the sound that suits you. You can also adjust speech speed and pitch, stop playback at any time, and replay the last selection from the tray.
+Download the installer or portable app from [Piper 1.10.0](https://github.com/mjg1911/TTS/releases/tag/v1.10.0). Piper and the default Alba voice are included and ready for offline speech.
 
-Piper can also read completed Codex responses aloud. Enable Codex monitoring and new answers are spoken using your selected voice, so you can keep up with responses while your attention is elsewhere.
+Select **Chatterbox Nano** or **Chatterbox Turbo** at startup or in Settings. If it is missing, click **Download**. The app downloads verified model files from this repository's GitHub release and stores them under `%APPDATA%\Piper\Chatterbox`. The shared worker is downloaded once; adding the other model preserves the first. Keep the app open until verification and installation finish. Failed downloads can be retried. Once installed, the models work without an internet connection and remain installed across app updates.
 
-Speech is generated locally using voice models on your computer. Choose your engine in Settings; speed, pitch, Stop, replay, and automatic reading also work with both Chatterbox engines.
+Nano supports CPU or NVIDIA CUDA; Turbo requires an NVIDIA CUDA GPU. These optional downloads are large because the worker includes its local inference dependencies.
 
-## Chatterbox Turbo setup
+## Build the downloadable release
 
-Select **Chatterbox Turbo (350M)** in Settings. This engine runs exclusively on an NVIDIA CUDA GPU. If CUDA is unavailable or loading fails, the app shows an error and keeps the working engine.
-
-Reference clip import and **Use saved voice** work as for Nano; saved reference clips are shared between both Chatterbox engines. The upstream audio watermark is preserved.
-
-Build a separate worker and stage its pinned Turbo models from the repository root:
+Stage both pinned models with the shared worker as described below, then create the GitHub assets and bundled catalog:
 
 ```powershell
-& .\script\build_turbo_worker.ps1
-& .\script\stage_turbo_payload.ps1
+python script/prepare_model_release.py --payload-dir build/chatterbox-payload --output build/release-assets --catalog src/piper/model_catalog.json --release v1.10.0
+& .\script\build_windows_tray.ps1 -ReleaseMode -DefaultVoiceDir '.\Voices'
+& .\script\build_windows_installer.ps1 -ReleaseMode -ReleaseVersion '1.10.0'
 ```
 
-Setup downloads the pinned model files plus the CUDA worker runtime. Normal speech is offline. To use existing weights, set `PIPER_TURBO_MODEL_DIR`. Staging needs a fresh output directory; pass `-OutputDir` when rebuilding.
+The voice directory must contain `en_GB-alba-medium.onnx` and `en_GB-alba-medium.onnx.json`. Release mode bundles these and the catalog, and ignores optional-payload environment settings. Upload every generated archive part to the catalog's exact release tag before publishing the app. `-Python` selects a prepared Python environment; `-SkipBootstrap` skips dependency/native-extension preparation when it has already been completed. The installer builder accepts `-Compiler` for another Inno Setup compiler location. Developer builds can still bundle a shared payload using the setup below.
 
-For the source app, stage to its installation directory:
+## Shared Chatterbox setup
+
+Nano and Turbo share one worker program and one dependency installation. The payload contains `worker/ChatterboxWorker.exe` once, separate `models/nano` and `models/turbo` directories, and an integrity manifest. Switching engines starts the same worker in the selected mode; it does not require a second worker installation. You still need the selected engine's model files.
+
+Install Python 3.11 and Git, then build the shared worker from the repository root:
 
 ```powershell
-& .\script\stage_turbo_payload.ps1 -OutputDir "$env:APPDATA\Piper\ChatterboxTurbo"
+& .\script\build_chatterbox_worker.ps1
 ```
 
-To bundle the payload with the Windows app and installer:
+Stage existing official model files into a fresh output directory:
 
 ```powershell
-$env:PIPER_TURBO_PAYLOAD_DIR = (Resolve-Path '.\build\turbo-payload').Path
+& .\script\stage_chatterbox_payload.ps1 -NanoModelDir 'C:\models\chatterbox-nano' -TurboModelDir 'C:\models\chatterbox-turbo'
+```
+
+You can omit either model directory to package just one engine. Model files must match the pinned revisions and hashes in `piper.nano_assets` and `piper.turbo_assets`. The build installs CUDA-enabled Torch, which also supports Nano CPU inference. Build dependency installation needs internet access; normal speech remains offline.
+
+To download both pinned model sets during setup, use `-DownloadNano -DownloadTurbo` instead of model directory arguments:
+
+```powershell
+& .\script\stage_chatterbox_payload.ps1 -DownloadNano -DownloadTurbo
+```
+
+Either download switch can be used alone. Use a directory or a download switch for each engine, and leave its model-directory environment setting unset when downloading.
+
+For the source app, stage both models into its shared installation directory:
+
+```powershell
+& .\script\stage_chatterbox_payload.ps1 -NanoModelDir 'C:\models\chatterbox-nano' -TurboModelDir 'C:\models\chatterbox-turbo' -OutputDir "$env:APPDATA\Piper\Chatterbox"
+```
+
+Staging requires a fresh output directory. Use `-OutputDir` to select another directory when rebuilding. Keep reference clips outside the verified payload. Existing per-engine installations remain readable for compatibility, but new builds collect only the shared payload. Replace old staged-payload environment settings with `PIPER_CHATTERBOX_PAYLOAD_DIR`.
+
+To include both models in the Windows app and installer:
+
+```powershell
+$env:PIPER_CHATTERBOX_PAYLOAD_DIR = (Resolve-Path '.\build\chatterbox-payload').Path
+$env:PIPER_REQUIRE_NANO_PAYLOAD = '1'
 $env:PIPER_REQUIRE_TURBO_PAYLOAD = '1'
 & .\script\build_windows_tray.ps1
 & .\script\build_windows_installer.ps1
 ```
 
-`PIPER_TURBO_WORKER_PYTHON` selects a dedicated Python environment for worker builds or source-worker development. Leave it unset for the packaged worker. Install Python 3.11, Git, and a compatible NVIDIA driver before building.
+Alternatively, set `PIPER_NANO_MODEL_DIR` and/or `PIPER_TURBO_MODEL_DIR`; the tray build builds the worker once and stages the selected models together. `PIPER_CHATTERBOX_WORKER_PYTHON` selects the shared build environment or a source-worker Python environment with the pinned worker dependencies. Leave it unset to use the packaged executable at runtime. The old per-engine build commands forward to the shared builder.
 
-## Chatterbox Nano setup
+## Nano device and custom voice
 
-Nano offers its built-in default English voice or a custom voice from a reference clip. It runs in a separate worker so its dependencies do not affect Piper. Normal speech uses local files and does not download models. If Nano is unavailable, the app keeps the current working engine; a failed Nano startup recovers to Piper.
+Nano defaults to CPU. Select GPU under Device in Settings and save to use CUDA when available. If CUDA is unavailable, Nano uses CPU and displays “CUDA unavailable; using CPU.” The saved GPU preference is retained for the next session. NVIDIA hardware and a compatible driver are required for GPU inference.
 
-To add a custom voice, select Chatterbox Nano in Settings and click **Import reference clip**. Choose a PCM WAV recording longer than five seconds, preferably clear speech from one speaker. Piper validates the recording and keeps its own local copy, so moving the original file will not break the voice. Enable **Use custom voice** and click **Save changes** to apply it. Turn the toggle off and save to return to the bundled voice; the imported clip stays available. Both the clip selection and toggle are remembered between sessions. If a clip cannot be imported or prepared, the existing working voice is preserved.
+To add a custom voice, click **Import reference clip** and choose a PCM WAV recording longer than five seconds, preferably clear speech from one speaker. Piper validates the recording and keeps a local copy. Enable the saved/custom voice option and save to apply it. Disable the option and save to return to the default voice; the imported clip remains available. Both the clip and toggle are remembered between sessions. If a clip cannot be imported or prepared, the working voice is preserved.
 
-Custom voices require the updated Nano worker. When updating an existing installation, rebuild and stage the worker from this branch using the setup commands below.
+## Turbo behavior
 
-When Chatterbox Nano is selected in Settings, choose CPU or GPU under Device and
-click Save changes. CPU is the default for compatibility. GPU uses CUDA on an available
-NVIDIA GPU. The choice is saved between sessions. If CUDA is unavailable in the
-worker, speech runs on CPU and the app displays “CUDA unavailable; using CPU.”
-The saved GPU preference is retained for the next session.
-
-The worker build installs CUDA-enabled Torch, which also supports CPU inference.
-Existing workers built with CPU-only Torch must be rebuilt and their payload
-restaged to enable GPU inference. NVIDIA hardware and a compatible driver are
-required; the app checks CUDA availability inside the worker environment.
-
-For Windows builds, install Python 3.11 and Git, then build the dedicated worker and stage the pinned official models. Run these commands from the repository root:
-
-```powershell
-& .\script\build_nano_worker.ps1
-& .\script\stage_nano_payload.ps1
-```
-
-These setup steps need an internet connection. The staging script downloads the required model files from the pinned revision of `ResembleAI/chatterbox-nano`. To use existing model files, set `PIPER_NANO_MODEL_DIR` to their directory. The payload contains approximately 2 GB of model files plus the worker runtime. Staging requires a fresh output directory; use `-OutputDir` to choose another directory when rebuilding.
-
-To run the source app, stage into the app's installation directory:
-
-```powershell
-& .\script\stage_nano_payload.ps1 -OutputDir "$env:APPDATA\Piper\ChatterboxNano"
-```
-
-To include the staged payload in a Windows app build:
-
-```powershell
-$env:PIPER_NANO_PAYLOAD_DIR = (Resolve-Path '.\build\nano-payload').Path
-$env:PIPER_REQUIRE_NANO_PAYLOAD = '1'
-& .\script\build_windows_tray.ps1
-& .\script\build_windows_installer.ps1
-```
-
-Alternatively, setting `PIPER_NANO_MODEL_DIR` makes the tray build build and stage the Nano worker automatically. `PIPER_NANO_WORKER_PYTHON` selects a dedicated worker Python environment for build scripts and optional source-worker development; leave it unset when testing the packaged worker. Nano preserves the upstream audio watermark. Voice cloning is outside this integration.
+Turbo requires an NVIDIA CUDA GPU and does not fall back to CPU. If CUDA is unavailable or loading fails, the app shows an error and keeps the working engine. Saved reference clips are shared with Nano. Turbo's delivery-mode selection continues to apply its selected delivery tag during generation. Both engines preserve the upstream audio watermark.

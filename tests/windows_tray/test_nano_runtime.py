@@ -588,12 +588,14 @@ def test_worker_rejects_changed_manifest_identity(tmp_path):
 def test_staging_scripts_pin_official_source_and_model():
     assets, _, _ = modules()
     root = Path(__file__).resolve().parents[2]
-    lock = json.loads((root / 'script/nano_assets.lock.json').read_text())
+    lock = json.loads((root / 'script/chatterbox_assets.lock.json').read_text())
+    nano_pin = lock['models']['nano']
     assert lock['source_revision'] == assets.SOURCE_REVISION
-    assert lock['model_revision'] == assets.MODEL_REVISION
-    assert lock['model_files'] == assets.MODEL_FILE_SHA256
-    assert set(lock['model_files']) == set(assets.REQUIRED_MODEL_FILES)
-    assert assets.SOURCE_REVISION in (root / 'requirements/nano-worker.in').read_text()
+    assert nano_pin['model_revision'] == assets.MODEL_REVISION
+    assert nano_pin['model_repo'] == assets.MODEL_REPO
+    assert nano_pin['model_files'] == assets.MODEL_FILE_SHA256
+    assert set(nano_pin['model_files']) == set(assets.REQUIRED_MODEL_FILES)
+    assert assets.SOURCE_REVISION in (root / 'requirements/chatterbox-worker.in').read_text()
 
 
 def test_staging_rejects_model_hash_mismatch_before_creating_output(tmp_path, monkeypatch):
@@ -603,17 +605,17 @@ def test_staging_rejects_model_hash_mismatch_before_creating_output(tmp_path, mo
     root = Path(__file__).resolve().parents[2]
     worker_dir = tmp_path / 'worker'
     worker_dir.mkdir()
-    (worker_dir / 'NanoWorker.exe').write_bytes(b'worker')
+    (worker_dir / 'ChatterboxWorker.exe').write_bytes(b'worker')
     model_dir = tmp_path / 'model'
     model_dir.mkdir()
     for name in assets.REQUIRED_MODEL_FILES:
         (model_dir / name).write_bytes(b'wrong model')
     output = tmp_path / 'payload'
     monkeypatch.setattr(sys, 'argv', [
-        'stage_nano_payload.py', '--worker-dir', str(worker_dir),
-        '--model-dir', str(model_dir), '--output', str(output),
+        'stage_chatterbox_payload.py', '--worker-dir', str(worker_dir),
+        '--nano-model-dir', str(model_dir), '--output', str(output),
     ])
-    stage = runpy.run_path(str(root / 'script/stage_nano_payload.py'))
+    stage = runpy.run_path(str(root / 'script/stage_chatterbox_payload.py'))
     with pytest.raises(ValueError, match='pinned model'):
         stage['main']()
     assert not output.exists()
@@ -628,7 +630,7 @@ def test_staging_discards_partial_output_if_model_changes_during_copy(tmp_path, 
     root = Path(__file__).resolve().parents[2]
     worker_dir = tmp_path / 'worker'
     worker_dir.mkdir()
-    (worker_dir / 'NanoWorker.exe').write_bytes(b'asset')
+    (worker_dir / 'ChatterboxWorker.exe').write_bytes(b'asset')
     model_dir = tmp_path / 'model'
     model_dir.mkdir()
     for name in assets.REQUIRED_MODEL_FILES:
@@ -636,8 +638,8 @@ def test_staging_discards_partial_output_if_model_changes_during_copy(tmp_path, 
     changed_file = model_dir / assets.REQUIRED_MODEL_FILES[0]
     output = tmp_path / 'payload'
     monkeypatch.setattr(sys, 'argv', [
-        'stage_nano_payload.py', '--worker-dir', str(worker_dir),
-        '--model-dir', str(model_dir), '--output', str(output),
+        'stage_chatterbox_payload.py', '--worker-dir', str(worker_dir),
+        '--nano-model-dir', str(model_dir), '--output', str(output),
     ])
     original_copy2 = shutil.copy2
     def change_before_copy(source, destination, *args, **kwargs):
@@ -645,7 +647,7 @@ def test_staging_discards_partial_output_if_model_changes_during_copy(tmp_path, 
             changed_file.write_bytes(b'changed during staging')
         return original_copy2(source, destination, *args, **kwargs)
     monkeypatch.setattr(shutil, 'copy2', change_before_copy)
-    stage = runpy.run_path(str(root / 'script/stage_nano_payload.py'))
+    stage = runpy.run_path(str(root / 'script/stage_chatterbox_payload.py'))
     with pytest.raises(ValueError, match='pinned model'):
         stage['main']()
     assert not output.exists()
@@ -654,20 +656,20 @@ def test_staging_discards_partial_output_if_model_changes_during_copy(tmp_path, 
 
 def test_nano_worker_keeps_librosa_source_for_numba_cache():
     root = Path(__file__).resolve().parents[2]
-    spec = (root / 'script/nano_worker.spec').read_text()
-    assert "module_collection_mode={'librosa': 'py'}" in spec
+    spec = (root / 'script/chatterbox_worker.spec').read_text()
+    assert 'module_collection_mode={"librosa": "py"}' in spec
 
 
 def test_nano_worker_bundles_requests_code_and_distribution_metadata():
     root = Path(__file__).resolve().parents[2]
-    spec = (root / 'script/nano_worker.spec').read_text()
-    assert "'requests')" in spec.split('collect_all(package)', 1)[0]
-    assert "'requests')" in spec.split('copy_metadata(package)', 1)[0]
+    spec = (root / 'script/chatterbox_worker.spec').read_text()
+    assert '"requests",' in spec.split('collect_all(package)', 1)[0]
+    assert '"requests",' in spec.split('copy_metadata(package)', 1)[0]
 
 
 def test_nano_worker_build_installs_cuda_enabled_torch():
     root = Path(__file__).resolve().parents[2]
-    script = (root / 'script/build_nano_worker.ps1').read_text()
+    script = (root / 'script/build_chatterbox_worker.ps1').read_text()
     assert 'https://download.pytorch.org/whl/cu124' in script
     assert '/whl/cpu' not in script
     assert 'torch==2.6.0+cu124' in script

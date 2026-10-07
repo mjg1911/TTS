@@ -6,7 +6,7 @@ from pathlib import Path
 
 from piper.turbo_assets import ENGINE, inspect_turbo_installation
 from piper.turbo_options import validate_delivery_mode
-from piper.nano_worker.main import _configure_numba_cache
+from piper.nano_worker.main import _configure_numba_cache, _validate_model_dir
 from piper.windows_tray.worker_protocol import (
     encode_audio,
     read_frame,
@@ -17,7 +17,7 @@ from piper.windows_tray.worker_protocol import (
 from .runtime import generate_chunks, load_model
 
 
-def serve(root, incoming, outgoing):
+def serve(root, incoming, outgoing, *, model_dir=None):
     write_frame(outgoing, {'type': 'hello', 'engine': ENGINE, 'protocol_version': 1})
     try:
         request = read_frame(incoming)
@@ -33,6 +33,7 @@ def serve(root, incoming, outgoing):
         installation = inspect_turbo_installation(root)
         if request['manifest_sha256'] != installation.manifest_sha256:
             raise ValueError('Turbo manifest identity changed')
+        _validate_model_dir(installation, model_dir, engine='Turbo')
         _configure_numba_cache(installation.root)
         with contextlib.redirect_stdout(sys.stderr):
             model = load_model(installation.model_dir, reference_clip=reference_clip)

@@ -1,5 +1,12 @@
 # Changelog
 
+## Piper Tray 1.10.0
+
+- Bundle Piper and the default Alba voice in the installer and portable app.
+- Add explicit, progress-reporting downloads for missing Chatterbox Nano and Turbo models in startup and Settings.
+- Host verified model and shared-worker archive parts on this repository's GitHub release; store installed models locally for offline use.
+- Reuse the shared worker when adding the other model, preserve existing installations, and allow failed downloads to be retried.
+
 ## 1.7.0
 
 - Remove Kokoro and migrate saved Kokoro selections to Piper while preserving other preferences

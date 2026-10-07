@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Sequence
 import sys
 from typing import Optional
+from pathlib import Path
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -13,6 +14,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="Enable DEBUG logging and mirror tray logs to the console",
     )
+    parser.add_argument("--offline-smoke-test", type=Path, help=argparse.SUPPRESS)
     return parser.parse_args(list(argv))
 
 
@@ -22,6 +24,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.offline_smoke_test is not None:
+        from .app import run_offline_smoke_test
+        return run_offline_smoke_test(args.offline_smoke_test)
 
     from .app import run_app
 

@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum, auto
 import logging
+from queue import Empty, Full, Queue
 import threading
 import time
 from typing import Optional
@@ -20,6 +21,244 @@ from .settings import DEFAULT_SENTENCE_PAUSE_MS
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _SentenceAudio:
+    pcm: bytes
+    owns_lookahead_slot: bool
+
+
+@dataclass(frozen=True)
+class _SentenceFailure:
+    error: Exception
+
+
+_END_OF_SENTENCES = object()
+
+
+class _ProducerCancelView:
+    """Expose request cancellation and stream shutdown to backend iterators."""
+
+    def __init__(self, request_cancel: threading.Event, producer_stop: threading.Event):
+        self._request_cancel = request_cancel
+        self._producer_stop = producer_stop
+
+    def is_set(self) -> bool:
+        return self._request_cancel.is_set() or self._producer_stop.is_set()
+
+
+class _BackendSentenceStream(Iterator[bytes]):
+    """Synthesize non-Piper sentences ahead of the playback consumer."""
+
+    _WAIT_SECONDS = 0.05
+
+    def __init__(self, backend, text: str, cancel_event: threading.Event) -> None:
+        self._backend = backend
+        self._sentences = split_speech_sentences(text) or (text,)
+        self._request_cancel = cancel_event
+        self._stop_event = threading.Event()
+        self._backend_cancel = _ProducerCancelView(cancel_event, self._stop_event)
+        self._queue: Queue[object] = Queue(maxsize=1)
+        self._lookahead_slot = threading.Semaphore(1)
+        self._first_sentence_consumed = threading.Event()
+        self._timing_lock = threading.Lock()
+        self._synthesis_seconds = 0.0
+        self._active_iterator = None
+        self._started = False
+        self._closed = False
+
+        started_at = time.monotonic()
+        try:
+            self._first_result = backend.synthesize(
+                self._sentences[0], self._backend_cancel
+            )
+        finally:
+            self._add_synthesis_time(time.monotonic() - started_at)
+        self.sample_rate = self._first_result.sample_rate
+        self._producer = threading.Thread(
+            target=self._produce,
+            name="piper-sentence-producer",
+            daemon=True,
+        )
+
+    @property
+    def synthesis_seconds(self) -> float:
+        with self._timing_lock:
+            return self._synthesis_seconds
+
+    def _add_synthesis_time(self, seconds: float) -> None:
+        with self._timing_lock:
+            self._synthesis_seconds += seconds
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._producer.start()
+        self._started = True
+
+    def __iter__(self) -> _BackendSentenceStream:
+        return self
+
+    def __next__(self) -> bytes:
+        if not self._started:
+            raise RuntimeError("sentence stream has not been started")
+        while not self._stop_event.is_set() and not self._request_cancel.is_set():
+            try:
+                item = self._queue.get(timeout=self._WAIT_SECONDS)
+            except Empty:
+                continue
+            if item is _END_OF_SENTENCES:
+                raise StopIteration
+            if isinstance(item, _SentenceFailure):
+                raise item.error
+            if not isinstance(item, _SentenceAudio):
+                raise RuntimeError("invalid sentence stream item")
+            if item.owns_lookahead_slot:
+                self._lookahead_slot.release()
+            else:
+                self._first_sentence_consumed.set()
+            return item.pcm
+        raise StopIteration
+
+    def _is_active(self) -> bool:
+        return not self._stop_event.is_set() and not self._request_cancel.is_set()
+
+    def _reserve_lookahead_slot(self) -> bool:
+        while self._is_active():
+            if self._lookahead_slot.acquire(timeout=self._WAIT_SECONDS):
+                return True
+        return False
+
+    def _wait_for_first_sentence(self) -> bool:
+        while self._is_active():
+            if self._first_sentence_consumed.wait(self._WAIT_SECONDS):
+                return True
+        return False
+
+    def _put_while_active(self, item: object) -> bool:
+        while self._is_active():
+            try:
+                self._queue.put(item, timeout=self._WAIT_SECONDS)
+                return True
+            except Full:
+                continue
+        return False
+
+    @staticmethod
+    def _close_iterator(iterator) -> None:
+        close = getattr(iterator, "close", None)
+        if callable(close):
+            close()
+
+    def _collect_audio(self, result) -> bytes:
+        iterator = iter(result.chunks)
+        self._active_iterator = iterator
+        audio = bytearray()
+        try:
+            while self._is_active():
+                try:
+                    chunk = next(iterator)
+                except StopIteration:
+                    break
+                if not self._is_active():
+                    break
+                audio.extend(chunk)
+            return bytes(audio)
+        finally:
+            self._active_iterator = None
+            self._close_iterator(iterator)
+
+    def _release_unqueued_slot(self, owns_slot: bool) -> bool:
+        if owns_slot:
+            self._lookahead_slot.release()
+        return False
+
+    def _produce(self) -> None:
+        owns_slot = False
+        failure = None
+        try:
+            first_started_at = time.monotonic()
+            try:
+                first_audio = self._collect_audio(self._first_result)
+            finally:
+                self._add_synthesis_time(time.monotonic() - first_started_at)
+            if first_audio and self._is_active():
+                if not self._put_while_active(_SentenceAudio(first_audio, False)):
+                    return
+            else:
+                self._first_sentence_consumed.set()
+
+            for sentence in self._sentences[1:]:
+                if not self._wait_for_first_sentence():
+                    break
+                if not self._reserve_lookahead_slot():
+                    break
+                owns_slot = True
+                if not self._is_active():
+                    break
+                started_at = time.monotonic()
+                try:
+                    result = self._backend.synthesize(sentence, self._backend_cancel)
+                    if result.sample_rate != self.sample_rate:
+                        iterator = iter(result.chunks)
+                        try:
+                            self._close_iterator(iterator)
+                        except Exception:
+                            pass
+                        raise RuntimeError(
+                            "Speech backend changed sample rate during one request"
+                        )
+                    sentence_audio = self._collect_audio(result)
+                finally:
+                    self._add_synthesis_time(time.monotonic() - started_at)
+
+                if not self._is_active():
+                    break
+                if not sentence_audio:
+                    owns_slot = self._release_unqueued_slot(owns_slot)
+                    continue
+                if self._put_while_active(_SentenceAudio(sentence_audio, True)):
+                    owns_slot = False
+                else:
+                    break
+        except Exception as caught:
+            failure = caught
+        finally:
+            if owns_slot:
+                self._lookahead_slot.release()
+            active_iterator = self._active_iterator
+            if active_iterator is not None:
+                try:
+                    self._close_iterator(active_iterator)
+                except Exception as caught:
+                    if failure is None:
+                        failure = caught
+
+            if failure is not None and self._is_active():
+                self._put_while_active(_SentenceFailure(failure))
+            elif self._is_active():
+                self._put_while_active(_END_OF_SENTENCES)
+
+    def _discard_queued_audio(self) -> None:
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except Empty:
+                return
+            if isinstance(item, _SentenceAudio) and item.owns_lookahead_slot:
+                self._lookahead_slot.release()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stop_event.set()
+        if self._started:
+            self._producer.join()
+        else:
+            self._close_iterator(iter(self._first_result.chunks))
+        self._discard_queued_audio()
 
 
 class SpeechEventKind(Enum):
@@ -446,27 +685,6 @@ class SpeechWorker:
                     return
                 yield chunk.audio_int16_bytes
 
-    @staticmethod
-    def _streamed_backend_audio(backend, text, cancel_event):
-        sentences = split_speech_sentences(text) or (text,)
-        first_result = backend.synthesize(sentences[0], cancel_event)
-        sample_rate = first_result.sample_rate
-
-        def chunks():
-            result = first_result
-            for index, sentence in enumerate(sentences):
-                if index:
-                    if cancel_event.is_set():
-                        return
-                    result = backend.synthesize(sentence, cancel_event)
-                    if result.sample_rate != sample_rate:
-                        raise RuntimeError(
-                            "Speech backend changed sample rate during one request"
-                        )
-                yield from result.chunks
-
-        return sample_rate, chunks()
-
     def _speak(
         self,
         request: SpeechRequest,
@@ -487,6 +705,7 @@ class SpeechWorker:
         synthesis_seconds = 0.0
         release_backend = None
         audio_chunks = None
+        sentence_stream = None
         try:
             if request.backend_override is not None:
                 backend = request.backend_override
@@ -504,11 +723,20 @@ class SpeechWorker:
             sample_rate = backend.config.sample_rate if is_piper_voice else None
             sentence_streaming_enabled = False
             if not is_piper_voice:
-                sample_rate, audio_chunks = self._streamed_backend_audio(
-                    backend,
-                    request.text,
-                    cancel_event,
-                )
+                before_stream_init = time.monotonic()
+                try:
+                    sentence_stream = _BackendSentenceStream(
+                        backend,
+                        request.text,
+                        cancel_event,
+                    )
+                except Exception:
+                    # The constructor obtains the first result before a player
+                    # can be created, so include a failed initial request too.
+                    synthesis_seconds += time.monotonic() - before_stream_init
+                    raise
+                sample_rate = sentence_stream.sample_rate
+                audio_chunks = sentence_stream
             else:
                 sentence_streaming_enabled = (
                     self._piper_sentence_streaming_provider()
@@ -529,6 +757,9 @@ class SpeechWorker:
                         self._apply_pause_state(player, paused=True)
                 if cancelled:
                     player.stop()
+                elif sentence_stream is not None:
+                    phase = "synthesis"
+                    sentence_stream.start()
 
                 played_piper_sentence = False
                 phase = "synthesis"
@@ -541,13 +772,16 @@ class SpeechWorker:
                     try:
                         chunk = next(audio_chunks)
                     except StopIteration:
-                        synthesis_seconds += time.monotonic() - before_next
+                        if sentence_stream is None:
+                            synthesis_seconds += time.monotonic() - before_next
                         break
                     except Exception:
-                        synthesis_seconds += time.monotonic() - before_next
+                        if sentence_stream is None:
+                            synthesis_seconds += time.monotonic() - before_next
                         raise
                     else:
-                        synthesis_seconds += time.monotonic() - before_next
+                        if sentence_stream is None:
+                            synthesis_seconds += time.monotonic() - before_next
                     if cancel_event.is_set():
                         terminal_kind = SpeechEventKind.CANCELLED
                         break
@@ -598,13 +832,36 @@ class SpeechWorker:
                     else "Speech synthesis failed."
                 )
         finally:
-            # Close abandoned streams before releasing the backend lease, so
-            # Nano starts draining cancelled audio before another request runs.
-            close_chunks = getattr(audio_chunks, 'close', None)
-            if close_chunks is not None:
-                close_chunks()
-            if release_backend is not None:
-                release_backend()
+            cleanup_error = None
+            try:
+                if sentence_stream is not None:
+                    sentence_stream.close()
+                    synthesis_seconds += sentence_stream.synthesis_seconds
+                else:
+                    close_chunks = getattr(audio_chunks, "close", None)
+                    if callable(close_chunks):
+                        close_chunks()
+            except Exception as caught:
+                cleanup_error = caught
+                if sentence_stream is not None:
+                    synthesis_seconds += sentence_stream.synthesis_seconds
+            finally:
+                if release_backend is not None:
+                    try:
+                        release_backend()
+                    except Exception as caught:
+                        if cleanup_error is None:
+                            cleanup_error = caught
+
+            if (
+                cleanup_error is not None
+                and failure is None
+                and not cancel_event.is_set()
+            ):
+                terminal_kind = SpeechEventKind.FAILED
+                failure = cleanup_error
+                failure_phase = "synthesis"
+                error = "Speech synthesis failed."
 
         with self._decision_boundary:
             if cancel_event.is_set():

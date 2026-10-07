@@ -18,12 +18,32 @@ class NanoSynthesisResult:
     chunks: object
 
 
-def launch_nano_worker(installation, *, python_env='PIPER_NANO_WORKER_PYTHON', module='piper.nano_worker.main'):
-    python = os.environ.get(python_env)
+def launch_nano_worker(
+    installation,
+    *,
+    python_env='PIPER_NANO_WORKER_PYTHON',
+    module='piper.nano_worker.main',
+    engine='nano',
+):
+    shared_worker = Path(installation.worker_executable).name == 'ChatterboxWorker.exe'
+    if shared_worker:
+        python = (
+            os.environ.get('PIPER_CHATTERBOX_WORKER_PYTHON')
+            or os.environ.get(python_env)
+        )
+        module = 'piper.chatterbox_worker.main'
+        worker_args = [
+            '--engine', engine,
+            '--root', str(installation.root),
+            '--model-dir', str(installation.model_dir),
+        ]
+    else:
+        python = os.environ.get(python_env)
+        worker_args = ['--root', str(installation.root)]
     command = ([python, '-m', module] if python else [str(installation.worker_executable)])
     environment = os.environ.copy()
     environment.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1')
-    process = subprocess.Popen(command + ['--root', str(installation.root)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0)
+    process = subprocess.Popen(command + worker_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0)
     if os.name == 'nt':
         job = None
         try:

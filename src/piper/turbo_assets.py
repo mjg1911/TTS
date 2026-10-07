@@ -63,6 +63,9 @@ def inspect_turbo_installation(root):
         raise ValueError('invalid Turbo manifest') from error
     if not isinstance(manifest, dict):
         raise ValueError('invalid Turbo manifest')
+    if manifest.get('manifest_version') == 2:
+        from piper.chatterbox_assets import inspect_chatterbox_installation
+        return inspect_chatterbox_installation(root, 'turbo')
     if manifest.get('manifest_version') != 1 or manifest.get('engine') != ENGINE:
         raise ValueError('unsupported Turbo manifest')
     if (manifest.get('source_revision') != SOURCE_REVISION

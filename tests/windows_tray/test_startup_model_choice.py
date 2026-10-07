@@ -76,7 +76,7 @@ def test_closing_model_choice_exits_without_loading_or_saving(monkeypatch):
 def test_startup_buttons_return_engine_or_cancel(monkeypatch, label, engine):
     import threading
     from piper.windows_tray import ui as ui_module
-    from tests.windows_tray.test_settings_window import FakeWidget
+    from tests.windows_tray.test_settings_window import FakeVar, FakeWidget
 
     class Window(FakeWidget):
         def resizable(self, *args):
@@ -98,6 +98,24 @@ def test_startup_buttons_return_engine_or_cancel(monkeypatch, label, engine):
 
         def invoke(self):
             self.kwargs["command"]()
+
+    class ReadyPanel:
+        def __init__(self, parent, **kwargs):
+            self.frame = FakeWidget(parent)
+            self.selected_engine = None
+            self.is_ready = False
+            self.closed = False
+            self.status_var = FakeVar()
+            self.on_state_change = kwargs["on_state_change"]
+
+        def set_engine(self, engine):
+            self.selected_engine = engine
+            self.is_ready = True
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(ui_module, "ModelDownloadPanel", ReadyPanel)
 
     monkeypatch.setattr(ui_module, "tk", SimpleNamespace(Toplevel=Window))
     monkeypatch.setattr(ui_module, "ttk", SimpleNamespace(
@@ -127,3 +145,95 @@ def test_startup_buttons_return_engine_or_cancel(monkeypatch, label, engine):
     ui.root.wait_window = interact
     assert ui.choose_startup_engine("Chatterbox Nano") == engine
     assert not windows[0].winfo_exists()
+
+
+def test_startup_missing_model_waits_for_download_and_explicit_start(monkeypatch):
+    import threading
+    from piper.windows_tray import ui as ui_module
+    from tests.windows_tray.test_settings_window import FakeVar, FakeWidget
+
+    class Window(FakeWidget):
+        def resizable(self, *args):
+            pass
+
+        def wait_visibility(self):
+            pass
+
+        def grab_set(self):
+            pass
+
+        def bind(self, sequence, callback):
+            self.bindings = getattr(self, "bindings", {})
+            self.bindings[sequence] = callback
+
+    class Button(FakeWidget):
+        def winfo_class(self):
+            return "TButton"
+
+        def invoke(self):
+            self.kwargs["command"]()
+
+    class DownloadButton(Button):
+        def winfo_class(self):
+            return "Frame"
+
+    panels = []
+
+    class MissingPanel:
+        def __init__(self, parent, **kwargs):
+            self.frame = FakeWidget(parent)
+            self.selected_engine = None
+            self.is_ready = False
+            self.closed = False
+            self.status_var = FakeVar()
+            self.on_state_change = kwargs["on_state_change"]
+            self.download_button = DownloadButton(
+                self.frame, text="Download", command=self.start_download
+            )
+            panels.append(self)
+
+        def set_engine(self, engine):
+            self.selected_engine = engine
+            self.is_ready = engine == "Piper"
+            self.on_state_change(engine, "checking", self.is_ready)
+
+        def start_download(self):
+            self.is_ready = True
+            self.on_state_change(self.selected_engine, "ready", True)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(ui_module, "ModelDownloadPanel", MissingPanel)
+    monkeypatch.setattr(ui_module, "tk", SimpleNamespace(Toplevel=Window))
+    monkeypatch.setattr(ui_module, "ttk", SimpleNamespace(
+        Frame=FakeWidget, Label=FakeWidget, Button=Button
+    ))
+    ui = ui_module.TkUi.__new__(ui_module.TkUi)
+    ui._thread_id = threading.get_ident()
+    ui.root = FakeWidget()
+    result = []
+
+    def interact(window):
+        body = window.winfo_children()[0]
+        buttons = [child for child in body.winfo_children()
+                   if child.winfo_class() == "TButton"]
+        nano = next(button for button in buttons
+                    if button.cget("text") == "Chatterbox Nano")
+        nano.invoke()
+        assert window.winfo_exists()
+        assert result == []
+        panel = panels[0]
+        panel.download_button.invoke()
+        assert window.winfo_exists()
+        assert result == []
+        assert panel.status_var.get() == (
+            "Chatterbox Nano is ready. Select it again to start."
+        )
+        nano.invoke()
+
+    ui.root.wait_window = interact
+    result.append(ui.choose_startup_engine("Chatterbox Nano"))
+
+    assert result == ["Chatterbox Nano"]
+    assert panels[0].closed
