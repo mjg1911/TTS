@@ -26,7 +26,9 @@ DOWNLOAD_TIMEOUT_SECONDS = 30
 _GENERATION_POINTER = "current.json"
 _INSTALL_LOCK = threading.Lock()
 _CACHE_LOCK = threading.Lock()
+_RECORD_LOCK = threading.Lock()
 _INSTALLATION_CACHE = {}
+_INSTALL_RECORD_NAME = "installed-engines.json"
 _ENGINE_DISPLAY_NAMES = {
     "nano": "Chatterbox Nano",
     "turbo": turbo_assets.ENGINE,
@@ -62,6 +64,64 @@ def _default_install_root() -> Path:
 def installation_root() -> Path:
     """Return the shared persistent payload root used by the tray app."""
     return _default_install_root()
+
+
+def _read_install_record(record_path: Path) -> set[str]:
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return set()
+    if not isinstance(record, dict) or record.get("version") != 1:
+        return set()
+    values = record.get("engines")
+    if not isinstance(values, list):
+        return set()
+    normalized = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        try:
+            normalized.add(_normalize_engine(value))
+        except ValueError:
+            continue
+    return normalized
+
+
+def recorded_engines(*, install_root: Optional[Path] = None) -> frozenset[str]:
+    """Return engine IDs saved after a successful check or installation.
+
+    Reading this record is deliberately cheap and does not inspect model files.
+    """
+    root = Path(install_root) if install_root is not None else _default_install_root()
+    with _RECORD_LOCK:
+        return frozenset(_read_install_record(root / _INSTALL_RECORD_NAME))
+
+
+def _record_installed_engine(engine: str, install_root: Optional[Path]) -> None:
+    """Persist a verified engine so later launches do not probe it again."""
+    normalized = _normalize_engine(engine)
+    root = Path(install_root) if install_root is not None else _default_install_root()
+    record_path = root / _INSTALL_RECORD_NAME
+    try:
+        with _RECORD_LOCK:
+            engines = _read_install_record(record_path)
+            if normalized in engines:
+                return
+            engines.add(normalized)
+            root.mkdir(parents=True, exist_ok=True)
+            temporary_path = root / f"{_INSTALL_RECORD_NAME}.{uuid.uuid4().hex}.tmp"
+            try:
+                temporary_path.write_text(
+                    json.dumps({"version": 1, "engines": sorted(engines)}, indent=2)
+                    + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(temporary_path, record_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+    except OSError:
+        # Installation remains usable if the optional UI cache cannot be saved.
+        return
 
 
 def active_generation_root(install_root: Optional[Path] = None) -> Optional[Path]:
@@ -233,7 +293,10 @@ def engine_installed(
     with _CACHE_LOCK:
         if key not in _INSTALLATION_CACHE:
             _INSTALLATION_CACHE[key] = _find_installation(normalized, install_root)
-        return _INSTALLATION_CACHE[key] is not None
+        installed = _INSTALLATION_CACHE[key] is not None
+    if installed:
+        _record_installed_engine(normalized, install_root)
+    return installed
 
 
 def _cached_installation(engine: str, install_root: Optional[Path]) -> Optional[Path]:
@@ -490,6 +553,7 @@ def download_engine(
     try:
         existing = _cached_installation(normalized, install_root)
         if existing is not None:
+            _record_installed_engine(normalized, root)
             return existing
 
         catalog = load_catalog(catalog_path)
@@ -548,6 +612,7 @@ def download_engine(
         invalidate_installation_cache(install_root=root)
         with _CACHE_LOCK:
             _INSTALLATION_CACHE[_cache_key(normalized, root)] = generation
+        _record_installed_engine(normalized, root)
         return generation
     except DownloadCancelled:
         raise
