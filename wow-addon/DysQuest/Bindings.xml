@@ -1,0 +1,5 @@
+<Bindings>
+    <Binding name="DYSQUEST_CLOSE_WINDOW" category="BINDING_HEADER_DYSQUEST">
+        DysQuest_CloseWindow()
+    </Binding>
+</Bindings>

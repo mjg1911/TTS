@@ -9,6 +9,14 @@ from typing import Literal, Optional
 
 from piper.turbo_options import ENGINE as TURBO_ENGINE
 from piper.turbo_options import validate_delivery_mode
+from piper.supertonic_options import (
+    validate_device as validate_supertonic_device,
+    DEFAULT_LANGUAGE as DEFAULT_SUPERTONIC_LANGUAGE,
+    DEFAULT_VOICE as DEFAULT_SUPERTONIC_VOICE,
+    ENGINE as SUPERTONIC_ENGINE,
+    validate_language as validate_supertonic_language,
+    validate_voice as validate_supertonic_voice,
+)
 
 from . import (
     DEFAULT_HOTKEY,
@@ -88,7 +96,12 @@ class TraySettings:
     chatterbox_reference_clip: str = ""
     turbo_delivery_mode: str = ""
     schema_version: int = SETTINGS_SCHEMA_VERSION
-    engine: Literal["Piper", "Chatterbox Nano", "Chatterbox Turbo (350M)"] = "Piper"
+    engine: Literal[
+        "Piper", "Chatterbox Nano", "Chatterbox Turbo (350M)", "Supertonic 3"
+    ] = "Piper"
+    supertonic_device: Literal["cpu", "cuda"] = "cuda"
+    supertonic_voice: str = DEFAULT_SUPERTONIC_VOICE
+    supertonic_language: str = DEFAULT_SUPERTONIC_LANGUAGE
     piper_voice: str = DEFAULT_VOICE
     hotkey: str = DEFAULT_HOTKEY
     stop_tts_hotkey: str = DEFAULT_STOP_TTS_HOTKEY
@@ -106,7 +119,7 @@ class TraySettings:
         self,
         schema_version: int = SETTINGS_SCHEMA_VERSION,
         engine: Literal[
-            "Piper", "Chatterbox Nano", "Chatterbox Turbo (350M)"
+            "Piper", "Chatterbox Nano", "Chatterbox Turbo (350M)", "Supertonic 3"
         ] = "Piper",
         piper_voice: str = DEFAULT_VOICE,
         hotkey: str = DEFAULT_HOTKEY,
@@ -127,6 +140,9 @@ class TraySettings:
         chatterbox_custom_voice_enabled: bool = False,
         chatterbox_reference_clip: str = "",
         turbo_delivery_mode: str = "",
+        supertonic_device: Literal["cpu", "cuda"] = "cuda",
+        supertonic_voice: str = DEFAULT_SUPERTONIC_VOICE,
+        supertonic_language: str = DEFAULT_SUPERTONIC_LANGUAGE,
         voice: Optional[str] = None,
     ) -> None:
         if voice is not None and piper_voice == DEFAULT_VOICE:
@@ -173,6 +189,13 @@ def _validated(data: object) -> TraySettings:
     turbo_delivery_mode = validate_delivery_mode(
         data.get("turbo_delivery_mode", "")
     )
+    supertonic_device = validate_supertonic_device(data.get("supertonic_device", "cuda"))
+    supertonic_voice = validate_supertonic_voice(
+        data.get("supertonic_voice", DEFAULT_SUPERTONIC_VOICE)
+    )
+    supertonic_language = validate_supertonic_language(
+        data.get("supertonic_language", DEFAULT_SUPERTONIC_LANGUAGE)
+    )
     if chatterbox_device not in ("cpu", "cuda"):
         raise ValueError("invalid Chatterbox device")
     piper_voice = data.get("piper_voice")
@@ -200,6 +223,7 @@ def _validated(data: object) -> TraySettings:
         "Piper",
         "Chatterbox Nano",
         TURBO_ENGINE,
+        SUPERTONIC_ENGINE,
     }:
         raise ValueError("invalid engine")
     if not isinstance(piper_voice, str) or not piper_voice.strip():
@@ -232,6 +256,9 @@ def _validated(data: object) -> TraySettings:
         chatterbox_custom_voice_enabled=chatterbox_custom_voice_enabled,
         chatterbox_reference_clip=chatterbox_reference_clip,
         turbo_delivery_mode=turbo_delivery_mode,
+        supertonic_device=supertonic_device,
+        supertonic_voice=supertonic_voice,
+        supertonic_language=supertonic_language,
         engine=engine,
         piper_voice=piper_voice.strip(),
         hotkey=hotkey.strip(),
