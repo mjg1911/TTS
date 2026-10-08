@@ -32,6 +32,12 @@ from .settings import (
 )
 from piper.turbo_options import ENGINE as TURBO_ENGINE
 from piper.turbo_options import validate_delivery_mode
+from piper.supertonic_options import (
+    ENGINE as SUPERTONIC_ENGINE,
+    validate_device,
+    validate_voice,
+    validate_language,
+)
 from .speech import SpeechEvent, SpeechEventKind, SpeechPurpose, SpeechRequest
 from .voice_manager import VoiceManager, VoiceSwitchEvent
 
@@ -131,6 +137,9 @@ class SettingsWindowSnapshot:
     chatterbox_custom_voice_enabled: bool
     chatterbox_reference_clip: str
     turbo_delivery_mode: str
+    supertonic_device: str
+    supertonic_voice: str
+    supertonic_language: str
     engine: str
     piper_voice_path: Optional[Path]
     piper_voice_reference: str
@@ -161,6 +170,9 @@ class SettingsWindowSnapshot:
         chatterbox_device_message: str = "",
         chatterbox_custom_voice_enabled: bool = False,
         chatterbox_reference_clip: str = "",
+        supertonic_device: str = "cuda",
+        supertonic_voice: str = "M1",
+        supertonic_language: str = "en",
         turbo_delivery_mode: str = "",
         voice_path: Optional[Path] = None,
     ) -> None:
@@ -172,6 +184,9 @@ class SettingsWindowSnapshot:
             "chatterbox_custom_voice_enabled": chatterbox_custom_voice_enabled,
             "chatterbox_reference_clip": chatterbox_reference_clip,
             "turbo_delivery_mode": turbo_delivery_mode,
+            "supertonic_device": supertonic_device,
+            "supertonic_voice": supertonic_voice,
+            "supertonic_language": supertonic_language,
             "engine": engine,
             "piper_voice_path": piper_voice_path,
             "piper_voice_reference": piper_voice_reference,
@@ -365,7 +380,8 @@ class Controller:
             )
             self._startup_engine = engine or (
                 settings_engine
-                if settings_engine in {"Chatterbox Nano", TURBO_ENGINE}
+                if settings_engine
+                in {"Chatterbox Nano", TURBO_ENGINE, SUPERTONIC_ENGINE}
                 else "Chatterbox Nano"
             )
             self.state.backend_startup_state = BackendStartupState.LOADING
@@ -431,8 +447,11 @@ class Controller:
                 and self.state.settings is not None
                 and self.state.settings.chatterbox_custom_voice_enabled
             ):
+                status_message = "The saved Chatterbox custom voice could not be loaded. Open Settings and import a readable WAV clip longer than 5 seconds."
+            elif self._startup_engine == SUPERTONIC_ENGINE:
                 status_message = (
-                    "The saved Chatterbox custom voice could not be loaded. Open Settings and import a readable WAV clip longer than 5 seconds."
+                    "Supertonic 3 is unavailable. Piper will continue to be used. "
+                    "Check the model installation and selected device. " + reason
                 )
             elif self._startup_engine == TURBO_ENGINE:
                 detail = " (%s)" % reason.strip() if reason and reason.strip() else ""
@@ -445,16 +464,11 @@ class Controller:
                 status_message = (
                     "Chatterbox Turbo is unavailable. Piper will continue to be used. "
                     "CUDA is required; check NVIDIA CUDA setup and the installed "
-                    "Turbo payload.%s%s"
-                    % (reference_help, detail)
+                    "Turbo payload.%s%s" % (reference_help, detail)
                 )
             else:
-                status_message = (
-                    "Chatterbox Nano is unavailable. Piper will continue to be used. Check the installed Nano payload."
-                )
-            self._show_status(
-                status_message
-            )
+                status_message = "Chatterbox Nano is unavailable. Piper will continue to be used. Check the installed Nano payload."
+            self._show_status(status_message)
 
     def configure_runtime(
         self,
@@ -588,7 +602,9 @@ class Controller:
                 command.kind is CommandKind.CAPTURE_REQUEST
                 and command.capture_is_startup_status is None
             ):
-                loading = self.state.backend_startup_state is BackendStartupState.LOADING
+                loading = (
+                    self.state.backend_startup_state is BackendStartupState.LOADING
+                )
                 command = replace(
                     command,
                     capture_is_startup_status=loading,
@@ -1259,13 +1275,18 @@ class Controller:
                 chatterbox_device=settings.chatterbox_device,
                 chatterbox_device_message=(
                     getattr(self._backend_manager.current(), "device_message", "")
-                    if settings.engine in {"Chatterbox Nano", TURBO_ENGINE} and self._backend_manager
+                    if settings.engine
+                    in {"Chatterbox Nano", TURBO_ENGINE, SUPERTONIC_ENGINE}
+                    and self._backend_manager
                     else ""
                 ),
                 chatterbox_custom_voice_enabled=(
                     settings.chatterbox_custom_voice_enabled
                 ),
                 chatterbox_reference_clip=settings.chatterbox_reference_clip,
+                supertonic_device=settings.supertonic_device,
+                supertonic_voice=settings.supertonic_voice,
+                supertonic_language=settings.supertonic_language,
                 turbo_delivery_mode=settings.turbo_delivery_mode,
                 engine=settings.engine,
                 piper_voice_path=self.state.voice_path,
@@ -1312,6 +1333,22 @@ class Controller:
             settings = self.state.settings
             return settings.turbo_delivery_mode if settings is not None else ""
 
+    def supertonic_preparation_device(self) -> str:
+        requested = getattr(self._nano_preparation_context, "supertonic_device", None)
+        if requested is not None:
+            return requested
+        with self._state_lock:
+            return self.state.settings.supertonic_device if self.state.settings else "cuda"
+
+    def supertonic_preparation_language(self) -> str:
+        requested = getattr(self._nano_preparation_context, "supertonic_language", None)
+        if requested is not None:
+            return requested
+        with self._state_lock:
+            return (
+                self.state.settings.supertonic_language if self.state.settings else "en"
+            )
+
     def cancel_nano_settings(self) -> None:
         self.nano_settings_cancel_event.set()
 
@@ -1322,7 +1359,9 @@ class Controller:
         restored = self._hotkeys is not None and self._hotkeys.resume_capture()
         if not restored:
             self._log_error("Global shortcut registrations could not be restored.")
-            self._show_status("Shortcuts could not be restored. Restart Piper to try again.")
+            self._show_status(
+                "Shortcuts could not be restored. Restart Piper to try again."
+            )
         return restored
 
     def apply_settings(
@@ -1340,6 +1379,9 @@ class Controller:
         chatterbox_custom_voice_enabled=None,
         chatterbox_reference_clip=None,
         turbo_delivery_mode=None,
+        supertonic_voice=None,
+        supertonic_language=None,
+        supertonic_device=None,
         stop_tts_hotkey=None,
         pause_resume_hotkey=None,
     ) -> SettingsApplyResult:
@@ -1348,22 +1390,49 @@ class Controller:
         # off-thread.
         candidate = None
         chatterbox_engines = {"Chatterbox Nano", TURBO_ENGINE}
+        worker_engines = chatterbox_engines | {SUPERTONIC_ENGINE}
         with self._state_lock:
             current = self.state.settings
+            try:
+                supertonic_device = validate_device(
+                    supertonic_device if supertonic_device is not None
+                    else getattr(current, "supertonic_device", "cuda")
+                )
+                supertonic_voice = validate_voice(
+                    supertonic_voice
+                    if supertonic_voice is not None
+                    else getattr(current, "supertonic_voice", "M1")
+                )
+                supertonic_language = validate_language(
+                    supertonic_language
+                    if supertonic_language is not None
+                    else getattr(current, "supertonic_language", "en")
+                )
+            except ValueError as error:
+                return SettingsApplyResult(False, (("engine", str(error)),))
+            supertonic_changed = engine == SUPERTONIC_ENGINE and (
+                current is None
+                or supertonic_voice != current.supertonic_voice
+                or supertonic_language != current.supertonic_language
+                or supertonic_device != current.supertonic_device
+            )
+            requested_voice = (
+                supertonic_voice if engine == SUPERTONIC_ENGINE else "default"
+            )
             custom_voice_enabled = (
                 current.chatterbox_custom_voice_enabled
                 if chatterbox_custom_voice_enabled is None and current is not None
-                else False
-                if chatterbox_custom_voice_enabled is None
-                else chatterbox_custom_voice_enabled
+                else (
+                    False
+                    if chatterbox_custom_voice_enabled is None
+                    else chatterbox_custom_voice_enabled
+                )
             )
             try:
                 turbo_delivery_mode = validate_delivery_mode(
                     current.turbo_delivery_mode
                     if turbo_delivery_mode is None and current is not None
-                    else ""
-                    if turbo_delivery_mode is None
-                    else turbo_delivery_mode
+                    else "" if turbo_delivery_mode is None else turbo_delivery_mode
                 )
             except ValueError:
                 return SettingsApplyResult(
@@ -1378,9 +1447,11 @@ class Controller:
             reference_clip = (
                 current.chatterbox_reference_clip
                 if chatterbox_reference_clip is None and current is not None
-                else ""
-                if chatterbox_reference_clip is None
-                else chatterbox_reference_clip
+                else (
+                    ""
+                    if chatterbox_reference_clip is None
+                    else chatterbox_reference_clip
+                )
             )
             try:
                 custom_voice_enabled = validate_chatterbox_custom_voice_enabled(
@@ -1392,16 +1463,20 @@ class Controller:
             stop_tts_hotkey = (
                 current.stop_tts_hotkey
                 if stop_tts_hotkey is None and current is not None
-                else DEFAULT_STOP_TTS_HOTKEY
-                if stop_tts_hotkey is None
-                else stop_tts_hotkey
+                else (
+                    DEFAULT_STOP_TTS_HOTKEY
+                    if stop_tts_hotkey is None
+                    else stop_tts_hotkey
+                )
             )
             pause_resume_hotkey = (
                 current.pause_resume_hotkey
                 if pause_resume_hotkey is None and current is not None
-                else DEFAULT_PAUSE_RESUME_HOTKEY
-                if pause_resume_hotkey is None
-                else pause_resume_hotkey
+                else (
+                    DEFAULT_PAUSE_RESUME_HOTKEY
+                    if pause_resume_hotkey is None
+                    else pause_resume_hotkey
+                )
             )
             device = (
                 chatterbox_device
@@ -1425,7 +1500,7 @@ class Controller:
             self._settings_apply_generation += 1
             apply_generation = self._settings_apply_generation
             self.nano_settings_cancel_event.set()
-        if engine in chatterbox_engines:
+        if engine in worker_engines:
             with self._state_lock:
                 if self.state.shutting_down:
                     return SettingsApplyResult(
@@ -1467,12 +1542,13 @@ class Controller:
                 or reference_clip != current.chatterbox_reference_clip
             )
         if (
-            engine in chatterbox_engines
+            engine in worker_engines
             and self._backend_manager is not None
             and (
-                self._backend_manager.current_identity() != (engine, "default")
+                self._backend_manager.current_identity() != (engine, requested_voice)
                 or device_changed
-                or custom_voice_changed
+                or (custom_voice_changed and engine in chatterbox_engines)
+                or supertonic_changed
             )
             and not self._validate_settings_scalars(
                 hotkey,
@@ -1494,9 +1570,16 @@ class Controller:
                 self._nano_preparation_context.delivery_mode = (
                     turbo_delivery_mode if engine == TURBO_ENGINE else ""
                 )
-                candidate = self._backend_manager.prepare(engine, "default")
+                self._nano_preparation_context.supertonic_device = supertonic_device
+                self._nano_preparation_context.supertonic_language = supertonic_language
+                candidate = self._backend_manager.prepare(engine, requested_voice)
             except BackendPreparationError as error:
-                if engine == TURBO_ENGINE:
+                if engine == SUPERTONIC_ENGINE:
+                    message = (
+                        "Supertonic 3 could not be prepared. Check the model installation and selected device. "
+                        + str(error)
+                    )
+                elif engine == TURBO_ENGINE:
                     reference_help = (
                         " Also check that the selected reference WAV is readable and "
                         "longer than 5 seconds."
@@ -1506,19 +1589,16 @@ class Controller:
                     message = (
                         "Chatterbox Turbo could not be prepared. CUDA is "
                         "required; check NVIDIA CUDA/GPU setup and the installed "
-                        "Turbo payload. %s%s"
-                        % (str(error).strip(), reference_help)
+                        "Turbo payload. %s%s" % (str(error).strip(), reference_help)
                     )
                 elif custom_voice_enabled:
-                    message = (
-                        "The custom voice could not be prepared. Check that the WAV clip is readable and longer than 5 seconds."
-                    )
+                    message = "The custom voice could not be prepared. Check that the WAV clip is readable and longer than 5 seconds."
                 else:
                     message = "Chatterbox Nano is not available."
-                return SettingsApplyResult(
-                    False, (("engine", message),)
-                )
+                return SettingsApplyResult(False, (("engine", message),))
             finally:
+                self._nano_preparation_context.supertonic_device = None
+                self._nano_preparation_context.supertonic_language = None
                 self._nano_preparation_context.cancel_event = None
                 self._nano_preparation_context.device = None
                 try:
@@ -1530,7 +1610,7 @@ class Controller:
                 except AttributeError:
                     pass
         try:
-            if engine in chatterbox_engines and cancel_event.is_set():
+            if engine in worker_engines and cancel_event.is_set():
                 return SettingsApplyResult(
                     False, (("engine", "%s preparation was cancelled." % engine),)
                 )
@@ -1551,6 +1631,9 @@ class Controller:
                 stop_tts_hotkey,
                 pause_resume_hotkey,
                 turbo_delivery_mode,
+                supertonic_voice,
+                supertonic_language,
+                supertonic_device,
             )
         finally:
             if candidate is not None:
@@ -1574,6 +1657,9 @@ class Controller:
         stop_tts_hotkey=None,
         pause_resume_hotkey=None,
         turbo_delivery_mode=None,
+        supertonic_voice=None,
+        supertonic_language=None,
+        supertonic_device=None,
     ) -> SettingsApplyResult:
         if (
             piper_sentence_streaming_enabled is not None
@@ -1602,6 +1688,7 @@ class Controller:
             "Piper",
             "Chatterbox Nano",
             TURBO_ENGINE,
+            SUPERTONIC_ENGINE,
         }:
             return SettingsApplyResult(
                 False, (("engine", "Choose Piper or a supported Chatterbox engine."),)
@@ -1623,16 +1710,20 @@ class Controller:
             (
                 stop_tts_hotkey
                 if stop_tts_hotkey is not None
-                else self.state.settings.stop_tts_hotkey
-                if self.state.settings is not None
-                else DEFAULT_STOP_TTS_HOTKEY
+                else (
+                    self.state.settings.stop_tts_hotkey
+                    if self.state.settings is not None
+                    else DEFAULT_STOP_TTS_HOTKEY
+                )
             ),
             (
                 pause_resume_hotkey
                 if pause_resume_hotkey is not None
-                else self.state.settings.pause_resume_hotkey
-                if self.state.settings is not None
-                else DEFAULT_PAUSE_RESUME_HOTKEY
+                else (
+                    self.state.settings.pause_resume_hotkey
+                    if self.state.settings is not None
+                    else DEFAULT_PAUSE_RESUME_HOTKEY
+                )
             ),
         )
         if errors:
@@ -1692,7 +1783,11 @@ class Controller:
             active_voice = (
                 piper_reference
                 if engine == "Piper"
-                else "default"
+                else (
+                    (supertonic_voice or current.supertonic_voice)
+                    if engine == SUPERTONIC_ENGINE
+                    else "default"
+                )
             )
             desired_identity = (engine, active_voice)
             current_identity = self._backend_manager.current_identity()
@@ -1737,7 +1832,8 @@ class Controller:
             hotkey_changed = candidate_hotkey.canonical != current.hotkey
             playback_hotkeys_changed = (
                 candidate_stop_tts_hotkey.canonical != current.stop_tts_hotkey
-                or candidate_pause_resume_hotkey.canonical != current.pause_resume_hotkey
+                or candidate_pause_resume_hotkey.canonical
+                != current.pause_resume_hotkey
             )
             hotkeys_changed = hotkey_changed or playback_hotkeys_changed
             try:
@@ -1789,6 +1885,20 @@ class Controller:
                         current.turbo_delivery_mode
                         if turbo_delivery_mode is None
                         else turbo_delivery_mode
+                    ),
+                    supertonic_device=(
+                        supertonic_device if supertonic_device is not None
+                        else current.supertonic_device
+                    ),
+                    supertonic_voice=(
+                        supertonic_voice
+                        if supertonic_voice is not None
+                        else current.supertonic_voice
+                    ),
+                    supertonic_language=(
+                        supertonic_language
+                        if supertonic_language is not None
+                        else current.supertonic_language
                     ),
                     engine=engine,
                     piper_voice=piper_reference,
@@ -1875,7 +1985,7 @@ class Controller:
                     if set_delivery_mode is not None:
                         set_delivery_mode(next_settings.turbo_delivery_mode)
                 if (
-                    engine in {"Chatterbox Nano", TURBO_ENGINE}
+                    engine in {"Chatterbox Nano", TURBO_ENGINE, SUPERTONIC_ENGINE}
                     and candidate is not None
                 ):
                     self._notify_nano_device(candidate.backend)
@@ -1892,9 +2002,7 @@ class Controller:
                     self._startup_piper_backend = None
                     self._startup_status_pending_or_active = False
                     self._startup_status_generation = None
-                    self._set_tray_status(
-                        "%s is ready" % engine
-                    )
+                    self._set_tray_status("%s is ready" % engine)
                 return SettingsApplyResult(
                     True, snapshot=self.settings_window_snapshot()
                 )
@@ -1918,14 +2026,10 @@ class Controller:
             candidate_hotkey = None
             errors.append(("hotkey", user_message(UserError.HOTKEY_INVALID)))
         try:
-            candidate_stop_tts_hotkey = parse_hotkey(
-                stop_tts_hotkey, allow_f8=True
-            )
+            candidate_stop_tts_hotkey = parse_hotkey(stop_tts_hotkey, allow_f8=True)
         except ValueError:
             candidate_stop_tts_hotkey = None
-            errors.append(
-                ("stop_tts_hotkey", user_message(UserError.HOTKEY_INVALID))
-            )
+            errors.append(("stop_tts_hotkey", user_message(UserError.HOTKEY_INVALID)))
         try:
             candidate_pause_resume_hotkey = parse_hotkey(pause_resume_hotkey)
         except ValueError:
@@ -1944,9 +2048,7 @@ class Controller:
                 ("hotkey", "stop_tts_hotkey", "pause_resume_hotkey"), parsed
             ):
                 if spec.canonical in seen:
-                    errors.append(
-                        (key, "Each shortcut must be different.")
-                    )
+                    errors.append((key, "Each shortcut must be different."))
                 else:
                     seen[spec.canonical] = key
         pitch_percent, pitch_error = _parse_percent_text(
@@ -2070,9 +2172,7 @@ class Controller:
             self._show_status("Hotkey settings could not be saved.")
             return False
         try:
-            stop_candidate = parse_hotkey(
-                current.stop_tts_hotkey, allow_f8=True
-            )
+            stop_candidate = parse_hotkey(current.stop_tts_hotkey, allow_f8=True)
             pause_candidate = parse_hotkey(current.pause_resume_hotkey)
         except ValueError:
             self._report_runtime_error(UserError.HOTKEY_INVALID)

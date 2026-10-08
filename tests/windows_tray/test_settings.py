@@ -11,6 +11,7 @@ from piper.windows_tray.settings import (
     MAX_PITCH_PERCENT,
     MIN_SPEED_PERCENT,
     MIN_PITCH_PERCENT,
+    SETTINGS_SCHEMA_VERSION,
     TraySettings,
     load_settings,
     save_settings,
@@ -51,13 +52,13 @@ def test_v1_settings_migrate_to_v2_without_corrupt_rename(tmp_path: Path) -> Non
     result = load_settings(path)
 
     assert result.source == "loaded"
-    assert result.settings.schema_version == 2
+    assert result.settings.schema_version == SETTINGS_SCHEMA_VERSION
     assert result.settings.engine == "Piper"
     assert result.settings.piper_voice == "en_GB-alba-medium"
     assert result.migration_notice is None
     assert not path.with_name("settings.json.corrupt").exists()
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 2
+    assert saved["schema_version"] == SETTINGS_SCHEMA_VERSION
     assert "voice" not in saved
     assert "kokoro_voice" not in saved
 
@@ -105,7 +106,7 @@ def test_kokoro_settings_migrate_to_piper_and_preserve_preferences(tmp_path: Pat
         "Kokoro is no longer available. Piper has been selected."
     )
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 2
+    assert saved["schema_version"] == SETTINGS_SCHEMA_VERSION
     assert saved["engine"] == "Piper"
     assert "kokoro_voice" not in saved
     assert not list(tmp_path.glob("settings.json.corrupt*"))
@@ -315,7 +316,10 @@ def test_save_settings_uses_replace_and_writes_schema_version(
     save_settings(TraySettings(), path)
 
     assert replacements and replacements[0][1] == path
-    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert (
+        json.loads(path.read_text(encoding="utf-8"))["schema_version"]
+        == SETTINGS_SCHEMA_VERSION
+    )
 
 
 def test_old_settings_default_error_sounds_to_false(tmp_path: Path) -> None:

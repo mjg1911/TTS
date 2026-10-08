@@ -1,0 +1,6 @@
+## Interface: 120100, 120007, 120005, 120001, 120000
+## Title: DysQuest
+## Notes: Selects open quest text.
+## Version: 0.1.0
+
+DysQuest.lua

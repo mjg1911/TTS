@@ -105,7 +105,12 @@ def test_turbo_voice_controls_have_no_retired_options(monkeypatch):
         lambda: None,
         lambda text: None,
     )
-    assert window.engine_combo.kwargs["values"] == ("Piper", "Chatterbox Nano", ENGINE)
+    assert window.engine_combo.kwargs["values"] == (
+        "Piper",
+        "Chatterbox Nano",
+        ENGINE,
+        "Supertonic 3",
+    )
     assert not window.nano_voice_frame.hidden
     assert window.chatterbox_device_controls.hidden
     assert not window.turbo_info_frame.hidden

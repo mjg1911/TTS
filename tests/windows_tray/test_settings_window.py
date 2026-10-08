@@ -282,6 +282,7 @@ def test_window_initializes_staged_settings_from_snapshot(monkeypatch):
         "Piper",
         "Chatterbox Nano",
         "Chatterbox Turbo (350M)",
+        "Supertonic 3",
     )
     assert not hasattr(window, "kokoro_voice_var")
     assert all("Kokoro" not in frame.text for frame in built_frames)
