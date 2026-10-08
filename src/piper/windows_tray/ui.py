@@ -6,10 +6,10 @@ from typing import Optional
 
 from piper.turbo_options import ENGINE as TURBO_ENGINE
 
+from .model_download import recorded_engines
 from .settings import validate_pitch_percent, validate_speed_percent
 from .settings_window import SettingsWindow, choose_voice_model
 from .controller import SettingsWindowSnapshot
-from .model_download_ui import ModelDownloadPanel
 
 
 class TkUi:
@@ -30,20 +30,16 @@ class TkUi:
         return choose_voice_model(self.root)
 
     def choose_startup_engine(self, current: str) -> Optional[str]:
-        """Wait for an explicit model choice before startup loads any model."""
+        """Offer Piper and optional engines with a saved installation record."""
         self._assert_main_thread()
         selected = None
         window = tk.Toplevel(self.root)
         window.title("Piper — Choose a model")
         window.resizable(False, False)
 
-        panel = None
-
         def choose(engine: Optional[str]) -> None:
             nonlocal selected
             selected = engine
-            if panel is not None:
-                panel.close()
             window.destroy()
 
         window.protocol("WM_DELETE_WINDOW", lambda: choose(None))
@@ -55,46 +51,28 @@ class TkUi:
         )
         ttk.Label(
             body,
-            text="Select a model to start. No models load until you choose.",
+            text="Select an installed speech model to start.",
             wraplength=360,
         ).pack(fill="x", pady=(0, 20))
-        def update_model_guidance(engine, state, ready):
-            if ready and engine != "Piper":
-                panel.status_var.set(
-                    f"{engine} is ready. Select it again to start."
-                )
-
-        panel = ModelDownloadPanel(body, on_state_change=update_model_guidance)
-
-        def request_engine(engine: str) -> None:
-            if engine == "Piper":
-                panel.set_engine(engine)
-                choose(engine)
-                return
-            if panel.selected_engine != engine:
-                panel.set_engine(engine)
-                if panel.is_ready:
-                    choose(engine)
-                return
-            if panel.is_ready:
-                choose(engine)
-
+        installed = recorded_engines()
+        choices = [("Piper", "Piper")]
+        if "nano" in installed:
+            choices.append(("Chatterbox Nano", "Chatterbox Nano"))
+        if "turbo" in installed:
+            choices.append(("Chatterbox Turbo", TURBO_ENGINE))
+        preferred_engine = (
+            current if any(engine == current for _, engine in choices) else "Piper"
+        )
         preferred = None
-        for label, engine in (
-            ("Piper", "Piper"),
-            ("Chatterbox Nano", "Chatterbox Nano"),
-            ("Chatterbox Turbo", TURBO_ENGINE),
-        ):
+        for label, engine in choices:
             button = ttk.Button(
                 body,
                 text=label,
-                command=lambda engine=engine: request_engine(engine),
+                command=lambda engine=engine: choose(engine),
             )
             button.pack(fill="x", pady=4, ipady=6)
-            if engine == current:
+            if engine == preferred_engine:
                 preferred = button
-        panel.frame.pack(fill="x", pady=(12, 0))
-        panel.set_engine(current)
         # A transient of the withdrawn root would also be hidden on Windows.
         window.wait_visibility()
         window.grab_set()
@@ -102,10 +80,7 @@ class TkUi:
         window.focus_force()
         if preferred is not None:
             preferred.focus_set()
-        try:
-            self.root.wait_window(window)
-        finally:
-            panel.close()
+        self.root.wait_window(window)
         return selected
 
     def open_settings(

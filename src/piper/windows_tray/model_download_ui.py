@@ -8,22 +8,23 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Callable, Optional
 
-from .model_download import download_engine, engine_installed
+from .model_download import download_engine, engine_installed, recorded_engines
 from piper.turbo_options import ENGINE as TURBO_ENGINE
 
 
 PIPER_ENGINE = "Piper"
 NANO_ENGINE = "Chatterbox Nano"
 CHATTERBOX_ENGINES = (NANO_ENGINE, TURBO_ENGINE)
+_ENGINE_IDS = {NANO_ENGINE: "nano", TURBO_ENGINE: "turbo"}
 
 
 class ModelDownloadPanel:
-    """Display local readiness and explicitly requested downloads for one engine.
+    """Display saved readiness and downloads for one selected engine.
 
     All readiness checks and downloads run on worker threads. Worker events are
     tagged with the selected-engine generation and are rendered by ``after`` on
-    the Tk thread. The constructor is deliberately usable by both Settings and
-    the startup chooser; callers select an engine with :meth:`set_engine`.
+    the Tk thread. Engines saved as installed skip the readiness check; callers
+    select an engine with :meth:`set_engine`.
     """
 
     def __init__(
@@ -87,6 +88,10 @@ class ModelDownloadPanel:
 
         if engine == PIPER_ENGINE:
             self._set_state("available", "Piper is ready to use.")
+            return
+
+        if _ENGINE_IDS[engine] in recorded_engines():
+            self._set_state("ready", f"{engine} is ready to use.")
             return
 
         self._set_state("checking", f"Checking whether {engine} is installed…")
