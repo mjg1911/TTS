@@ -19,6 +19,9 @@ if (-not $ReleaseMode -and ($env:PIPER_REQUIRE_TURBO_PAYLOAD -eq "1" -or $env:PI
     throw "Installer requires the shared offline Chatterbox payload"
 }
 if ($ReleaseMode) {
+    if (-not (Test-Path -LiteralPath 'dist/PiperTray/_internal/supertonic_worker/SupertonicWorker.exe' -PathType Leaf)) {
+        throw 'Release installer requires the Supertonic GPU worker. Rebuild PiperTray in ReleaseMode.'
+    }
     if ($hasSharedManifest) { throw 'Piper-only release cannot bundle the optional Chatterbox payload' }
     foreach ($name in @('en_GB-alba-medium.onnx', 'en_GB-alba-medium.onnx.json')) {
         if (-not (Test-Path -LiteralPath "dist/PiperTray/_internal/voices/$name" -PathType Leaf)) {

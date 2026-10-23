@@ -10,11 +10,26 @@ from typing import Callable, Optional
 
 from .model_download import download_engine, engine_installed
 from piper.turbo_options import ENGINE as TURBO_ENGINE
+from piper.supertonic_installer import install_supertonic3, supertonic3_installed
 
 
 PIPER_ENGINE = "Piper"
 NANO_ENGINE = "Chatterbox Nano"
 CHATTERBOX_ENGINES = (NANO_ENGINE, TURBO_ENGINE)
+SUPERTONIC_ENGINE = "Supertonic 3"
+DOWNLOADABLE_ENGINES = CHATTERBOX_ENGINES + (SUPERTONIC_ENGINE,)
+
+
+def _default_engine_installed(engine: str) -> bool:
+    if engine == SUPERTONIC_ENGINE:
+        return supertonic3_installed()
+    return engine_installed(engine)
+
+
+def _default_download_engine(engine, progress, cancel_event):
+    if engine == SUPERTONIC_ENGINE:
+        return install_supertonic3(progress, cancel_event)
+    return download_engine(engine, progress, cancel_event)
 
 
 class ModelDownloadPanel:
@@ -37,8 +52,8 @@ class ModelDownloadPanel:
     ) -> None:
         self.parent = parent
         self._on_state_change = on_state_change
-        self._engine_installed = engine_installed_fn or engine_installed
-        self._download_engine = download_engine_fn or download_engine
+        self._engine_installed = engine_installed_fn or _default_engine_installed
+        self._download_engine = download_engine_fn or _default_download_engine
         self._poll_interval_ms = poll_interval_ms
         self._events: Queue[tuple] = Queue()
         self._threads: list[threading.Thread] = []
@@ -73,8 +88,10 @@ class ModelDownloadPanel:
 
     def set_engine(self, engine: str) -> None:
         """Select an engine and begin a background-only local readiness check."""
-        if engine != PIPER_ENGINE and engine not in CHATTERBOX_ENGINES:
-            raise ValueError("engine must be Piper, Chatterbox Nano, or Chatterbox Turbo")
+        if engine != PIPER_ENGINE and engine not in DOWNLOADABLE_ENGINES:
+            raise ValueError(
+                "engine must be Piper, Chatterbox Nano, Chatterbox Turbo, or Supertonic 3"
+            )
         if self._closed or engine == self.selected_engine:
             return
 
@@ -104,7 +121,7 @@ class ModelDownloadPanel:
     def start_download(self) -> None:
         """Start or retry a download after an explicit button click."""
         engine = self.selected_engine
-        if self._closed or engine not in CHATTERBOX_ENGINES:
+        if self._closed or engine not in DOWNLOADABLE_ENGINES:
             return
         if self.state not in ("missing", "error"):
             return

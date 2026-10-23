@@ -1,0 +1,11 @@
+# Supertonic SDK archived source, pinned to the revision used by the installer.
+supertonic @ git+https://github.com/supertone-oss-archive/supertonic-py.git@df0f9686dac7fbbde391b759e2ee5286a3737622
+
+# CUDA 13 build for the isolated worker. The build script installs this with
+# its [cuda,cudnn] extras so the frozen bundle carries the required runtime DLLs.
+onnxruntime-gpu==1.30.0
+
+numpy==1.26.4
+soundfile==0.13.1
+huggingface-hub==1.33.0
+pyinstaller==6.19.0

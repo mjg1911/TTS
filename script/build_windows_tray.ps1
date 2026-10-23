@@ -2,6 +2,7 @@ param(
     [string]$Python = 'python',
     [switch]$ReleaseMode,
     [switch]$SkipBootstrap,
+    [switch]$IncludeSupertonic,
     [string]$DefaultVoiceDir = ''
 )
 $ErrorActionPreference = "Stop"
@@ -12,6 +13,10 @@ if ($env:OS -ne "Windows_NT") {
 
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
+if ($IncludeSupertonic -or $ReleaseMode) {
+    & "$Root/script/build_supertonic_worker.ps1"
+    $env:PIPER_SUPERTONIC_WORKER_DIR = (Resolve-Path -LiteralPath "$Root/dist/SupertonicWorker").Path
+}
 if ($ReleaseMode) {
     $env:PIPER_RELEASE_MODE = '1'
     if ($DefaultVoiceDir) { $env:PIPER_DEFAULT_VOICE_DIR = (Resolve-Path -LiteralPath $DefaultVoiceDir).Path }

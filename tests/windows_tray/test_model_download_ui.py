@@ -69,6 +69,29 @@ def test_piper_is_always_available_without_local_probe_or_download(monkeypatch):
     assert calls == []
 
 
+def test_supertonic_uses_the_pinned_installer_for_its_default_download(monkeypatch):
+    module = install_fake_tk(monkeypatch)
+    parent = FakeParent()
+    calls = []
+
+    def install(progress, cancel_event):
+        calls.append(("download", cancel_event.is_set()))
+        progress(1, 1, "onnx/vocoder.onnx")
+        return "installed-supertonic"
+
+    monkeypatch.setattr(module, "supertonic3_installed", lambda: False)
+    monkeypatch.setattr(module, "install_supertonic3", install)
+    panel = module.ModelDownloadPanel(parent)
+    panel.set_engine(module.SUPERTONIC_ENGINE)
+    wait_state(parent, panel, "missing")
+    panel.download_button.invoke()
+    wait_state(parent, panel, "ready")
+
+    assert calls == [("download", False)]
+    assert panel.selected_engine == "Supertonic 3"
+    assert panel.is_ready
+
+
 @pytest.mark.parametrize("engine", ["Chatterbox Nano", "Chatterbox Turbo (350M)"])
 def test_missing_engine_is_checked_offline_and_exposes_download_button(
     monkeypatch, engine

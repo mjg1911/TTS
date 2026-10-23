@@ -6,6 +6,11 @@ from tkinter import filedialog, ttk
 from typing import Callable, Optional
 
 from piper.turbo_options import DELIVERY_MODE_LABELS, ENGINE as TURBO_ENGINE
+from piper.supertonic_options import (
+    ENGINE as SUPERTONIC_ENGINE,
+    LANGUAGES as SUPERTONIC_LANGUAGES,
+    VOICES as SUPERTONIC_VOICES,
+)
 
 from .controller import SettingsApplyResult, SettingsWindowSnapshot
 from .hotkey import parse_hotkey
@@ -91,6 +96,20 @@ class SettingsWindow:
             label: mode for mode, label in DELIVERY_MODE_LABELS
         }
         self.displayed_turbo_delivery_mode = snapshot.turbo_delivery_mode
+        self._supertonic_language_labels = {
+            code: f"{label} ({code})" for code, label in SUPERTONIC_LANGUAGES
+        }
+        self._supertonic_language_codes = {
+            display: code
+            for code, display in self._supertonic_language_labels.items()
+        }
+        self.supertonic_device_var = tk.StringVar(value=snapshot.supertonic_device)
+        self.supertonic_voice_var = tk.StringVar(value=snapshot.supertonic_voice)
+        self.supertonic_language_var = tk.StringVar(
+            value=self._supertonic_language_labels.get(
+                snapshot.supertonic_language, snapshot.supertonic_language
+            )
+        )
         self.turbo_delivery_mode_var = tk.StringVar(
             value=self._delivery_mode_labels.get(
                 snapshot.turbo_delivery_mode, "Default (no tag)"
@@ -222,7 +241,7 @@ class SettingsWindow:
         self.engine_combo = ttk.Combobox(
             voice,
             textvariable=self.engine_var,
-            values=("Piper", "Chatterbox Nano", TURBO_ENGINE),
+            values=("Piper", "Chatterbox Nano", TURBO_ENGINE, SUPERTONIC_ENGINE),
             state="readonly",
             style="Piper.TCombobox",
             font=("Segoe UI", 10),
@@ -388,6 +407,51 @@ class SettingsWindow:
             self.piper_voice_frame, "piper_voice", 4
         )
         self._set_voice_label(snapshot.piper_voice_path)
+        self.supertonic_voice_frame = ttk.Frame(
+            voice, style="Panel.Piper.TFrame", padding=14
+        )
+        self.supertonic_voice_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            self.supertonic_voice_frame,
+            text="Voice",
+            style="Muted.Piper.TLabel",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 5))
+        self.supertonic_voice_combo = ttk.Combobox(
+            self.supertonic_voice_frame,
+            textvariable=self.supertonic_voice_var,
+            values=tuple(code for code, _label in SUPERTONIC_VOICES),
+            state="readonly",
+            style="Piper.TCombobox",
+            font=("Segoe UI", 10),
+        )
+        self.supertonic_voice_combo.grid(row=1, column=0, sticky="ew")
+        ttk.Label(
+            self.supertonic_voice_frame,
+            text="Language",
+            style="Muted.Piper.TLabel",
+        ).grid(row=2, column=0, sticky="w", pady=(12, 5))
+        self.supertonic_language_combo = ttk.Combobox(
+            self.supertonic_voice_frame,
+            textvariable=self.supertonic_language_var,
+            values=tuple(self._supertonic_language_labels.values()),
+            state="readonly",
+            style="Piper.TCombobox",
+            font=("Segoe UI", 10),
+        )
+        self.supertonic_language_combo.grid(row=3, column=0, sticky="ew")
+        ttk.Label(
+            self.supertonic_voice_frame, text="Run on", style="Muted.Piper.TLabel",
+        ).grid(row=4, column=0, sticky="w", pady=(12, 5))
+        self.supertonic_device_controls = ttk.Frame(
+            self.supertonic_voice_frame, style="Panel.Piper.TFrame",
+        )
+        self.supertonic_device_controls.grid(row=5, column=0, sticky="ew")
+        for column, (device, label) in enumerate((("cpu", "CPU"), ("cuda", "GPU (CUDA)"))):
+            ttk.Radiobutton(
+                self.supertonic_device_controls, text=label,
+                variable=self.supertonic_device_var, value=device,
+                style="Device.Piper.TRadiobutton",
+            ).grid(row=0, column=column, sticky="w", padx=(0, 12))
         self._refresh_voice_controls()
 
         speech = self._panel(self.controls, "Speech tuning", 1)
@@ -710,6 +774,11 @@ class SettingsWindow:
         engine = self.engine_var.get()
         chatterbox = engine in {"Chatterbox Nano", TURBO_ENGINE}
         self._show_frame(self.nano_voice_frame, chatterbox)
+        supertonic_voice_frame = getattr(self, "supertonic_voice_frame", None)
+        if supertonic_voice_frame is not None:
+            self._show_frame(
+                supertonic_voice_frame, engine == SUPERTONIC_ENGINE
+            )
         device_controls = getattr(self, "chatterbox_device_controls", None)
         if device_controls is not None:
             self._show_frame(
@@ -1021,7 +1090,7 @@ class SettingsWindow:
         if getattr(self, "_apply_in_progress", False):
             return
         if (
-            self.engine_var.get() in CHATTERBOX_ENGINES
+            self.engine_var.get() in (*CHATTERBOX_ENGINES, SUPERTONIC_ENGINE)
             and not self._model_engine_ready
         ):
             self._error_vars["engine"].set(
@@ -1072,6 +1141,15 @@ class SettingsWindow:
                         "stop_tts_hotkey": self.stop_tts_hotkey_var.get(),
                         "pause_resume_hotkey": self.pause_resume_hotkey_var.get(),
                     }
+                    if engine == SUPERTONIC_ENGINE:
+                        options["supertonic_device"] = self.supertonic_device_var.get()
+                        options["supertonic_voice"] = self.supertonic_voice_var.get()
+                        options["supertonic_language"] = (
+                            self._supertonic_language_codes.get(
+                                self.supertonic_language_var.get(),
+                                self.supertonic_language_var.get(),
+                            )
+                        )
                     delivery_mode = self._delivery_mode_values.get(
                         self.turbo_delivery_mode_var.get(), ""
                     )
@@ -1146,6 +1224,13 @@ class SettingsWindow:
         self.turbo_delivery_mode_var.set(
             self._delivery_mode_labels.get(
                 snapshot.turbo_delivery_mode, "Default (no tag)"
+            )
+        )
+        self.supertonic_device_var.set(snapshot.supertonic_device)
+        self.supertonic_voice_var.set(snapshot.supertonic_voice)
+        self.supertonic_language_var.set(
+            self._supertonic_language_labels.get(
+                snapshot.supertonic_language, snapshot.supertonic_language
             )
         )
         self.chatterbox_device_var.set(snapshot.chatterbox_device)

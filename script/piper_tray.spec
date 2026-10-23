@@ -57,6 +57,13 @@ for legacy_name in ("PIPER_NANO_PAYLOAD_DIR", "PIPER_TURBO_PAYLOAD_DIR"):
         )
 
 chatterbox_payload_datas = []
+supertonic_worker_datas = []
+supertonic_worker_text = os.environ.get("PIPER_SUPERTONIC_WORKER_DIR")
+if supertonic_worker_text:
+    supertonic_worker_root = Path(supertonic_worker_text).resolve()
+    if not (supertonic_worker_root / "SupertonicWorker.exe").is_file():
+        raise RuntimeError("PIPER_SUPERTONIC_WORKER_DIR has no SupertonicWorker.exe")
+    supertonic_worker_datas = _runtime_tree(supertonic_worker_root, "supertonic_worker")
 chatterbox_payload_text = None if release_mode else os.environ.get("PIPER_CHATTERBOX_PAYLOAD_DIR")
 required_engines = {
     engine
@@ -107,11 +114,11 @@ a = Analysis(
     [str(SPEC_DIR / "piper_tray_entry.py")],
     pathex=[str(ROOT / "src")],
     binaries=piper_binaries + piper_extensions + tkinter_binaries,
-    datas=piper_datas + tkinter_datas + chatterbox_payload_datas + voice_datas,
+    datas=piper_datas + tkinter_datas + chatterbox_payload_datas + supertonic_worker_datas + voice_datas,
     hookspath=[str(SPEC_DIR / "pyinstaller_hooks")],
     hiddenimports=hiddenimports,
     excludes=["torch", "torchaudio", "chatterbox", "transformers", "diffusers",
-              "accelerate", "piper.train", "piper.train.vits"],
+              "accelerate", "supertonic", "piper.supertonic_worker", "piper.train", "piper.train.vits"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

@@ -38,6 +38,7 @@ from .model_download import load_catalog
 from .codex_monitor import CodexMonitor, codex_sessions_dir
 from .backend_startup import BackendStartupCoordinator
 from piper.turbo_options import ENGINE as TURBO_ENGINE
+from piper.supertonic_options import ENGINE as SUPERTONIC_ENGINE
 
 
 def TkUi():
@@ -81,19 +82,26 @@ def run_offline_smoke_test(destination: Path) -> int:
     result = {"status": "failed", "voice_model": DEFAULT_VOICE}
     try:
         path, voice = load_voice_candidate(DEFAULT_VOICE, tuple(_voice_data_dirs()))
-        samples = sum(chunk.audio_float_array.size for chunk in voice.synthesize(
-            "Piper is ready to speak offline."
-        ))
+        samples = sum(
+            chunk.audio_float_array.size
+            for chunk in voice.synthesize("Piper is ready to speak offline.")
+        )
         if not samples:
             raise RuntimeError("Default voice generated no audio")
         catalog = load_catalog()
-        parts = {name: len(_component_parts(catalog, name))
-                 for name in ("worker", "nano", "turbo")}
+        parts = {
+            name: len(_component_parts(catalog, name))
+            for name in ("worker", "nano", "turbo")
+        }
         root = tk.Tk()
         root.withdraw()
         panel = ModelDownloadPanel(root)
-        result.update(status="passed", voice_path=str(path), audio_samples=samples,
-                      catalog_asset_parts=parts)
+        result.update(
+            status="passed",
+            voice_path=str(path),
+            audio_samples=samples,
+            catalog_asset_parts=parts,
+        )
     except Exception as error:
         result.update(exception_type=type(error).__name__, error=str(error))
     finally:
@@ -210,20 +218,21 @@ def _prepare_turbo_installation():
             return inspect_turbo_installation(shared)
         except ChatterboxEngineUnavailable:
             continue
-    frozen_root = getattr(sys, '_MEIPASS', None)
-    bundled = Path(frozen_root) / 'turbo_payload' if frozen_root else None
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    bundled = Path(frozen_root) / "turbo_payload" if frozen_root else None
     return inspect_turbo_installation(
         bundled if bundled is not None and bundled.is_dir() else _turbo_root()
     )
 
 
-def _prepare_turbo_backend(cancel_event=None, *, reference_clip=None, delivery_mode=''):
+def _prepare_turbo_backend(cancel_event=None, *, reference_clip=None, delivery_mode=""):
     from .turbo_client import TurboWorkerClient
 
     try:
         installation = _prepare_turbo_installation()
         if reference_clip is not None:
             from .chatterbox_voice import validate_reference_clip
+
             reference_clip = str(validate_reference_clip(Path(reference_clip)))
         client = TurboWorkerClient(
             installation,
@@ -231,30 +240,94 @@ def _prepare_turbo_backend(cancel_event=None, *, reference_clip=None, delivery_m
             delivery_mode=delivery_mode,
         )
         if cancel_event is not None:
-            register_cleanup = getattr(cancel_event, 'register_cancel_cleanup', None)
+            register_cleanup = getattr(cancel_event, "register_cancel_cleanup", None)
             if register_cleanup is not None:
                 register_cleanup(client.shutdown)
         try:
             client.ensure_ready(cancel_event)
             if cancel_event is not None and cancel_event.is_set():
-                raise RuntimeError('Turbo startup was cancelled')
+                raise RuntimeError("Turbo startup was cancelled")
         except Exception:
             client.shutdown()
             raise
-        return BackendCandidate(TURBO_ENGINE, 'default', client, client.shutdown)
+        return BackendCandidate(TURBO_ENGINE, "default", client, client.shutdown)
     except (OSError, RuntimeError, ValueError, KeyError) as error:
-        raise BackendPreparationError(f'Turbo is unavailable: {error}') from error
+        raise BackendPreparationError(f"Turbo is unavailable: {error}") from error
 
 
 def _prepare_configured_turbo_backend(settings, cancel_event=None, record_timing=None):
     options = {}
-    delivery_mode = getattr(settings, 'turbo_delivery_mode', '')
+    delivery_mode = getattr(settings, "turbo_delivery_mode", "")
     if delivery_mode:
-        options['delivery_mode'] = delivery_mode
+        options["delivery_mode"] = delivery_mode
     if settings.chatterbox_custom_voice_enabled:
-        options['reference_clip'] = settings.chatterbox_reference_clip
+        options["reference_clip"] = settings.chatterbox_reference_clip
     prepare = lambda: _prepare_turbo_backend(cancel_event, **options)
-    return record_timing('turbo_readiness', prepare) if record_timing is not None else prepare()
+    return (
+        record_timing("turbo_readiness", prepare)
+        if record_timing is not None
+        else prepare()
+    )
+
+
+def _supertonic_root() -> Path:
+    appdata = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+    return (
+        Path(appdata) / "Piper" / "Supertonic3"
+        if appdata
+        else Path.home() / ".piper" / "Supertonic3"
+    )
+
+
+def _prepare_supertonic_installation():
+    from piper.supertonic_assets import inspect_supertonic_installation
+
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    bundled = Path(frozen_root) / "supertonic_payload" if frozen_root else None
+    return inspect_supertonic_installation(
+        bundled if bundled is not None and bundled.is_dir() else _supertonic_root()
+    )
+
+
+def _prepare_supertonic_backend(cancel_event=None, *, voice="M1", language="en", device="cuda"):
+    from .supertonic_client import SupertonicWorkerClient
+
+    try:
+        client = SupertonicWorkerClient(
+            _prepare_supertonic_installation(), voice=voice, language=language, device=device
+        )
+        if cancel_event is not None:
+            register = getattr(cancel_event, "register_cancel_cleanup", None)
+            if register is not None:
+                register(client.shutdown)
+        try:
+            client.ensure_ready(cancel_event)
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("Supertonic startup was cancelled")
+        except Exception:
+            client.shutdown()
+            raise
+        return BackendCandidate(SUPERTONIC_ENGINE, voice, client, client.shutdown)
+    except (OSError, RuntimeError, ValueError, KeyError) as error:
+        raise BackendPreparationError(
+            f"Supertonic 3 is unavailable: {error}"
+        ) from error
+
+
+def _prepare_configured_supertonic_backend(
+    settings, cancel_event=None, record_timing=None
+):
+    prepare = lambda: _prepare_supertonic_backend(
+        cancel_event,
+        voice=settings.supertonic_voice,
+        language=settings.supertonic_language,
+        device=getattr(settings, "supertonic_device", "cuda"),
+    )
+    return (
+        record_timing("supertonic_readiness", prepare)
+        if record_timing is not None
+        else prepare()
+    )
 
 
 def _load_configured_voice(
@@ -474,20 +547,12 @@ def run_app(
             settings = replace(settings, hotkey=DEFAULT_HOTKEY)
             capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
         try:
-            stop_tts_hotkey = parse_hotkey(
-                settings.stop_tts_hotkey, allow_f8=True
-            )
+            stop_tts_hotkey = parse_hotkey(settings.stop_tts_hotkey, allow_f8=True)
         except ValueError as error:
             logger.warning("Saved stop TTS hotkey is invalid: %s", error)
-            ui.show_status(
-                "The saved stop shortcut was invalid; F8 is being used."
-            )
-            settings = replace(
-                settings, stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY
-            )
-            stop_tts_hotkey = parse_hotkey(
-                DEFAULT_STOP_TTS_HOTKEY, allow_f8=True
-            )
+            ui.show_status("The saved stop shortcut was invalid; F8 is being used.")
+            settings = replace(settings, stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY)
+            stop_tts_hotkey = parse_hotkey(DEFAULT_STOP_TTS_HOTKEY, allow_f8=True)
         try:
             pause_resume_hotkey = parse_hotkey(settings.pause_resume_hotkey)
         except ValueError as error:
@@ -502,12 +567,8 @@ def run_app(
 
         had_shortcut_conflict = False
         if stop_tts_hotkey.canonical == capture_hotkey.canonical:
-            stop_tts_hotkey = parse_hotkey(
-                DEFAULT_STOP_TTS_HOTKEY, allow_f8=True
-            )
-            settings = replace(
-                settings, stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY
-            )
+            stop_tts_hotkey = parse_hotkey(DEFAULT_STOP_TTS_HOTKEY, allow_f8=True)
+            settings = replace(settings, stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY)
             had_shortcut_conflict = True
         if pause_resume_hotkey.canonical == capture_hotkey.canonical:
             pause_resume_hotkey = parse_hotkey(DEFAULT_PAUSE_RESUME_HOTKEY)
@@ -528,23 +589,20 @@ def run_app(
                 capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
                 settings = replace(settings, hotkey=DEFAULT_HOTKEY)
             if pause_resume_hotkey.canonical == stop_tts_hotkey.canonical:
-                stop_tts_hotkey = parse_hotkey(
-                    DEFAULT_STOP_TTS_HOTKEY, allow_f8=True
-                )
-                settings = replace(
-                    settings, stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY
-                )
-        if len(
-            {
-                capture_hotkey.canonical,
-                stop_tts_hotkey.canonical,
-                pause_resume_hotkey.canonical,
-            }
-        ) < 3:
-            capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
-            stop_tts_hotkey = parse_hotkey(
-                DEFAULT_STOP_TTS_HOTKEY, allow_f8=True
+                stop_tts_hotkey = parse_hotkey(DEFAULT_STOP_TTS_HOTKEY, allow_f8=True)
+                settings = replace(settings, stop_tts_hotkey=DEFAULT_STOP_TTS_HOTKEY)
+        if (
+            len(
+                {
+                    capture_hotkey.canonical,
+                    stop_tts_hotkey.canonical,
+                    pause_resume_hotkey.canonical,
+                }
             )
+            < 3
+        ):
+            capture_hotkey = parse_hotkey(DEFAULT_HOTKEY)
+            stop_tts_hotkey = parse_hotkey(DEFAULT_STOP_TTS_HOTKEY, allow_f8=True)
             pause_resume_hotkey = parse_hotkey(DEFAULT_PAUSE_RESUME_HOTKEY)
             settings = replace(
                 settings,
@@ -608,9 +666,27 @@ def run_app(
                     replace(settings, piper_voice=voice_id), data_dirs
                 )
                 return BackendCandidate("Piper", str(path), voice)
+            if engine == SUPERTONIC_ENGINE:
+                return _prepare_supertonic_backend(
+                    (
+                        controller.nano_preparation_cancel_event()
+                        if controller is not None
+                        else None
+                    ),
+                    voice=voice_id,
+                    device=(
+                        controller.supertonic_preparation_device()
+                        if controller is not None else settings.supertonic_device
+                    ),
+                    language=(
+                        controller.supertonic_preparation_language()
+                        if controller is not None
+                        else settings.supertonic_language
+                    ),
+                )
             if engine == TURBO_ENGINE:
-                if voice_id != 'default':
-                    raise BackendPreparationError('Unknown Turbo voice')
+                if voice_id != "default":
+                    raise BackendPreparationError("Unknown Turbo voice")
                 if controller is None:
                     return _prepare_configured_turbo_backend(settings)
                 return _prepare_turbo_backend(
@@ -653,7 +729,7 @@ def run_app(
             save_settings=save_settings,
             backend_manager=backend_manager,
         )
-        if settings.engine in ("Chatterbox Nano", TURBO_ENGINE):
+        if settings.engine in ("Chatterbox Nano", TURBO_ENGINE, SUPERTONIC_ENGINE):
             controller.begin_nano_startup()
         controller.set_voice(configured_path, configured_voice)
         del configured_voice
@@ -675,7 +751,7 @@ def run_app(
 
         icon_path = Path(__file__).resolve().parents[1] / "img" / "logo.png"
         tray = TrayIcon(icon_path, controller.enqueue)
-        if settings.engine in ("Chatterbox Nano", TURBO_ENGINE):
+        if settings.engine in ("Chatterbox Nano", TURBO_ENGINE, SUPERTONIC_ENGINE):
             tray.set_status("%s is loading" % settings.engine)
         if hasattr(tray, "set_snapshot_provider"):
             tray.set_snapshot_provider(controller.tray_snapshot)
@@ -695,10 +771,14 @@ def run_app(
                     else:
                         controller.fail_nano_startup(
                             (
-                                'Turbo could not start. Check the model installation '
-                                'and NVIDIA CUDA GPU. CPU fallback is disabled.'
-                                if settings.engine == TURBO_ENGINE
-                                else "Chatterbox Nano is unavailable during startup."
+                                "Supertonic 3 could not start. Check the model installation and selected device."
+                                if settings.engine == SUPERTONIC_ENGINE
+                                else (
+                                    "Turbo could not start. Check the model installation "
+                                    "and NVIDIA CUDA GPU. CPU fallback is disabled."
+                                    if settings.engine == TURBO_ENGINE
+                                    else "Chatterbox Nano is unavailable during startup."
+                                )
                             )
                         )
             command = controller.drain_once()
@@ -768,20 +848,15 @@ def run_app(
             on_capture = lambda: controller.enqueue(
                 Command(CommandKind.CAPTURE_REQUEST)
             )
-            on_stop = lambda: controller.enqueue(
-                Command(CommandKind.CANCEL_REQUEST)
-            )
+            on_stop = lambda: controller.enqueue(Command(CommandKind.CANCEL_REQUEST))
             try:
                 start_parameters = inspect.signature(hotkeys.start).parameters
             except (TypeError, ValueError):
                 supports_playback_bindings = True
             else:
-                supports_playback_bindings = (
-                    "stop_spec" in start_parameters
-                    or any(
-                        parameter.kind is inspect.Parameter.VAR_KEYWORD
-                        for parameter in start_parameters.values()
-                    )
+                supports_playback_bindings = "stop_spec" in start_parameters or any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in start_parameters.values()
                 )
             if supports_playback_bindings:
                 hotkeys.start(
@@ -823,13 +898,17 @@ def run_app(
                 max(0.0, time.monotonic() - tray_hotkey_started),
             )
 
-        if settings.engine in ("Chatterbox Nano", TURBO_ENGINE):
+        if settings.engine in ("Chatterbox Nano", TURBO_ENGINE, SUPERTONIC_ENGINE):
 
             def prepare_nano_startup(cancel_event, record_timing):
                 prepare_configured = (
-                    _prepare_configured_turbo_backend
-                    if settings.engine == TURBO_ENGINE
-                    else _prepare_configured_nano_backend
+                    _prepare_configured_supertonic_backend
+                    if settings.engine == SUPERTONIC_ENGINE
+                    else (
+                        _prepare_configured_turbo_backend
+                        if settings.engine == TURBO_ENGINE
+                        else _prepare_configured_nano_backend
+                    )
                 )
                 candidate = prepare_configured(
                     settings,
@@ -838,7 +917,9 @@ def run_app(
                 )
                 return candidate, ()
 
-            nano_startup = BackendStartupCoordinator(prepare_nano_startup, logger, engine_label=settings.engine)
+            nano_startup = BackendStartupCoordinator(
+                prepare_nano_startup, logger, engine_label=settings.engine
+            )
             nano_startup.start()
 
         power_listener = PowerBroadcastListener()

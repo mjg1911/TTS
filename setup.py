@@ -124,6 +124,7 @@ setup(
         "piper.chatterbox_worker",
         "piper.nano_worker",
         "piper.turbo_worker",
+        "piper.supertonic_worker",
         "piper.tashkeel",
         "piper.hebrew",
         "piper.train",

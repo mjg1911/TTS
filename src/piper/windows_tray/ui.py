@@ -5,6 +5,7 @@ from tkinter import messagebox, simpledialog, ttk
 from typing import Optional
 
 from piper.turbo_options import ENGINE as TURBO_ENGINE
+from piper.supertonic_options import ENGINE as SUPERTONIC_ENGINE
 
 from .settings import validate_pitch_percent, validate_speed_percent
 from .settings_window import SettingsWindow, choose_voice_model
@@ -84,6 +85,7 @@ class TkUi:
             ("Piper", "Piper"),
             ("Chatterbox Nano", "Chatterbox Nano"),
             ("Chatterbox Turbo", TURBO_ENGINE),
+            ("Supertonic 3", SUPERTONIC_ENGINE),
         ):
             button = ttk.Button(
                 body,

@@ -3,11 +3,14 @@ from types import SimpleNamespace
 import pytest
 
 from piper.turbo_options import ENGINE as TURBO_ENGINE
+from piper.supertonic_options import ENGINE as SUPERTONIC_ENGINE
 from piper.windows_tray.settings import TraySettings
 from tests.windows_tray.test_app_foundation import _patch_primary_app
 
 
-@pytest.mark.parametrize("engine", ["Piper", "Chatterbox Nano", TURBO_ENGINE])
+@pytest.mark.parametrize(
+    "engine", ["Piper", "Chatterbox Nano", TURBO_ENGINE, SUPERTONIC_ENGINE]
+)
 def test_model_choice_precedes_loading_and_overrides_saved_engine(monkeypatch, engine):
     events = []
     app, _instance, ui, _tray = _patch_primary_app(monkeypatch, events)
@@ -70,6 +73,7 @@ def test_closing_model_choice_exits_without_loading_or_saving(monkeypatch):
     ("Piper", "Piper"),
     ("Chatterbox Nano", "Chatterbox Nano"),
     ("Chatterbox Turbo", TURBO_ENGINE),
+    ("Supertonic 3", SUPERTONIC_ENGINE),
     (None, None),
     ("close", None),
 ])
@@ -132,7 +136,7 @@ def test_startup_buttons_return_engine_or_cancel(monkeypatch, label, engine):
         buttons = [child for child in body.winfo_children()
                    if child.winfo_class() == "TButton"]
         assert [button.cget("text") for button in buttons] == [
-            "Piper", "Chatterbox Nano", "Chatterbox Turbo"
+            "Piper", "Chatterbox Nano", "Chatterbox Turbo", "Supertonic 3"
         ]
         assert window.grabbed
         if label is None:
